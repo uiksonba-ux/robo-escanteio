@@ -1,39 +1,63 @@
-import threading, time, requests, json, os
+import threading
+import time
+import requests
+import json
+import os
 from flask import Flask
+
 app = Flask(__name__)
 
+# --- STATS PERSISTENTE ---
 ARQUIVO = "stats.json"
 stats = json.load(open(ARQUIVO)) if os.path.exists(ARQUIVO) else {"wins": 0, "losses": 0}
-def salvar_stats():
-    with open(ARQUIVO, "w") as f: json.dump(stats, f)
 
-entradas_pendentes = {}
-cache_odds = {} # pra não gastar requisição atoa
+def salvar_stats():
+    with open(ARQUIVO, "w") as f:
+        json.dump(stats, f, indent=4)
+
+entradas_pendentes = {}  # {fixture_id: {"cantos_entrada": int, "favorito": str, "time_casa": str, "time_fora": str}}
+cache_odds = {}
 
 def calcular_taxa():
     total = stats["wins"] + stats["losses"]
-    return 0.0 if total == 0 else round((stats["wins"]/total)*100, 2)
+    return 0.0 if total == 0 else round((stats["wins"] / total) * 100, 2)
 
 @app.route('/')
 def home():
     return f"Robo Online - Wins: {stats['wins']} | Losses: {stats['losses']} | Taxa: {calcular_taxa()}%"
 
-threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
+def iniciar_servidor_web():
+    app.run(host='0.0.0.0', port=10000)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "COLOQUE_O_TOKEN_NOVO_AQUI")
-CHAT_ID = os.getenv("CHAT_ID", "8863811629")
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "82010ba2c58cf9a791512c38bcbc44e8")
-HEADERS = {"x-rapidapi-key": RAPIDAPI_KEY, "x-rapidapi-host": "api-football-v1.p.rapidapi.com"}
+# Inicia o servidor Flask em background (porta para o Render / Railway)
+threading.Thread(target=iniciar_servidor_web, daemon=True).start()
+
+# --- CONFIGURAÇÕES ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
+HEADERS = {
+    "x-rapidapi-key": RAPIDAPI_KEY,
+    "x-rapidapi-host": "api-football-v1.p.rapidapi.com"
+}
 
 def enviar_telegram(msg):
-    try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
-    except Exception as e: print(e)
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print(f"[LOG TELEGRAM]: {msg}")
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
+    except Exception as e:
+        print(f"Erro ao enviar Telegram: {e}")
 
 def buscar_jogos_ao_vivo():
     try:
         r = requests.get("https://api-football-v1.p.rapidapi.com/v3/fixtures", headers=HEADERS, params={"live": "all"}, timeout=15)
         return r.json().get("response", [])
-    except: return []
+    except Exception as e:
+        print(f"Erro ao buscar jogos ao vivo: {e}")
+        return []
 
 def obter_cantos(fid):
     try:
@@ -41,86 +65,152 @@ def obter_cantos(fid):
         total = 0
         for t in r.json().get("response", []):
             for s in t.get("statistics", []):
-                if s.get("type") == "Corner Kicks" and s.get("value"): total += s["value"]
+                if s.get("type") == "Corner Kicks" and s.get("value") is not None:
+                    total += s["value"]
         return total
-    except: return None
+    except Exception as e:
+        print(f"Erro ao buscar cantos ({fid}): {e}")
+        return None
 
-def obter_favorito_por_odd(fid):
-    # Usa cache pra economizar
-    if fid in cache_odds: return cache_odds[fid]
+def obter_favorito_por_odd(fixture_id):
+    """Retorna 'home' ou 'away' se a odd for < 2.00, senão None"""
+    if fixture_id in cache_odds:
+        return cache_odds[fixture_id]
+    
+    url = "https://api-football-v1.p.rapidapi.com/v3/odds"
+    params = {"fixture": fixture_id, "bookmaker": "8", "bet": "1"}  # 8 = Bet365, bet 1 = 1x2
     try:
-        r = requests.get("https://api-football-v1.p.rapidapi.com/v3/odds", headers=HEADERS, params={"fixture": fid, "bookmaker": "8", "bet": "1"}, timeout=15)
+        r = requests.get(url, headers=HEADERS, params=params, timeout=15)
         resp = r.json().get("response", [])
-        if not resp: return None, None
-        values = resp[0]["bookmakers"][0]["bets"][0]["values"]
-        oc = of = 999
+        if not resp:
+            cache_odds[fixture_id] = (None, None)
+            return None, None
+            
+        values = resp[0].get("bookmakers", [])[0].get("bets", [])[0].get("values", [])
+        odd_casa = odd_fora = 999.0
         for v in values:
-            if v["value"] == "Home": oc = float(v["odd"])
-            if v["value"] == "Away": of = float(v["odd"])
-        if oc < 2.00:
-            cache_odds[fid] = ("home", oc)
-            return "home", oc
-        if of < 2.00:
-            cache_odds[fid] = ("away", of)
-            return "away", of
-        cache_odds[fid] = (None, None)
+            if v["value"] == "Home":
+                odd_casa = float(v["odd"])
+            if v["value"] == "Away":
+                odd_fora = float(v["odd"])
+                
+        print(f"DEBUG ODD Fixture {fixture_id}: Casa {odd_casa} | Fora {odd_fora}")
+        
+        if odd_casa < 2.00:
+            cache_odds[fixture_id] = ("home", odd_casa)
+            return "home", odd_casa
+        if odd_fora < 2.00:
+            cache_odds[fixture_id] = ("away", odd_fora)
+            return "away", odd_fora
+            
+        cache_odds[fixture_id] = (None, None)
         return None, None
-    except:
+    except Exception as e:
+        print(f"Erro ao buscar odd ({fixture_id}): {e}")
         return None, None
 
 def checar_jogos_encerrados():
+    """Valida se os jogos das entradas pendentes já foram encerrados e apura Green/Red"""
     for fid in list(entradas_pendentes.keys()):
         try:
             r = requests.get("https://api-football-v1.p.rapidapi.com/v3/fixtures", headers=HEADERS, params={"id": fid}, timeout=15)
             dados = r.json().get("response", [])
-            if not dados: continue
-            if dados[0]["fixture"]["status"]["short"] in ["FT", "AET", "PEN"]:
-                cantos = obter_cantos(fid)
-                nome = entradas_pendentes[fid]["nome"]
-                if cantos is not None:
-                    if cantos >= 9:
+            if not dados:
+                continue
+
+            status = dados[0]["fixture"]["status"]["short"]
+            
+            # FT = Full Time, AET = Extra Time, PEN = Penalties
+            if status in ["FT", "AET", "PEN"]:
+                cantos_finais = obter_cantos(fid)
+                dados_entrada = entradas_pendentes[fid]
+                cantos_iniciais = dados_entrada["cantos_entrada"]
+                
+                if cantos_finais is not None:
+                    # Regra de Validação: Precisa ter saído pelo menos +1 canto até o final do jogo
+                    if cantos_finais > cantos_iniciais:
                         stats["wins"] += 1
-                        res = "✅ <b>GREEN!</b>"
+                        msg = f"<b>GREEN!</b> ✅\n" \
+                              f"<b>Jogo:</b> {dados_entrada['time_casa']} vs {dados_entrada['time_fora']}\n" \
+                              f"<b>Escanteios na Entrada:</b> {cantos_iniciais}\n" \
+                              f"<b>Escanteios Finais:</b> {cantos_finais}"
                     else:
                         stats["losses"] += 1
-                        res = "❌ <b>RED!</b>"
+                        msg = f"<b>RED!</b> ❌\n" \
+                              f"<b>Jogo:</b> {dados_entrada['time_casa']} vs {dados_entrada['time_fora']}\n" \
+                              f"<b>Escanteios na Entrada:</b> {cantos_iniciais}\n" \
+                              f"<b>Escanteios Finais:</b> {cantos_finais}"
+                    
                     salvar_stats()
-                    enviar_telegram(f"{res}\n⚽ {nome}\n🚩 Finais: {cantos}\n📊 {stats['wins']}W/{stats['losses']}L - {calcular_taxa()}%")
-                    del entradas_pendentes[fid]
-        except Exception as e: print(e)
+                    enviar_telegram(msg)
+                    
+                # Remove o jogo processado do monitoramento
+                del entradas_pendentes[fid]
+                
+        except Exception as e:
+            print(f"Erro ao checar encerramento do jogo {fid}: {e}")
 
-print("🤖 ROBÔ LIGADO - FAVORITO POR ODD < 2.00")
-enviar_telegram("<b>🤖 ROBÔ ATUALIZADO!</b>\nAgora favorito = ODD menor que 2.00")
-
-while True:
+def analisar_e_fazer_entradas():
+    """Analisa jogos ao vivo para encontrar padrões de entrada"""
     jogos = buscar_jogos_ao_vivo()
+    
     for jogo in jogos:
-        fid = jogo["fixture"]["id"]
-        tempo = jogo["fixture"]["status"]["elapsed"]
-        if tempo is None or fid in entradas_pendentes: continue
-        if 20 <= tempo <= 60:
-            home, away = jogo["teams"]["home"], jogo["teams"]["away"]
-            gc, gf = jogo["goals"]["home"] or 0, jogo["goals"]["away"] or 0
+        try:
+            fid = jogo["fixture"]["id"]
+            tempo = jogo["fixture"]["status"]["elapsed"]
+            
+            # Pula jogos sem minutagem definida ou fora da janela estratégica (ex: entre 75' e 85')
+            if not tempo or tempo < 75 or tempo > 85:
+                continue
 
-            # Só busca ODD se já estiver empatado ou perdendo por 1 (economiza API)
-            if not (gc == gf or abs(gc-gf) == 1): continue
+            # Se já fez entrada neste jogo, ignora
+            if fid in entradas_pendentes:
+                continue
 
-            fav_tipo, odd_fav = obter_favorito_por_odd(fid)
-            if not fav_tipo: continue
+            time_casa = jogo["teams"]["home"]["name"]
+            time_fora = jogo["teams"]["away"]["name"]
+            
+            # Filtro por odd do favorito
+            fav, odd = obter_favorito_por_odd(fid)
+            if not fav:
+                continue
 
-            motivo = None
-            if fav_tipo == "home" and (gc == gf or gf - gc == 1):
-                motivo = f"Favorito {home['name']} (Odd {odd_fav}) {'Empatando' if gc==gf else 'Perdendo por 1'}"
-            elif fav_tipo == "away" and (gc == gf or gc - gf == 1):
-                motivo = f"Favorito {away['name']} (Odd {odd_fav}) {'Empatando' if gc==gf else 'Perdendo por 1'}"
+            cantos_atuais = obter_cantos(fid)
+            if cantos_atuais is None:
+                continue
 
-            if motivo:
-                cantos = obter_cantos(fid)
-                if cantos is None: cantos = 0 # FIX do Palmeiras que não entrou
-                if cantos <= 4:
-                    nome = f"{home['name']} x {away['name']}"
-                    enviar_telegram(f"""🔥 <b>FAVORITO ODD {odd_fav} PRESSIONANDO!</b>\n⚽ {nome}\n⏰ {tempo}' | {gc}x{gf}\n🚩 {cantos} cantos\n🎯 {motivo}\n👉 <b>OVER 8.5 FT</b>\n📊 {calcular_taxa()}% ({stats['wins']}W/{stats['losses']}L)""")
-                    entradas_pendentes[fid] = {"nome": nome}
+            # Registra a nova entrada
+            entradas_pendentes[fid] = {
+                "cantos_entrada": cantos_atuais,
+                "favorito": fav,
+                "time_casa": time_casa,
+                "time_fora": time_fora
+            }
 
-    checar_jogos_encerrados()
-    time.sleep(180)
+            msg_sinal = (
+                f"🚨 <b>ENTRADA CONFIRMADA!</b> 🚨\n\n"
+                f"⚽ <b>Jogo:</b> {time_casa} vs {time_fora}\n"
+                f"⏱ <b>Tempo:</b> {tempo}' min\n"
+                f"🚩 <b>Escanteios Atuais:</b> {cantos_atuais}\n"
+                f"📊 <b>Favorito:</b> {time_casa if fav == 'home' else time_fora} (Odd: {odd})\n\n"
+                f"🎯 <b>Estratégia:</b> Over +0.5 Cantos no jogo"
+            )
+            enviar_telegram(msg_sinal)
+
+        except Exception as e:
+            print(f"Erro ao processar fixture {jogo.get('fixture', {}).get('id')}: {e}")
+
+# --- LOOP PRINCIPAL DO BOT ---
+if __name__ == "__main__":
+    print("Bot de Escanteios iniciado com sucesso...")
+    enviar_telegram("🤖 <b>Bot de Escanteios Inicializado!</b>")
+    
+    while True:
+        try:
+            analisar_e_fazer_entradas()
+            checar_jogos_encerrados()
+        except Exception as e:
+            print(f"Erro no loop principal: {e}")
+        
+        # Pausa entre varreduras (ex: 60 segundos) para não estourar os limites de requisição da API
+        time.sleep(60)

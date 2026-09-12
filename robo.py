@@ -1,3 +1,10 @@
+from flask import Flask
+import threading
+app = Flask(__name__)
+@app.route('/')
+def home():
+    return "Robo Online"
+threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
 import requests
 import time
 import random

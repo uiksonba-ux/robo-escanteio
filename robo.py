@@ -1,73 +1,189 @@
-from flask import Flask
 import threading
+import time
+import requests
+from flask import Flask
+
 app = Flask(__name__)
+
 @app.route('/')
 def home():
-    return "Robo Online - Cacador Odd Alta"
-threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
+    return f"Robo Online - Wins: {stats['wins']} | Losses: {stats['losses']} | Taxa: {calcular_taxa()}%"
 
-import requests, time, random
-from datetime import datetime
+threading.Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': 10000}, daemon=True).start()
 
-TOKEN = "8933202267:AAG0f_Aggve3LmWoGu23ZMPn1qBKO2RFoy0"
+# --- CONFIGURAÇÕES ---
+TELEGRAM_TOKEN = "SEU_NOVO_TOKEN_TELEGRAM"
 CHAT_ID = "8863811629"
+RAPIDAPI_KEY = "82010ba2c58cf9a791512c38bcbc44e8"
 
-def enviar(msg):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+HEADERS = {
+    "x-rapidapi-key": RAPIDAPI_KEY,
+    "x-rapidapi-host": "api-football-v1.p.rapidapi.com"
+}
+
+FAVORITOS_IDS = [127, 126, 50, 49, 541, 121, 131]
+
+# Estrutura de Estatísticas e Entradas Pendentes
+stats = {
+    "wins": 0,
+    "losses": 0
+}
+
+# Guarda jogos em andamento que tiveram entrada enviada
+# Formato: { fixture_id: {"nome": "TimeA x TimeB"} }
+entradas_pendentes = {}
+
+def calcular_taxa():
+    total = stats["wins"] + stats["losses"]
+    if total == 0:
+        return 0.0
+    return round((stats["wins"] / total) * 100, 2)
+
+def enviar_telegram(msg):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
         requests.post(url, data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
-    except:
-        pass
+    except Exception as e:
+        print(f"Erro ao enviar no Telegram: {e}")
 
-print("ROBO 24H LIGADO - MODO ODD ALTA")
-enviar("✅ <b>ROBÔ ATUALIZADO! Agora é CAÇADOR DE ODD ALTA!</b>\n\nAguardando favorito empatando/perdendo por 1 gol com poucos escanteios...")
+def buscar_jogos_ao_vivo():
+    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
+    params = {"live": "all"}
+    try:
+        response = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        return response.json().get("response", [])
+    except Exception as e:
+        print(f"Erro ao buscar jogos: {e}")
+        return []
 
-# Lista com favorito definido
-jogos_base = [
-    {"nome": "Flamengo x Palmeiras", "fav": "casa"},
-    {"nome": "Real Madrid x Barcelona", "fav": "casa"},
-    {"nome": "Man City x Arsenal", "fav": "casa"},
-    {"nome": "Corinthians x São Paulo", "fav": "casa"},
-    {"nome": "Bayern x Dortmund", "fav": "casa"},
-]
+def obter_cantos(fixture_id):
+    """Busca o número total de escanteios de uma partida"""
+    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures/statistics"
+    params = {"fixture": fixture_id}
+    try:
+        response = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        dados = response.json().get("response", [])
+        
+        total_cantos = 0
+        for time_stat in dados:
+            for stat in time_stat.get("statistics", []):
+                if stat.get("type") == "Corner Kicks":
+                    val = stat.get("value")
+                    total_cantos += val if val is not None else 0
+        return total_cantos
+    except Exception as e:
+        print(f"Erro ao obter estatísticas de escanteios: {e}")
+        return None
+
+def checar_jogos_encerrados():
+    """Verifica as entradas pendentes para atualizar os Wins/Losses"""
+    for fixture_id in list(entradas_pendentes.keys()):
+        url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
+        params = {"id": fixture_id}
+        try:
+            response = requests.get(url, headers=HEADERS, params=params, timeout=10)
+            dados = response.json().get("response", [])
+            if not dados:
+                continue
+            
+            jogo = dados[0]
+            status = jogo["fixture"]["status"]["short"]
+
+            # FT = Finished, AET = After Extra Time, PEN = Penalty
+            if status in ["FT", "AET", "PEN"]:
+                cantos_finais = obter_cantos(fixture_id)
+                nome_jogo = entradas_pendentes[fixture_id]["nome"]
+                
+                if cantos_finais is not None:
+                    # Critério de acerto para OVER 8.5 escanteios (precisa de 9 ou mais)
+                    if cantos_finais >= 9:
+                        stats["wins"] += 1
+                        resultado_str = "✅ <b>GREEN / WIN!</b>"
+                    else:
+                        stats["losses"] += 1
+                        resultado_str = "❌ <b>RED / LOSS!</b>"
+
+                    taxa = calcular_taxa()
+                    total_jogos = stats["wins"] + stats["losses"]
+
+                    msg_resultado = f"""{resultado_str}
+
+⚽ <b>Jogo:</b> {nome_jogo}
+🚩 <b>Escanteios Finais:</b> {cantos_finais}
+🎯 <b>Entrada:</b> Over 8.5 escanteios
+
+📊 <b>DESEMPENHO ATUALIZADO:</b>
+✅ Wins: {stats['wins']}
+❌ Losses: {stats['losses']}
+📈 Assertividade: <b>{taxa}%</b> ({stats['wins']}/{total_jogos})"""
+
+                    enviar_telegram(msg_resultado)
+                    del entradas_pendentes[fixture_id]
+
+        except Exception as e:
+            print(f"Erro ao checar jogo encerrado {fixture_id}: {e}")
+
+print("🤖 ROBÔ 24H LIGADO - MONITORAMENTO E ASSERTIVIDADE ATIVOS")
+enviar_telegram("<b>🤖 ROBÔ COM CONTADOR DE WINS/LOSSES LIGADO!</b>")
 
 while True:
-    time.sleep(300) # verifica a cada 5 min
-    
-    jogo = random.choice(jogos_base)
-    
-    # SIMULAÇÃO DE PLACAR REAL (depois trocamos por API real)
-    # Aqui simula placar onde favorito tá empatando ou perdendo de 1
-    situacoes = [
-        (0,0, "EMPATANDO"), # 0x0
-        (1,1, "EMPATANDO"), # 1x1
-        (0,1, "PERDENDO por 1"), # perde de 1
-        (1,2, "PERDENDO por 1"),
-    ]
-    casa, fora, motivo = random.choice(situacoes)
-    
-    # Inverte se favorito for fora
-    if jogo["fav"] == "fora":
-        casa, fora = fora, casa
-    
-    tempo = random.randint(28, 85)
-    cantos = random.randint(1, 3) # SÓ 2 OU 3 CANTO - ODD ALTA!
+    jogos = buscar_jogos_ao_vivo()
 
-    # REGRA FINAL: Favorito empatando/perdendo de 1 + poucos cantos
-    if cantos <= 3 and tempo >= 25:
-        msg = f"""
-🔥 <b>ODD ALTA DETECTADA!</b> 🔥
+    for jogo in jogos:
+        fixture_id = jogo["fixture"]["id"]
+        tempo = jogo["fixture"]["status"]["elapsed"]
 
-⚽ Jogo: {jogo['nome']}
-⏰ Tempo: {tempo} min
-📊 Placar: {casa}x{fora}
-🎯 Favorito: {motivo}
-📍 Escanteios agora: {cantos}
+        if tempo is None or fixture_id in entradas_pendentes:
+            continue
+
+        # Filtro de Tempo (Entre 20 e 60 minutos)
+        if 20 <= tempo <= 60:
+            home_team = jogo["teams"]["home"]
+            away_team = jogo["teams"]["away"]
+            
+            gols_casa = jogo["goals"]["home"] or 0
+            gols_fora = jogo["goals"]["away"] or 0
+
+            fav_casa = home_team["id"] in FAVORITOS_IDS
+            fav_fora = away_team["id"] in FAVORITOS_IDS
+
+            motivo = None
+            if fav_casa:
+                if gols_casa == gols_fora:
+                    motivo = f"Favorito ({home_team['name']}) Empatando"
+                elif gols_fora - gols_casa == 1:
+                    motivo = f"Favorito ({home_team['name']}) Perdendo por 1"
+            elif fav_fora:
+                if gols_casa == gols_fora:
+                    motivo = f"Favorito ({away_team['name']}) Empatando"
+                elif gols_casa - gols_fora == 1:
+                    motivo = f"Favorito ({away_team['name']}) Perdendo por 1"
+
+            if motivo:
+                cantos_atuais = obter_cantos(fixture_id)
+
+                if cantos_atuais is not None and cantos_atuais <= 3:
+                    nome_partida = f"{home_team['name']} x {away_team['name']}"
+
+                    msg = f"""🔥 <b>ODD ALTA DETECTADA!</b> 🔥
+
+⚽ <b>Jogo:</b> {nome_partida}
+⏰ <b>Tempo:</b> {tempo} min
+📊 <b>Placar:</b> {gols_casa}x{gols_fora}
+🎯 <b>Situação:</b> {motivo}
+🚩 <b>Escanteios Agora:</b> {cantos_atuais}
 
 <b>👉 ENTRADA: OVER 8.5 escanteios FT</b>
-💰 ODD: 3.50+ (ALTA)
-🧠 Motivo: Favorito precisa do resultado, pressão total até o fim!
+💰 <b>ODD Sugerida:</b> 3.50+ (ALTA)
 
-ENTRA COM STAKE BAIXA - É PRA FORRAR!
-"""
-        enviar(msg)
+📊 <i>Assertividade Atual: {calcular_taxa()}% ({stats['wins']}W / {stats['losses']}L)</i>"""
+
+                    enviar_telegram(msg)
+                    # Registra a entrada pendente para verificação ao final do jogo
+                    entradas_pendentes[fixture_id] = {"nome": nome_partida}
+
+    # Checa status das partidas enviadas anteriormente que possam ter finalizado
+    checar_jogos_encerrados()
+
+    # Intervalo de verificação
+    time.sleep(180)

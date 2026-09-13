@@ -42,14 +42,17 @@ BASE="https://api.5dollarfootballapi.com/v1"
 def tg(m):
     try:
         requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",data={"chat_id":CHAT,"text":m,"parse_mode":"HTML"},timeout=15)
-    except Exception as e: print(e)
+    except Exception as e: print(e, flush=True)
 
 def buscar_live():
     try:
         r=requests.get(f"{BASE}/livescores",headers=HEADERS,timeout=20)
+        print(f"LIVE STATUS {r.status_code} - {len(r.json().get('data',[])) if r.status_code==200 else 0} jogos", flush=True)
         if r.status_code!=200: return []
         return r.json().get("data",[])
-    except: return []
+    except Exception as e:
+        print(f"ERRO LIVE: {e}", flush=True)
+        return []
 
 def buscar_fixtures_finalizados():
     try:
@@ -65,9 +68,12 @@ def buscar_pre():
         r=requests.get(f"{BASE}/fixtures",headers=HEADERS,params={"date":"today"},timeout=20)
         if r.status_code!=200:
             r=requests.get(f"{BASE}/matches",headers=HEADERS,timeout=20)
+        print(f"PRE STATUS {r.status_code} - {len(r.json().get('data',[])) if r.status_code==200 else 0} jogos", flush=True)
         if r.status_code!=200: return []
         return r.json().get("data", r.json().get("response", []))
-    except: return []
+    except Exception as e:
+        print(f"ERRO PRE: {e}", flush=True)
+        return []
 
 def get_favorito_info(jogo):
     try:
@@ -103,7 +109,7 @@ def filtra_over2(jogo):
 
 if __name__=="__main__":
     tg(f"🤖 <b>BOT ATUALIZADO</b>\n\n📊 Live: {stats['live_wins']}W-{stats['live_losses']}L ({taxa(stats['live_wins'],stats['live_losses'])}%)\n📊 Pré: {stats['pre_wins']}W-{stats['pre_losses']}L ({taxa(stats['pre_wins'],stats['pre_losses'])}%)\n\n🔥 LIVE 20-45' Fav ≤1.5/Casa ≤1.7 empatando ou perdendo até 2 => Over 9 Esc\n⚽ PRE Over 2 @1.70-2.50")
-
+    print("BOT INICIADO - Aguardando jogos...", flush=True)
     ultimo_pre=0
     ultimo_check=0
     while True:
@@ -119,7 +125,6 @@ if __name__=="__main__":
                 gf=int(j.get("away_score") or j.get("goals",{}).get("away",0) or 0)
                 fav, fav_odd, home_odd, away_odd = get_favorito_info(j)
                 if not fav: continue
-
                 condicao=False; placar_txt=""
                 if fav=="HOME":
                     diff=gf-gc
@@ -130,19 +135,14 @@ if __name__=="__main__":
                     if diff==0: condicao=True; placar_txt=f"{gc}x{gf} - Fora fav empatando"
                     elif 1 <= diff <= 2: condicao=True; placar_txt=f"{gc}x{gf} - Fora fav perde {diff}"
                 if not condicao: continue
-
                 cantos=j.get("corners",0)
                 if isinstance(cantos, dict): cantos=cantos.get("total",0)
                 cantos=int(cantos)
-
                 entradas_live[fid]=True
                 pendentes_live[fid]={"home":home,"away":away,"over":9,"hora":datetime.now().strftime("%H:%M"),"fav":fav,"odd":fav_odd}
-
                 tl=taxa(stats["live_wins"], stats["live_losses"])
                 tg(f"🔥 <b>LIVE - OVER 9 ESCANTEIOS</b>\n\n🏟️ {home} x {away}\n⏰ {elapsed}' | 📊 {placar_txt}\n⭐ Fav: {fav} @ {fav_odd}\n🚩 Cantos: {cantos}\n\n👉 <b>ENTRADA: Over 9.0 FT</b>\n📊 Live até agora: {stats['live_wins']}W-{stats['live_losses']}L ({tl}%)")
-
-            except Exception as e: print(f"Erro live: {e}")
-
+            except Exception as e: print(f"Erro live: {e}", flush=True)
         if time.time() - ultimo_pre > 1800:
             ultimo_pre=time.time()
             for j in buscar_pre():
@@ -160,7 +160,6 @@ if __name__=="__main__":
                     tg(f"⚽ <b>PRE - OVER 2 GOLS</b>\n\n🏟️ {home} x {away}\n💰 {mercado} @ {odd_val}\n📊 Pré até agora: {stats['pre_wins']}W-{stats['pre_losses']}L ({tp}%)\n\n👉 Mais de 2 gols")
                     break
                 except: pass
-
         if time.time() - ultimo_check > 300 and (pendentes_live or pendentes_pre):
             ultimo_check=time.time()
             finalizados=buscar_fixtures_finalizados()
@@ -169,7 +168,6 @@ if __name__=="__main__":
                     fid=str(j.get("id") or j.get("fixture",{}).get("id"))
                     status=str(j.get("status") or j.get("fixture",{}).get("status",{}).get("short","")).lower()
                     if "ft" not in status and "finished" not in status: continue
-
                     if fid in pendentes_live:
                         info=pendentes_live.pop(fid)
                         total_cantos=j.get("corners",0)
@@ -183,7 +181,6 @@ if __name__=="__main__":
                         salvar()
                         tl=taxa(stats["live_wins"], stats["live_losses"])
                         tg(f"{emoji} <b>{res} - LIVE OVER 9 ESC</b>\n\n🏟️ {info['home']} x {info['away']}\n🚩 Final: {total_cantos} cantos | Gols: {total_gols}\nEntrada: Over 9.0\n\n📊 <b>Live agora: {stats['live_wins']}W-{stats['live_losses']}L ({tl}%)</b>")
-
                     if fid in pendentes_pre:
                         info=pendentes_pre.pop(fid)
                         total_gols=int(j.get("home_score",0) or j.get("goals",{}).get("home",0) or 0) + int(j.get("away_score",0) or j.get("goals",{}).get("away",0) or 0)
@@ -194,8 +191,6 @@ if __name__=="__main__":
                         salvar()
                         tp=taxa(stats["pre_wins"], stats["pre_losses"])
                         tg(f"{emoji} <b>{res} - PRE OVER 2</b>\n\n🏟️ {info['home']} x {info['away']}\n⚽ Final: {total_gols} gols\nEntrada: Over 2.5 @ {info['odd']}\n\n📊 <b>Pré agora: {stats['pre_wins']}W-{stats['pre_losses']}L ({tp}%)</b>")
-
                 except Exception as e:
-                    print(f"Erro check: {e}")
-
+                    print(f"Erro check: {e}", flush=True)
         time.sleep(60)

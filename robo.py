@@ -114,6 +114,7 @@ def salvar_estado():
 def carregar_estado():
     global estado
     if not os.path.exists(ARQUIVO_ESTADO):
+        log.info("Nenhum estado anterior encontrado.")
         return
     try:
         with open(ARQUIVO_ESTADO, "r", encoding="utf-8") as f:
@@ -125,8 +126,10 @@ def carregar_estado():
                 estado["pendentes"] = dados["pendentes"]
             if "historico" in dados:
                 estado["historico"] = dados["historico"]
-        log.info(f"Estado carregado: {len(estado['pendentes'])} pendentes, "
-                 f"{len(estado['historico'])} no histórico")
+        log.info(
+            f"Estado carregado: {len(estado['pendentes'])} pendentes, "
+            f"{len(estado['historico'])} no histórico"
+        )
     except Exception as e:
         log.error(f"Erro ao carregar estado: {e}")
 
@@ -289,7 +292,6 @@ def extrair_placar(jogo):
 
 
 def _procurar_cantos_recursivo(obj, profundidade=0):
-    """Procura recursivamente por total de escanteios em qualquer estrutura."""
     if profundidade > 6:
         return None
 
@@ -334,12 +336,10 @@ def obter_total_cantos(fid):
 
 
 def extrair_cantos(jogo):
-    # Tenta primeiro no próprio objeto do jogo
     total = _procurar_cantos_recursivo(jogo)
     if total is not None:
         return total
 
-    # Fallback: busca via API
     fid = extrair_id(jogo)
     if fid:
         return obter_total_cantos(fid)
@@ -400,7 +400,6 @@ def extrair_inicio_timestamp(jogo):
         if not valor:
             continue
 
-        # Unix timestamp (int/float)
         if isinstance(valor, (int, float)):
             v = float(valor)
             if v > 1e12:
@@ -409,7 +408,6 @@ def extrair_inicio_timestamp(jogo):
 
         texto = str(valor).strip()
 
-        # Unix em string
         try:
             if texto.isdigit():
                 v = float(texto)
@@ -419,7 +417,6 @@ def extrair_inicio_timestamp(jogo):
         except Exception:
             pass
 
-        # ISO 8601
         try:
             t = texto.replace("Z", "+00:00")
             dt = datetime.fromisoformat(t)
@@ -429,7 +426,6 @@ def extrair_inicio_timestamp(jogo):
         except Exception:
             pass
 
-        # Formatos comuns
         for fmt in (
             "%Y-%m-%d %H:%M:%S",
             "%Y-%m-%dT%H:%M:%S",
@@ -740,7 +736,10 @@ def buscar_pre():
     log.info(f"buscar_pre: API retornou {len(jogos)} jogos")
 
     if jogos:
-        log.info(f"Exemplo: {json.dumps(jogos[0], ensure_ascii=False)[:400]}")
+        try:
+            log.info(f"Exemplo: {json.dumps(jogos[0], ensure_ascii=False)[:400]}")
+        except Exception:
+            pass
 
     candidatos = []
 
@@ -789,7 +788,10 @@ def criar_sinal_combinado(jogo):
         return None
 
     if gols["bookmaker"].lower() != cantos["bookmaker"].lower():
-        log.info(f"[{fid}] bookmakers diferentes: {gols['bookmaker']} vs {cantos['bookmaker']}")
+        log.info(
+            f"[{fid}] bookmakers diferentes: "
+            f"{gols['bookmaker']} vs {cantos['bookmaker']}"
+        )
         return None
 
     odd_combinada = gols["odd"] * cantos["odd"]
@@ -797,11 +799,13 @@ def criar_sinal_combinado(jogo):
         log.info(f"[{fid}] odd combinada fora do range: {odd_combinada:.2f}")
         return None
 
-    # Filtro de assertividade
     historico = assertividade_7_dias()
     if historico["sinais"] >= MINIMO_HISTORICO:
         if historico["assertividade"] < ASSERTIVIDADE_MINIMA:
-            log.info(f"[{fid}] filtrado por assertividade: {historico['assertividade']}%")
+            log.info(
+                f"[{fid}] filtrado por assertividade: "
+                f"{historico['assertividade']}%"
+            )
             return None
 
     return {
@@ -869,7 +873,6 @@ def analisar_pre(jogo):
     if chave in estado["pendentes"]:
         return False
 
-    # Deduplicação: já enviado recentemente?
     if any(h.get("id") == fid for h in estado.get("historico", [])[-2000:]):
         log.info(f"[{fid}] já enviado anteriormente, pulando")
         return False
@@ -959,7 +962,6 @@ def finalizar(chave, sinal, jogo):
     sinal_hist["timestamp_resultado"] = time.time()
     estado["historico"].append(sinal_hist)
 
-    # Mantém últimos 30 dias
     estado["historico"] = [
         x for x in estado["historico"]
         if time.time() - float(x.get("timestamp", time.time())) <= 30 * 24 * 60 * 60
@@ -973,7 +975,8 @@ def finalizar(chave, sinal, jogo):
     mensagem = (
         "🏁 <b>RESULTADO DO SINAL</b>\n"
         "\n"
-        f"⚽ <b>{html.escape(sinal['home'])}</b> x <b>{html.escape(sinal['away'])}</b>\n"
+        f"⚽ <b>{html.escape(sinal['home'])}</b> x "
+        f"<b>{html.escape(sinal['away'])}</b>\n"
         "\n"
         f"📊 Resultado: <b>{resultado}</b>\n"
         f"⚽ Gols: {resultado_gols}\n"
@@ -999,7 +1002,6 @@ def verificar_resultados():
     expirados = []
 
     for chave, sinal in pendentes:
-        # Expira após 6h
         if agora - sinal.get("timestamp", agora) > 6 * 3600:
             log.info(f"[EXPIRA] {chave} sem resultado após 6h")
             expirados.append(chave)
@@ -1048,11 +1050,17 @@ def loop_bot():
     log.info("INICIANDO...")
     log.info(f"API_KEY configurada? {bool(API_KEY)}")
     log.info(f"TELEGRAM configurado? {bool(TELEGRAM_TOKEN and CHAT_ID)}")
-    log.info(f"HORAS_ANTES={HORAS_ANTES} | JANELA={JANELA_MINUTOS}min | ODD={ODD_MIN}-{ODD_MAX}")
+    log.info(
+        f"HORAS_ANTES={HORAS_ANTES} | JANELA={JANELA_MINUTOS}min | "
+        f"ODD={ODD_MIN}-{ODD_MAX}"
+    )
     log.info("================================")
 
     if TELEGRAM_TOKEN and CHAT_ID:
-        enviar_telegram("🟢 <b>ROBÔ ONLINE</b>\n\nSistema de sinais combinados iniciado.")
+        enviar_telegram(
+            "🟢 <b>ROBÔ ONLINE</b>\n\n"
+            "Sistema de sinais combinados iniciado."
+        )
     else:
         log.warning("Telegram NÃO configurado")
 
@@ -1079,7 +1087,10 @@ def loop_bot():
 
         if agora - ultimo_resultado >= INTERVALO_RESULTADOS:
             ultimo_resultado = agora
-            log.info(f"🏁 Verificando resultados... ({len(estado['pendentes'])} pendentes)")
+            log.info(
+                f"🏁 Verificando resultados... "
+                f"({len(estado['pendentes'])} pendentes)"
+            )
             try:
                 verificar_resultados()
             except Exception:
@@ -1106,91 +1117,3 @@ def home():
 def health():
     return jsonify({
         "status": "ok",
-        "telegram": bool(TELEGRAM_TOKEN and CHAT_ID),
-        "api": bool(API_KEY),
-        "pendentes": len(estado["pendentes"])
-    })
-
-
-@app.route("/stats")
-def stats():
-    return jsonify(gerar_stats())
-
-
-@app.route("/debug/rodar-agora")
-def debug_rodar_agora():
-    """Dispara uma análise manual imediata."""
-    resultado = {
-        "api_key_ok": bool(API_KEY),
-        "telegram_ok": bool(TELEGRAM_TOKEN and CHAT_ID),
-        "jogos_encontrados": 0,
-        "sinais_enviados": 0,
-        "erros": []
-    }
-
-    try:
-        jogos = buscar_pre()
-        resultado["jogos_encontrados"] = len(jogos)
-
-        enviados = 0
-        for jogo in jogos:
-            if enviados >= QTD_POR_RODADA:
-                break
-            if analisar_pre(jogo):
-                enviados += 1
-        resultado["sinais_enviados"] = enviados
-    except Exception as e:
-        resultado["erros"].append(str(e))
-
-    return jsonify(resultado)
-
-
-@app.route("/debug/api-crua")
-def debug_api_crua():
-    """Mostra exatamente o que a API retorna."""
-    agora = datetime.now(timezone.utc)
-    fim = agora + timedelta(hours=24)
-
-    testes = {}
-
-    # 1) /fixtures com start_time/end_time
-    data1 = api_get("/fixtures", params={
-        "start_time": agora.isoformat(),
-        "end_time": fim.isoformat(),
-        "per_page": 100,
-        "lang": "pt"
-    })
-    testes["fixtures_com_start_end"] = data1
-
-    # 2) /fixtures só com per_page
-    data2 = api_get("/fixtures", params={"per_page": 10})
-    testes["fixtures_per_page"] = data2
-
-    # 3) raw
-    try:
-        r = SESSION.get(
-            f"{BASE_API}/fixtures",
-            headers={"Authorization": f"Bearer {API_KEY}", "Accept": "application/json"},
-            params={"per_page": 5},
-            timeout=20
-        )
-        testes["raw_status"] = r.status_code
-        testes["raw_texto"] = r.text[:2000]
-    except Exception as e:
-        testes["raw_erro"] = str(e)
-
-    return jsonify(testes)
-
-
-# ============================================================
-# INICIALIZAÇÃO
-# ============================================================
-
-carregar_estado()
-
-
-if __name__ == "__main__":
-    thread = threading.Thread(target=loop_bot, daemon=True)
-    thread.start()
-
-    app.run(host="0.0.0.0", port=PORT)

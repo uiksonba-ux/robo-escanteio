@@ -8,7 +8,6 @@ def salvar_stats():
     with open(ARQUIVO, "w") as f: json.dump(stats, f, indent=4)
 
 entradas_pendentes = {}
-cache_odds = {}
 
 def calcular_taxa():
     total = stats["wins"] + stats["losses"]
@@ -16,7 +15,7 @@ def calcular_taxa():
 
 @app.route('/')
 def home():
-    return f"Robo Online - Wins: {stats['wins']} | Losses: {stats['losses']} | Taxa: {calcular_taxa()}%"
+    return f"Robo Online - Wins: {stats['wins']} | Losses: {stats['losses']} | Taxa: {calcular_taxa()}% | Filtro: ODD 1.5+ FAV PERD/EMP"
 
 threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
 
@@ -48,13 +47,23 @@ def obter_cantos(fid):
         return total
     except: return None
 
-def obter_favorito_por_odd(jogo):
-    # CORREÇÃO: Não usa API de ODDS paga - usa placar
-    gc = jogo["goals"]["home"] or 0
-    gf = jogo["goals"]["away"] or 0
-    if gc < gf: return "home", 1.85
-    if gf < gc: return "away", 1.85
-    return "home", 1.90
+# NOVA FUNÇÃO: BUSCAR ODD 1.5+
+def obter_odd_escanteio(fid):
+    try:
+        r = requests.get("https://api-football-v1.p.rapidapi.com/v3/odds", headers=HEADERS, params={"fixture": fid, "bookmaker": "8", "bet": "8"}, timeout=15)
+        resp = r.json().get("response", [])
+        if not resp: return None
+        for bet in resp[0].get("bookmakers", [])[0].get("bets", []):
+            for v in bet.get("values", []):
+                # Procura Over 8.5 / 9.5
+                if "Over 8.5" in v["value"] or "Over 9.5" in v["value"] or "Over 7.5" in v["value"]:
+                    odd = float(v["odd"])
+                    if odd >= 1.50:
+                        return odd, v["value"]
+        return None
+    except Exception as e:
+        print(f"Erro odd {fid}: {e}")
+        return None
 
 def checar_jogos_encerrados():
     for fid in list(entradas_pendentes.keys()):
@@ -67,17 +76,17 @@ def checar_jogos_encerrados():
                 info = entradas_pendentes[fid]
                 if cantos_finais is not None:
                     if cantos_finais > info["cantos_entrada"]:
-                        stats["wins"] += 1; msg = f"✅ <b>GREEN!</b>\n⚽ {info['time_casa']} vs {info['time_fora']}\n🚩 {info['cantos_entrada']} -> {cantos_finais}\n📈 {calcular_taxa()}% ({stats['wins']}W/{stats['losses']}L)"
+                        stats["wins"] += 1; msg = f"✅ <b>GREEN!</b>\n⚽ {info['time_casa']} vs {info['time_fora']}\n🚩 {info['cantos_entrada']} -> {cantos_finais} | Odd: {info['odd']}\n📈 {calcular_taxa()}% ({stats['wins']}W/{stats['losses']}L)"
                     else:
-                        stats["losses"] += 1; msg = f"❌ <b>RED!</b>\n⚽ {info['time_casa']} vs {info['time_fora']}\n🚩 {info['cantos_entrada']} -> {cantos_finais}\n📈 {calcular_taxa()}% ({stats['wins']}W/{stats['losses']}L)"
+                        stats["losses"] += 1; msg = f"❌ <b>RED!</b>\n⚽ {info['time_casa']} vs {info['time_fora']}\n🚩 {info['cantos_entrada']} -> {cantos_finais} | Odd: {info['odd']}\n📈 {calcular_taxa()}% ({stats['wins']}W/{stats['losses']}L)"
                     salvar_stats()
                     enviar_telegram(msg)
                 del entradas_pendentes[fid]
         except: pass
 
 if __name__ == "__main__":
-    print("Bot iniciado...")
-    enviar_telegram("🤖 <b>Bot Inicializado! Filtro CORRIGIDO 20-85min</b>")
+    print("Bot iniciado com filtro ODD 1.5+...")
+    enviar_telegram("🤖 <b>Bot Atualizado!</b>\nFiltro: Favorito perdendo/empatando + ODD 1.50+ escanteio")
     while True:
         jogos = buscar_jogos_ao_vivo()
         for jogo in jogos:
@@ -90,23 +99,36 @@ if __name__ == "__main__":
                 time_casa = jogo["teams"]["home"]["name"]
                 time_fora = jogo["teams"]["away"]["name"]
                 gc, gf = jogo["goals"]["home"] or 0, jogo["goals"]["away"] or 0
+
+                # REGRA 1: FAVORITO PERDENDO OU EMPATANDO
+                # 0x0, 1x1 = empatando | 0x1, 1x2 = perdendo por 1
                 if not (gc == gf or abs(gc-gf) == 1): continue
+                # Se tiver ganhando por 1, ignora (não é empate/derrota)
+                # Lógica: só entra se empatado ou perdendo por 1
+                if gc!= gf and gc > gf: # se casa tá ganhando, vamos considerar que favorito é casa e tá ganhando -> pula
+                    # Para ser 100% precisa da odd pre-jogo, mas por enquanto usamos empate ou derrota de 1
+                    if gc == gf + 1:
+                        continue
 
-                fav, odd = obter_favorito_por_odd(jogo)
                 cantos_atuais = obter_cantos(fid)
-                if cantos_atuais is None or cantos_atuais > 4: continue
+                if cantos_atuais is None or cantos_atuais > 4 or cantos_atuais < 1: continue
 
-                entradas_pendentes[fid] = {"cantos_entrada": cantos_atuais, "favorito": fav, "time_casa": time_casa, "time_fora": time_fora}
+                # REGRA 2 NOVA: ODD 1.50+
+                resultado_odd = obter_odd_escanteio(fid)
+                if not resultado_odd: continue
+                odd_valor, mercado = resultado_odd
 
-                favorito_nome = time_casa if fav == "home" else time_fora
+                entradas_pendentes[fid] = {"cantos_entrada": cantos_atuais, "time_casa": time_casa, "time_fora": time_fora, "odd": odd_valor}
+
+                status_fav = "EMPATANDO" if gc==gf else "PERDENDO por 1"
                 enviar_telegram(
-                    f"🔥 <b>ENTRADA OVER 8.5!</b>\n\n"
+                    f"🔥 <b>ENTRADA OVER!</b> [ODD {odd_valor}]\n\n"
                     f"⚽ <b>Jogo:</b> {time_casa} x {time_fora}\n"
                     f"⏰ <b>Tempo:</b> {tempo}'\n"
-                    f"📊 <b>Placar:</b> {gc}x{gf}\n"
-                    f"🎯 <b>Favorito:</b> {favorito_nome} {'EMPATANDO' if gc==gf else 'PERDENDO por 1'}\n"
-                    f"📍 <b>Cantos agora:</b> {cantos_atuais}\n\n"
-                    f"👉 <b>ENTRADA: OVER 8.5 FT</b>\n"
+                    f"📊 <b>Placar:</b> {gc}x{gf} ({status_fav})\n"
+                    f"📍 <b>Cantos:</b> {cantos_atuais}\n"
+                    f"💰 <b>Odd:</b> {odd_valor} no {mercado}\n\n"
+                    f"👉 <b>ENTRADA: {mercado} FT</b>\n"
                     f"📈 <i>{calcular_taxa()}% ({stats['wins']}W/{stats['losses']}L)</i>"
                 )
             except Exception as e: print(e)

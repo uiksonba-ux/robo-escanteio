@@ -14,10 +14,6 @@ from urllib3.util.retry import Retry
 from flask import Flask, jsonify
 
 
-# ============================================================
-# LOGGING
-# ============================================================
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -26,10 +22,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("robo")
 
-
-# ============================================================
-# CONFIGURAÇÃO
-# ============================================================
 
 app = Flask(__name__)
 
@@ -53,10 +45,6 @@ ASSERTIVIDADE_MINIMA = float(os.getenv("ASSERTIVIDADE_MINIMA", "60"))
 ARQUIVO_ESTADO = "bot_state.json"
 
 
-# ============================================================
-# SESSION COM RETRY
-# ============================================================
-
 def _criar_session():
     s = requests.Session()
     retry = Retry(
@@ -73,10 +61,6 @@ def _criar_session():
 
 SESSION = _criar_session()
 
-
-# ============================================================
-# ESTADO
-# ============================================================
 
 lock = threading.Lock()
 
@@ -97,10 +81,6 @@ estado = {
     "historico": []
 }
 
-
-# ============================================================
-# PERSISTÊNCIA
-# ============================================================
 
 def salvar_estado():
     try:
@@ -134,10 +114,6 @@ def carregar_estado():
         log.error(f"Erro ao carregar estado: {e}")
 
 
-# ============================================================
-# TELEGRAM
-# ============================================================
-
 def enviar_telegram(mensagem):
     if not TELEGRAM_TOKEN or not CHAT_ID:
         log.warning("Telegram não configurado (TELEGRAM_TOKEN / CHAT_ID)")
@@ -162,10 +138,6 @@ def enviar_telegram(mensagem):
     return False
 
 
-# ============================================================
-# API
-# ============================================================
-
 def api_get(endpoint, params=None):
     if not API_KEY:
         log.error("FIVE_DOLLAR_KEY não configurada.")
@@ -187,10 +159,6 @@ def api_get(endpoint, params=None):
         log.error(f"Erro API {endpoint}: {e}")
         return None
 
-
-# ============================================================
-# UTILIDADES DE EXTRAÇÃO
-# ============================================================
 
 def extrair_lista(data):
     if not data:
@@ -369,10 +337,6 @@ def eh_finalizado(jogo):
     return any(f in status for f in finais)
 
 
-# ============================================================
-# DATA / HORA
-# ============================================================
-
 def extrair_inicio_timestamp(jogo):
     valores = []
 
@@ -457,10 +421,6 @@ def esta_na_janela_3h(jogo):
     alvo = HORAS_ANTES * 60
     return abs(minutos - alvo) <= JANELA_MINUTOS
 
-
-# ============================================================
-# ODDS
-# ============================================================
 
 def extrair_mercado_bookmakers(data, mercado):
     resultado = []
@@ -615,10 +575,6 @@ def obter_melhor_odd(fixture_id, mercado):
     return max(candidatos, key=lambda x: x["odd"])
 
 
-# ============================================================
-# FILTROS
-# ============================================================
-
 def linha_gols_valida(linha):
     return linha in (0.5, 1.5, 2.5)
 
@@ -634,10 +590,6 @@ def filtrar_gols(odd_info):
 def filtrar_cantos(odd_info):
     return bool(odd_info) and linha_cantos_valida(odd_info["linha"])
 
-
-# ============================================================
-# RESOLUÇÃO
-# ============================================================
 
 def resolver_linha(total, linha):
     total = float(total)
@@ -661,10 +613,6 @@ def resolver_combinado(resultado_gols, resultado_cantos):
         return "WIN"
     return "PUSH"
 
-
-# ============================================================
-# ASSERTIVIDADE
-# ============================================================
 
 def calcular_assertividade(wins, losses):
     total = wins + losses
@@ -714,10 +662,6 @@ def assertividade_7_dias():
     }
 
 
-# ============================================================
-# BUSCA DE JOGOS
-# ============================================================
-
 def buscar_pre():
     agora = datetime.now(timezone.utc)
     fim = agora + timedelta(hours=HORAS_ANTES + 2)
@@ -759,10 +703,6 @@ def buscar_pre():
     log.info(f"buscar_pre: {len(candidatos)} candidatos na janela")
     return candidatos
 
-
-# ============================================================
-# CRIAÇÃO DO SINAL
-# ============================================================
 
 def criar_sinal_combinado(jogo):
     fid = extrair_id(jogo)
@@ -823,10 +763,6 @@ def criar_sinal_combinado(jogo):
     }
 
 
-# ============================================================
-# MENSAGEM DO SINAL
-# ============================================================
-
 def mensagem_sinal(sinal):
     home = html.escape(sinal["home"])
     away = html.escape(sinal["away"])
@@ -858,10 +794,6 @@ def mensagem_sinal(sinal):
         "⚠️ Assertividade é baseada no histórico registrado pelo robô."
     )
 
-
-# ============================================================
-# ANALISAR PRÉ-JOGO
-# ============================================================
 
 def analisar_pre(jogo):
     fid = extrair_id(jogo)
@@ -897,10 +829,6 @@ def analisar_pre(jogo):
     return True
 
 
-# ============================================================
-# BUSCAR JOGO FINAL
-# ============================================================
-
 def buscar_jogo_por_id(fid):
     data = api_get(f"/fixtures/{fid}", params={"lang": "pt"})
     if not data:
@@ -916,10 +844,6 @@ def buscar_jogo_por_id(fid):
 
     return data
 
-
-# ============================================================
-# FINALIZAR SINAL
-# ============================================================
 
 def finalizar(chave, sinal, jogo):
     gols_casa, gols_fora = extrair_placar(jogo)
@@ -992,10 +916,6 @@ def finalizar(chave, sinal, jogo):
     log.info(f"[FIM] {sinal['home']} x {sinal['away']} -> {resultado}")
 
 
-# ============================================================
-# VERIFICAR RESULTADOS
-# ============================================================
-
 def verificar_resultados():
     pendentes = list(estado["pendentes"].items())
     agora = time.time()
@@ -1024,10 +944,6 @@ def verificar_resultados():
         salvar_estado()
 
 
-# ============================================================
-# STATUS
-# ============================================================
-
 def gerar_stats():
     with lock:
         combinado = estatisticas_combinadas()
@@ -1040,12 +956,164 @@ def gerar_stats():
         }
 
 
-# ============================================================
-# LOOP PRINCIPAL
-# ============================================================
-
 def loop_bot():
     log.info("================================")
     log.info("ROBÔ GOLS + ESCANTEIOS")
     log.info("INICIANDO...")
-    log.info(f"API_KEY configurada? {bool
+    log.info(f"API_KEY configurada? {bool(API_KEY)}")
+    log.info(f"TELEGRAM configurado? {bool(TELEGRAM_TOKEN and CHAT_ID)}")
+    log.info(
+        f"HORAS_ANTES={HORAS_ANTES} | JANELA={JANELA_MINUTOS}min | "
+        f"ODD={ODD_MIN}-{ODD_MAX}"
+    )
+    log.info("================================")
+
+    if TELEGRAM_TOKEN and CHAT_ID:
+        enviar_telegram(
+            "🟢 <b>ROBÔ ONLINE</b>\n\n"
+            "Sistema de sinais combinados iniciado."
+        )
+    else:
+        log.warning("Telegram NÃO configurado")
+
+    ultimo_pre = 0
+    ultimo_resultado = 0
+
+    while True:
+        agora = time.time()
+
+        if agora - ultimo_pre >= INTERVALO_PRE:
+            ultimo_pre = agora
+            log.info("🔎 Verificando pré-jogos...")
+            try:
+                jogos = buscar_pre()
+                enviados = 0
+                for jogo in jogos:
+                    if enviados >= QTD_POR_RODADA:
+                        break
+                    if analisar_pre(jogo):
+                        enviados += 1
+                log.info(f"Sinais enviados nesta rodada: {enviados}")
+            except Exception:
+                log.exception("Erro análise pré")
+
+        if agora - ultimo_resultado >= INTERVALO_RESULTADOS:
+            ultimo_resultado = agora
+            log.info(
+                f"🏁 Verificando resultados... "
+                f"({len(estado['pendentes'])} pendentes)"
+            )
+            try:
+                verificar_resultados()
+            except Exception:
+                log.exception("Erro resultados")
+
+        time.sleep(20)
+
+
+@app.route("/")
+def home():
+    return jsonify({
+        "status": "online",
+        "bot": "Gols + Escanteios",
+        "modo": "combinado",
+        "pendentes": len(estado["pendentes"])
+    })
+
+
+@app.route("/health")
+def health():
+    return jsonify({
+        "status": "ok",
+        "telegram": bool(TELEGRAM_TOKEN and CHAT_ID),
+        "api": bool(API_KEY),
+        "pendentes": len(estado["pendentes"])
+    })
+
+
+@app.route("/stats")
+def stats():
+    return jsonify(gerar_stats())
+
+
+@app.route("/debug/thread")
+def debug_thread():
+    return jsonify({
+        "thread_ativa": _bot_thread.is_alive() if "_bot_thread" in globals() else False,
+        "thread_nome": _bot_thread.name if "_bot_thread" in globals() else None,
+        "total_threads": threading.active_count(),
+        "threads": [t.name for t in threading.enumerate()],
+        "pendentes": len(estado["pendentes"]),
+        "total_sinais": estado["stats"]["total_sinais"]
+    })
+
+
+@app.route("/debug/rodar-agora")
+def debug_rodar_agora():
+    resultado = {
+        "api_key_ok": bool(API_KEY),
+        "telegram_ok": bool(TELEGRAM_TOKEN and CHAT_ID),
+        "jogos_encontrados": 0,
+        "sinais_enviados": 0,
+        "erros": []
+    }
+
+    try:
+        jogos = buscar_pre()
+        resultado["jogos_encontrados"] = len(jogos)
+
+        enviados = 0
+        for jogo in jogos:
+            if enviados >= QTD_POR_RODADA:
+                break
+            if analisar_pre(jogo):
+                enviados += 1
+        resultado["sinais_enviados"] = enviados
+    except Exception as e:
+        resultado["erros"].append(str(e))
+
+    return jsonify(resultado)
+
+
+@app.route("/debug/api-crua")
+def debug_api_crua():
+    agora = datetime.now(timezone.utc)
+    fim = agora + timedelta(hours=24)
+
+    testes = {}
+
+    data1 = api_get("/fixtures", params={
+        "start_time": agora.isoformat(),
+        "end_time": fim.isoformat(),
+        "per_page": 100,
+        "lang": "pt"
+    })
+    testes["fixtures_com_start_end"] = data1
+
+    data2 = api_get("/fixtures", params={"per_page": 10})
+    testes["fixtures_per_page"] = data2
+
+    try:
+        r = SESSION.get(
+            f"{BASE_API}/fixtures",
+            headers={"Authorization": f"Bearer {API_KEY}", "Accept": "application/json"},
+            params={"per_page": 5},
+            timeout=20
+        )
+        testes["raw_status"] = r.status_code
+        testes["raw_texto"] = r.text[:2000]
+    except Exception as e:
+        testes["raw_erro"] = str(e)
+
+    return jsonify(testes)
+
+
+carregar_estado()
+
+_bot_thread = threading.Thread(target=loop_bot, daemon=True, name="loop_bot")
+_bot_thread.start()
+log.info("Thread do bot iniciada (daemon=True)")
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=PORT)

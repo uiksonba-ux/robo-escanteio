@@ -6,7 +6,6 @@ app = Flask(__name__)
 ARQUIVO="stats.json"
 lock=threading.Lock()
 
-# Stats separados por mercado
 stats={"live_wins":0,"live_losses":0,"pre_wins":0,"pre_losses":0}
 if os.path.exists(ARQUIVO):
     try:
@@ -20,9 +19,6 @@ def taxa(w,l):
     t=w+l
     return 0 if t==0 else round(w/t*100,2)
 
-# Guarda jogos com info pra conferir depois
-# live: {fid: {home,away, cantos_entrada, hora, over}}
-# pre: {fid: {home,away, odd, hora, over}}
 entradas_live={}
 entradas_pre={}
 pendentes_live={}
@@ -57,7 +53,6 @@ def buscar_live():
 
 def buscar_fixtures_finalizados():
     try:
-        # Busca jogos finalizados hoje pra conferir
         r=requests.get(f"{BASE}/fixtures",headers=HEADERS,params={"date":"today","status":"finished"},timeout=20)
         if r.status_code!=200:
             r=requests.get(f"{BASE}/livescores",headers=HEADERS,timeout=20)
@@ -107,12 +102,11 @@ def filtra_over2(jogo):
     except: return None
 
 if __name__=="__main__":
-    tg(f"🤖 <b>BOT COM RESOLUÇÃO ATIVADO</b>\n\n📊 Live: {stats['live_wins']}W-{stats['live_losses']}L ({taxa(stats['live_wins'],stats['live_losses'])}%)\n📊 Pré: {stats['pre_wins']}W-{stats['pre_losses']}L ({taxa(stats['pre_wins'],stats['pre_losses'])}%)\n\n🔥 LIVE 20-45' Fav ≤1.5/Casa ≤1.7 perdendo até 2 => Over 9 Esc\n⚽ PRE Over 2 @1.70-2.50")
+    tg(f"🤖 <b>BOT ATUALIZADO</b>\n\n📊 Live: {stats['live_wins']}W-{stats['live_losses']}L ({taxa(stats['live_wins'],stats['live_losses'])}%)\n📊 Pré: {stats['pre_wins']}W-{stats['pre_losses']}L ({taxa(stats['pre_wins'],stats['pre_losses'])}%)\n\n🔥 LIVE 20-45' Fav ≤1.5/Casa ≤1.7 empatando ou perdendo até 2 => Over 9 Esc\n⚽ PRE Over 2 @1.70-2.50")
 
     ultimo_pre=0
     ultimo_check=0
     while True:
-        # 1. LIVE 20-45 OVER 9
         for j in buscar_live():
             try:
                 fid=str(j.get("id") or j.get("fixture",{}).get("id"))
@@ -125,14 +119,18 @@ if __name__=="__main__":
                 gf=int(j.get("away_score") or j.get("goals",{}).get("away",0) or 0)
                 fav, fav_odd, home_odd, away_odd = get_favorito_info(j)
                 if not fav: continue
-                perdendo=False; placar_txt=""
+
+                condicao=False; placar_txt=""
                 if fav=="HOME":
                     diff=gf-gc
-                    if 1 <= diff <= 2: perdendo=True; placar_txt=f"{gc}x{gf} - Casa fav perde {diff}"
+                    if diff==0: condicao=True; placar_txt=f"{gc}x{gf} - Casa fav empatando"
+                    elif 1 <= diff <= 2: condicao=True; placar_txt=f"{gc}x{gf} - Casa fav perde {diff}"
                 else:
                     diff=gc-gf
-                    if 1 <= diff <= 2: perdendo=True; placar_txt=f"{gc}x{gf} - Fora fav perde {diff}"
-                if not perdendo: continue
+                    if diff==0: condicao=True; placar_txt=f"{gc}x{gf} - Fora fav empatando"
+                    elif 1 <= diff <= 2: condicao=True; placar_txt=f"{gc}x{gf} - Fora fav perde {diff}"
+                if not condicao: continue
+
                 cantos=j.get("corners",0)
                 if isinstance(cantos, dict): cantos=cantos.get("total",0)
                 cantos=int(cantos)
@@ -145,7 +143,6 @@ if __name__=="__main__":
 
             except Exception as e: print(f"Erro live: {e}")
 
-        # 2. PRE OVER 2
         if time.time() - ultimo_pre > 1800:
             ultimo_pre=time.time()
             for j in buscar_pre():
@@ -164,7 +161,6 @@ if __name__=="__main__":
                     break
                 except: pass
 
-        # 3. CHECAGEM DE RESULTADO - a cada 5 min
         if time.time() - ultimo_check > 300 and (pendentes_live or pendentes_pre):
             ultimo_check=time.time()
             finalizados=buscar_fixtures_finalizados()
@@ -174,14 +170,12 @@ if __name__=="__main__":
                     status=str(j.get("status") or j.get("fixture",{}).get("status",{}).get("short","")).lower()
                     if "ft" not in status and "finished" not in status: continue
 
-                    # Confere LIVE Over 9 Escanteios
                     if fid in pendentes_live:
                         info=pendentes_live.pop(fid)
                         total_cantos=j.get("corners",0)
                         if isinstance(total_cantos, dict): total_cantos=total_cantos.get("total",0)
                         total_cantos=int(total_cantos or 0)
                         total_gols=int(j.get("home_score",0) or j.get("goals",{}).get("home",0) or 0) + int(j.get("away_score",0) or j.get("goals",{}).get("away",0) or 0)
-
                         if total_cantos > 9:
                             stats["live_wins"]+=1; res="✅ GREEN"; emoji="🟢"
                         else:
@@ -190,7 +184,6 @@ if __name__=="__main__":
                         tl=taxa(stats["live_wins"], stats["live_losses"])
                         tg(f"{emoji} <b>{res} - LIVE OVER 9 ESC</b>\n\n🏟️ {info['home']} x {info['away']}\n🚩 Final: {total_cantos} cantos | Gols: {total_gols}\nEntrada: Over 9.0\n\n📊 <b>Live agora: {stats['live_wins']}W-{stats['live_losses']}L ({tl}%)</b>")
 
-                    # Confere PRE Over 2 Gols
                     if fid in pendentes_pre:
                         info=pendentes_pre.pop(fid)
                         total_gols=int(j.get("home_score",0) or j.get("goals",{}).get("home",0) or 0) + int(j.get("away_score",0) or j.get("goals",{}).get("away",0) or 0)

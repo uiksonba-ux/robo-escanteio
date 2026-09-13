@@ -1,1 +1,1 @@
-web: python robo.py
+web: gunicorn robo:app

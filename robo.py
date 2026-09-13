@@ -36,8 +36,8 @@ PORT = int(os.getenv("PORT", "10000"))
 ODD_MIN = float(os.getenv("ODD_MIN", "1.35"))
 ODD_MAX = float(os.getenv("ODD_MAX", "3.50"))
 QTD_POR_RODADA = int(os.getenv("QTD_POR_RODADA", "8"))
-HORAS_MIN = float(os.getenv("HORAS_MIN", "1"))
-HORAS_MAX = float(os.getenv("HORAS_MAX", "6"))
+HORAS_MIN = float(os.getenv("HORAS_MIN", "0.5"))
+HORAS_MAX = float(os.getenv("HORAS_MAX", "12"))
 INTERVALO_PRE = int(os.getenv("INTERVALO_PRE", "600"))
 INTERVALO_RESULTADOS = int(os.getenv("INTERVALO_RESULTADOS", "600"))
 MINIMO_HISTORICO = int(os.getenv("MINIMO_HISTORICO", "5"))
@@ -490,8 +490,6 @@ def assertividade_7_dias():
 
 
 def buscar_pre():
-    # A API não aceita start_time/end_time em ISO. Buscamos sem filtro
-    # e filtramos localmente pela janela HORAS_MIN..HORAS_MAX.
     data = api_get("/fixtures", params={"per_page": 200, "lang": "pt"})
     jogos = extrair_lista(data)
     log.info(f"buscar_pre: API retornou {len(jogos)} jogos")
@@ -503,16 +501,13 @@ def buscar_pre():
 
         if fid is None or minutos is None:
             continue
-
-        # Só jogos ainda não começados
         if minutos < 0:
             continue
-
         if dentro_da_janela(jogo):
             candidatos.append(jogo)
             log.info(f"[{fid}] {minutos:.0f}min → candidato")
 
-    log.info(f"buscar_pre: {len(candidatos)} candidatos")
+    log.info(f"buscar_pre: {len(candidatos)} candidatos na janela")
     return candidatos
 
 
@@ -780,6 +775,7 @@ def debug_thread():
     return jsonify({
         "thread_ativa": _bot_thread.is_alive() if "_bot_thread" in globals() else False,
         "thread_nome": _bot_thread.name if "_bot_thread" in globals() else None,
+        "watchdog_ativa": _watchdog_thread.is_alive() if "_watchdog_thread" in globals() else False,
         "threads": [t.name for t in threading.enumerate()],
         "pendentes": len(estado["pendentes"]),
         "total_sinais": estado["stats"]["total_sinais"]
@@ -830,11 +826,39 @@ def debug_odds_crua(fid):
     return jsonify(resultados)
 
 
+# ============================================================
+# INICIALIZAÇÃO COM WATCHDOG
+# ============================================================
+
 carregar_estado()
 
-_bot_thread = threading.Thread(target=loop_bot, daemon=True, name="loop_bot")
-_bot_thread.start()
-log.info("Thread do bot iniciada")
+
+def _iniciar_bot():
+    global _bot_thread
+    if "_bot_thread" in globals() and _bot_thread.is_alive():
+        return _bot_thread
+    _bot_thread = threading.Thread(target=loop_bot, daemon=True, name="loop_bot")
+    _bot_thread.start()
+    log.info("Thread do bot iniciada")
+    return _bot_thread
+
+
+def _watchdog():
+    while True:
+        time.sleep(60)
+        try:
+            if "_bot_thread" not in globals() or not _bot_thread.is_alive():
+                log.warning("⚠️ Thread morta. Reiniciando...")
+                _iniciar_bot()
+        except Exception as e:
+            log.error(f"Erro no watchdog: {e}")
+
+
+_iniciar_bot()
+
+_watchdog_thread = threading.Thread(target=_watchdog, daemon=True, name="watchdog")
+_watchdog_thread.start()
+log.info("Watchdog iniciado")
 
 
 if __name__ == "__main__":

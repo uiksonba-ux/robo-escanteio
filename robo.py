@@ -9,141 +9,170 @@ import requests
 from flask import Flask, jsonify
 
 # =========================================================
-# CONFIGURAÇÃO
+# CONFIGURAÇÕES
 # =========================================================
 
 app = Flask(__name__)
 
-BASE_URL = "https://api.5dollarfootballapi.com/v1"
+BASE_API = "https://api.5dollarfootballapi.com/v1"
 
-TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
-CHAT_ID = os.getenv("CHAT_ID", "").strip()
-API_KEY = os.getenv("FIVE_DOLLAR_KEY", "").strip()
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+API_KEY = os.getenv("FIVE_DOLLAR_KEY")
 
 HEADERS = {
     "Authorization": f"Bearer {API_KEY}",
     "Accept": "application/json",
+    "User-Agent": "robo-escanteios/1.0"
 }
 
 ARQUIVO_STATS = "stats.json"
 ARQUIVO_HISTORICO = "historico.json"
 
-INTERVALO_LIVE = 60
-INTERVALO_PRE = 1800
-INTERVALO_RESULTADOS = 300
+PORT = int(os.getenv("PORT", "10000"))
 
+# Filtros LIVE
 MINUTO_INICIAL_LIVE = 20
 MINUTO_FINAL_LIVE = 45
 MIN_CANTOS_LIVE = 4
-
 ODD_FAVORITO_MAXIMA = 1.70
+
+# Filtros PRÉ-JOGO
 ODD_OVER_MINIMA = 1.70
 ODD_OVER_MAXIMA = 2.50
-
-# =========================================================
-# DADOS
-# =========================================================
+INTERVALO_PRE = 1800       # 30 minutos
+INTERVALO_RESULTADOS = 300 # 5 minutos
+INTERVALO_LIVE = 60        # 1 minuto
 
 lock = threading.RLock()
 
-stats_padrao = {
+# =========================================================
+# ESTATÍSTICAS
+# =========================================================
+
+STATS_PADRAO = {
     "live_wins": 0,
     "live_losses": 0,
     "live_voids": 0,
     "pre_wins": 0,
     "pre_losses": 0,
-    "total_sinais": 0,
-    "ultima_atualizacao": None,
+    "total_sinais": 0
 }
 
-stats = stats_padrao.copy()
-historico = []
+stats = STATS_PADRAO.copy()
+
+
+def carregar_json(arquivo, padrao):
+    if not os.path.exists(arquivo):
+        return padrao.copy() if isinstance(padrao, dict) else []
+
+    try:
+        with open(arquivo, "r", encoding="utf-8") as f:
+            dados = json.load(f)
+
+        if isinstance(padrao, dict):
+            resultado = padrao.copy()
+            if isinstance(dados, dict):
+                resultado.update(dados)
+            return resultado
+
+        return dados if isinstance(dados, list) else padrao
+
+    except Exception as erro:
+        print(f"ERRO AO CARREGAR {arquivo}: {erro}", flush=True)
+        return padrao.copy() if isinstance(padrao, dict) else []
+
+
+stats = carregar_json(ARQUIVO_STATS, STATS_PADRAO)
+historico = carregar_json(ARQUIVO_HISTORICO, [])
 
 entradas_live = {}
 entradas_pre = {}
-
 pendentes_live = {}
 pendentes_pre = {}
 
 
-# =========================================================
-# FUNÇÕES DE ARQUIVO
-# =========================================================
-
-def carregar_json(caminho, padrao):
-    try:
-        if not os.path.exists(caminho):
-            return padrao
-
-        with open(caminho, "r", encoding="utf-8") as arquivo:
-            dados = json.load(arquivo)
-
-        return dados
-
-    except Exception as erro:
-        print(f"ERRO AO CARREGAR {caminho}: {erro}", flush=True)
-        return padrao
-
-
-def salvar_json(caminho, dados):
+def salvar_json_seguro(arquivo, dados):
     """
     Salva usando arquivo temporário para evitar corromper
-    o JSON caso o processo seja interrompido durante a gravação.
+    o JSON caso o processo seja interrompido.
     """
     try:
-        pasta = os.path.dirname(os.path.abspath(caminho)) or "."
-        nome_temporario = None
+        pasta = os.path.dirname(arquivo) or "."
+        fd, temporario = tempfile.mkstemp(
+            prefix="tmp_",
+            suffix=".json",
+            dir=pasta
+        )
 
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=pasta,
-            delete=False
-        ) as arquivo:
-
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(
                 dados,
-                arquivo,
+                f,
                 ensure_ascii=False,
                 indent=2
             )
 
-            arquivo.flush()
-            os.fsync(arquivo.fileno())
-            nome_temporario = arquivo.name
-
-        os.replace(nome_temporario, caminho)
+        os.replace(temporario, arquivo)
 
     except Exception as erro:
-        print(f"ERRO AO SALVAR {caminho}: {erro}", flush=True)
+        print(f"ERRO AO SALVAR {arquivo}: {erro}", flush=True)
 
 
 def salvar_dados():
     with lock:
-        stats["ultima_atualizacao"] = datetime.now().strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-
-        salvar_json(ARQUIVO_STATS, stats)
-        salvar_json(ARQUIVO_HISTORICO, historico)
+        salvar_json_seguro(ARQUIVO_STATS, stats)
+        salvar_json_seguro(ARQUIVO_HISTORICO, historico)
 
 
-stats_carregadas = carregar_json(ARQUIVO_STATS, {})
-if isinstance(stats_carregadas, dict):
-    stats.update(stats_carregadas)
+def taxa(vitorias, derrotas):
+    total = vitorias + derrotas
 
-historico_carregado = carregar_json(ARQUIVO_HISTORICO, [])
-if isinstance(historico_carregado, list):
-    historico = historico_carregado
+    if total == 0:
+        return 0.0
+
+    return round((vitorias / total) * 100, 2)
+
+
+def registrar_historico(tipo, resultado, jogo, informacoes=None):
+    if informacoes is None:
+        informacoes = {}
+
+    registro = {
+        "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "tipo": tipo,
+        "resultado": resultado,
+        "fixture_id": extrair_id(jogo),
+        "casa": extrair_times(jogo)[0],
+        "fora": extrair_times(jogo)[1],
+        "informacoes": informacoes
+    }
+
+    with lock:
+        historico.append(registro)
+
+        # Mantém no máximo os últimos 2.000 resultados
+        if len(historico) > 2000:
+            del historico[:-2000]
+
+        salvar_dados()
 
 
 # =========================================================
-# UTILITÁRIOS
+# FUNÇÕES AUXILIARES
 # =========================================================
+
+def primeiro_valor(*valores):
+    for valor in valores:
+        if valor is not None and valor != "":
+            return valor
+
+    return None
+
 
 def numero(valor, padrao=0.0):
     try:
-        if valor is None:
+        if valor is None or valor == "":
             return padrao
 
         if isinstance(valor, str):
@@ -163,178 +192,113 @@ def inteiro(valor, padrao=0):
         return padrao
 
 
-def primeiro_valor(*valores):
-    for valor in valores:
-        if valor is not None and valor != "":
-            return valor
+def nome_time(time_data, padrao):
+    if isinstance(time_data, dict):
+        return str(
+            primeiro_valor(
+                time_data.get("name"),
+                time_data.get("short_name"),
+                time_data.get("title"),
+                padrao
+            )
+        )
 
-    return None
+    if time_data:
+        return str(time_data)
 
-
-def taxa(wins, losses):
-    total = wins + losses
-
-    if total <= 0:
-        return 0.0
-
-    return round((wins / total) * 100, 2)
-
-
-def taxa_live():
-    return taxa(
-        stats.get("live_wins", 0),
-        stats.get("live_losses", 0)
-    )
-
-
-def taxa_pre():
-    return taxa(
-        stats.get("pre_wins", 0),
-        stats.get("pre_losses", 0)
-    )
-
-
-def taxa_geral():
-    return taxa(
-        stats.get("live_wins", 0) + stats.get("pre_wins", 0),
-        stats.get("live_losses", 0) + stats.get("pre_losses", 0)
-    )
+    return padrao
 
 
 def extrair_id(jogo):
     fixture = jogo.get("fixture", {})
 
-    if not isinstance(fixture, dict):
-        fixture = {}
-
-    valor = primeiro_valor(
-        jogo.get("id"),
-        fixture.get("id"),
-        jogo.get("fixture_id")
-    )
-
-    if valor is None:
-        return None
-
-    return str(valor)
-
-
-def nome_time(time_obj, padrao):
-    if isinstance(time_obj, str):
-        return time_obj
-
-    if isinstance(time_obj, dict):
-        return primeiro_valor(
-            time_obj.get("name"),
-            time_obj.get("short_name"),
-            time_obj.get("title"),
-            padrao
+    return str(
+        primeiro_valor(
+            jogo.get("id"),
+            fixture.get("id"),
+            jogo.get("fixture_id"),
+            ""
         )
-
-    return padrao
+    )
 
 
 def extrair_times(jogo):
-    teams = jogo.get("teams", {})
+    teams = jogo.get("teams", {}) or {}
 
-    if not isinstance(teams, dict):
-        teams = {}
-
-    home = primeiro_valor(
-        jogo.get("home_team"),
-        jogo.get("home"),
-        teams.get("home")
+    casa = nome_time(
+        primeiro_valor(
+            jogo.get("home_team"),
+            jogo.get("home"),
+            teams.get("home")
+        ),
+        "Casa"
     )
 
-    away = primeiro_valor(
-        jogo.get("away_team"),
-        jogo.get("away"),
-        teams.get("away")
+    fora = nome_time(
+        primeiro_valor(
+            jogo.get("away_team"),
+            jogo.get("away"),
+            teams.get("away")
+        ),
+        "Fora"
     )
 
-    return (
-        nome_time(home, "Casa"),
-        nome_time(away, "Fora")
-    )
+    return casa, fora
 
 
 def extrair_placar(jogo):
-    goals = jogo.get("goals", {})
+    goals = jogo.get("goals", {}) or {}
+    scores = jogo.get("score", {}) or {}
 
-    if not isinstance(goals, dict):
-        goals = {}
-
-    score = jogo.get("score", {})
-
-    if not isinstance(score, dict):
-        score = {}
-
-    home = inteiro(
+    casa = inteiro(
         primeiro_valor(
             jogo.get("home_score"),
-            score.get("home"),
-            goals.get("home")
-        ),
-        0
+            jogo.get("home_goals"),
+            goals.get("home"),
+            scores.get("home"),
+            0
+        )
     )
 
-    away = inteiro(
+    fora = inteiro(
         primeiro_valor(
             jogo.get("away_score"),
-            score.get("away"),
-            goals.get("away")
-        ),
-        0
+            jogo.get("away_goals"),
+            goals.get("away"),
+            scores.get("away"),
+            0
+        )
     )
 
-    return home, away
+    return casa, fora
 
 
 def extrair_minuto(jogo):
-    fixture = jogo.get("fixture", {})
-
-    if not isinstance(fixture, dict):
-        fixture = {}
-
-    status = fixture.get("status", {})
-
-    if not isinstance(status, dict):
-        status = {}
+    fixture = jogo.get("fixture", {}) or {}
+    status = fixture.get("status", {}) or {}
 
     return inteiro(
         primeiro_valor(
             jogo.get("elapsed"),
+            jogo.get("minute"),
             status.get("elapsed"),
-            jogo.get("minute")
-        ),
-        0
+            0
+        )
     )
 
 
 def extrair_status(jogo):
-    fixture = jogo.get("fixture", {})
-
-    if not isinstance(fixture, dict):
-        fixture = {}
-
-    status = fixture.get("status", {})
-
-    if isinstance(status, dict):
-        valor = primeiro_valor(
-            status.get("short"),
-            status.get("long"),
-            status.get("status")
-        )
-    else:
-        valor = status
+    fixture = jogo.get("fixture", {}) or {}
+    status = fixture.get("status", {}) or {}
 
     valor = primeiro_valor(
-        valor,
         jogo.get("status"),
-        jogo.get("state")
+        status.get("short"),
+        status.get("long"),
+        ""
     )
 
-    return str(valor or "").lower().strip()
+    return str(valor).lower()
 
 
 def eh_finalizado(jogo):
@@ -343,10 +307,10 @@ def eh_finalizado(jogo):
     status_finais = [
         "ft",
         "finished",
-        "complete",
-        "completed",
+        "finalizado",
         "aet",
-        "pen"
+        "pen",
+        "after extra time"
     ]
 
     return any(item in status for item in status_finais)
@@ -354,23 +318,22 @@ def eh_finalizado(jogo):
 
 def extrair_cantos(jogo):
     """
-    Tenta identificar escanteios em vários formatos possíveis.
+    Aceita vários formatos possíveis da API:
+    - corners: 8
+    - corners: {"total": 8}
+    - corners: {"home": 4, "away": 4}
+    - statistics com corner kicks
     """
 
     corners = primeiro_valor(
         jogo.get("corners"),
         jogo.get("corner"),
-        jogo.get("corner_kicks"),
-        jogo.get("statistics", {}).get("corners")
-        if isinstance(jogo.get("statistics"), dict)
-        else None
+        jogo.get("escanteios"),
+        jogo.get("cantos")
     )
 
-    if corners is None:
-        return 0
-
     if isinstance(corners, (int, float, str)):
-        return inteiro(corners, 0)
+        return inteiro(corners)
 
     if isinstance(corners, dict):
         total = primeiro_valor(
@@ -380,22 +343,69 @@ def extrair_cantos(jogo):
         )
 
         if total is not None:
-            return inteiro(total, 0)
+            return inteiro(total)
 
-        home = primeiro_valor(
+        casa = primeiro_valor(
             corners.get("home"),
             corners.get("local"),
-            corners.get("home_total")
+            corners.get("casa"),
+            0
         )
 
-        away = primeiro_valor(
+        fora = primeiro_valor(
             corners.get("away"),
             corners.get("visitor"),
-            corners.get("away_total")
+            corners.get("visitante"),
+            corners.get("fora"),
+            0
         )
 
-        if home is not None or away is not None:
-            return inteiro(home, 0) + inteiro(away, 0)
+        return inteiro(casa) + inteiro(fora)
+
+    statistics = jogo.get("statistics", [])
+
+    if isinstance(statistics, list):
+        total = 0
+
+        for equipe in statistics:
+            if not isinstance(equipe, dict):
+                continue
+
+            estatisticas_equipe = (
+                equipe.get("statistics")
+                or equipe.get("stats")
+                or []
+            )
+
+            if not isinstance(estatisticas_equipe, list):
+                continue
+
+            for item in estatisticas_equipe:
+                if not isinstance(item, dict):
+                    continue
+
+                nome = str(
+                    primeiro_valor(
+                        item.get("type"),
+                        item.get("name"),
+                        ""
+                    )
+                ).lower()
+
+                if (
+                    "corner" in nome
+                    or "escante" in nome
+                    or "canto" in nome
+                ):
+                    total += inteiro(
+                        primeiro_valor(
+                            item.get("value"),
+                            item.get("total"),
+                            0
+                        )
+                    )
+
+        return total
 
     return 0
 
@@ -404,75 +414,95 @@ def extrair_odds(jogo):
     odds = primeiro_valor(
         jogo.get("odds"),
         jogo.get("pre_odds"),
-        jogo.get("bookmakers")
+        jogo.get("bets"),
+        jogo.get("markets"),
+        []
     )
 
-    if odds is None:
+    if isinstance(odds, dict):
+        odds = (
+            odds.get("data")
+            or odds.get("odds")
+            or odds.get("markets")
+            or odds.get("bets")
+            or []
+        )
+
+    if not isinstance(odds, list):
         return []
 
-    if isinstance(odds, list):
-        return odds
+    resultado = []
 
-    if isinstance(odds, dict):
-        resultado = []
+    for item in odds:
+        if isinstance(item, dict):
+            resultado.append(item)
 
-        # Caso venha como {"markets": [...]}
-        if isinstance(odds.get("markets"), list):
-            resultado.extend(odds["markets"])
-
-        # Caso venha como {"data": [...]}
-        if isinstance(odds.get("data"), list):
-            resultado.extend(odds["data"])
-
-        # Caso venha como {"bookmakers": [...]}
-        if isinstance(odds.get("bookmakers"), list):
-            resultado.extend(odds["bookmakers"])
-
-        # Caso seja um único mercado
-        if not resultado:
-            resultado.append(odds)
-
-        return resultado
-
-    return []
+    return resultado
 
 
 def texto_odds(odd):
-    partes = []
+    partes = [
+        odd.get("market"),
+        odd.get("name"),
+        odd.get("selection"),
+        odd.get("label"),
+        odd.get("outcome"),
+        odd.get("team"),
+        odd.get("side"),
+        odd.get("line"),
+        odd.get("handicap")
+    ]
 
-    if isinstance(odd, dict):
-        for chave in [
-            "market",
-            "name",
-            "selection",
-            "label",
-            "team",
-            "side",
-            "outcome",
-            "value"
-        ]:
-            valor = odd.get(chave)
-
-            if valor is not None:
-                partes.append(str(valor))
-
-    return " ".join(partes).lower()
+    return " ".join(
+        str(parte)
+        for parte in partes
+        if parte is not None
+    ).lower()
 
 
 def valor_odd(odd):
-    if not isinstance(odd, dict):
-        return 0.0
-
     return numero(
         primeiro_valor(
             odd.get("odd"),
             odd.get("price"),
             odd.get("value"),
-            odd.get("decimal"),
-            odd.get("odds")
+            odd.get("rate"),
+            odd.get("decimal")
         ),
-        0.0
+        0
     )
+
+
+# =========================================================
+# TELEGRAM
+# =========================================================
+
+def tg_msg(mensagem):
+    if not TOKEN or not CHAT_ID:
+        print("TELEGRAM_TOKEN ou CHAT_ID não configurado.", flush=True)
+        return
+
+    try:
+        resposta = requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            data={
+                "chat_id": CHAT_ID,
+                "text": mensagem,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True
+            },
+            timeout=15
+        )
+
+        if resposta.status_code != 200:
+            print(
+                f"ERRO TELEGRAM {resposta.status_code}: "
+                f"{resposta.text}",
+                flush=True
+            )
+
+    except Exception as erro:
+        print(f"ERRO TELEGRAM: {erro}", flush=True)
 
 
 # =========================================================
@@ -480,7 +510,7 @@ def valor_odd(odd):
 # =========================================================
 
 def api_get(endpoint, params=None):
-    url = f"{BASE_URL}{endpoint}"
+    url = f"{BASE_API}/{endpoint.lstrip('/')}"
 
     try:
         resposta = requests.get(
@@ -490,26 +520,18 @@ def api_get(endpoint, params=None):
             timeout=25
         )
 
+        texto = resposta.text[:1000]
+
         print(
-            f"API {endpoint} | HTTP {resposta.status_code}",
+            f"API {url} | HTTP {resposta.status_code}",
             flush=True
         )
 
-        try:
-            dados = resposta.json()
-        except Exception:
-            print(
-                f"RESPOSTA NÃO JSON: {resposta.text[:500]}",
-                flush=True
-            )
+        if resposta.status_code != 200:
+            print(f"RESPOSTA API: {texto}", flush=True)
             return []
 
-        if resposta.status_code != 200:
-            print(
-                f"RESPOSTA API: {json.dumps(dados, ensure_ascii=False)[:1000]}",
-                flush=True
-            )
-            return []
+        dados = resposta.json()
 
         if isinstance(dados, list):
             return dados
@@ -520,23 +542,19 @@ def api_get(endpoint, params=None):
         resultado = primeiro_valor(
             dados.get("data"),
             dados.get("response"),
-            dados.get("fixtures"),
-            dados.get("results")
+            dados.get("results"),
+            []
         )
 
-        if isinstance(resultado, list):
-            return resultado
-
         if isinstance(resultado, dict):
-            for chave in ["data", "response", "fixtures", "results"]:
-                if isinstance(resultado.get(chave), list):
-                    return resultado[chave]
+            resultado = (
+                resultado.get("data")
+                or resultado.get("fixtures")
+                or resultado.get("response")
+                or []
+            )
 
-        return []
-
-    except requests.RequestException as erro:
-        print(f"ERRO DE CONEXÃO API {endpoint}: {erro}", flush=True)
-        return []
+        return resultado if isinstance(resultado, list) else []
 
     except Exception as erro:
         print(f"ERRO API {endpoint}: {erro}", flush=True)
@@ -544,12 +562,15 @@ def api_get(endpoint, params=None):
 
 
 def buscar_live():
+    """
+    O endpoint /livescores estava retornando 404.
+    Por isso usamos /fixtures com status=live.
+    """
+
     jogos = api_get(
-        "/fixtures",
-        params={
-            "status": "live",
-            "include": "odds,events,stats",
-            "per_page": 500
+        "fixtures",
+        {
+            "status": "live"
         }
     )
 
@@ -563,16 +584,15 @@ def buscar_live():
 
 def buscar_pre():
     jogos = api_get(
-        "/fixtures",
-        params={
-            "status": "scheduled",
-            "include": "odds",
-            "per_page": 100
+        "fixtures",
+        {
+            "date": "today",
+            "status": "scheduled"
         }
     )
 
     print(
-        f"PRÉ: {len(jogos)} jogos encontrados",
+        f"PRE: {len(jogos)} jogos encontrados",
         flush=True
     )
 
@@ -581,10 +601,10 @@ def buscar_pre():
 
 def buscar_finalizados():
     jogos = api_get(
-        "/fixtures",
-        params={
-            "status": "finished",
-            "per_page": 500
+        "fixtures",
+        {
+            "date": "today",
+            "status": "finished"
         }
     )
 
@@ -597,42 +617,7 @@ def buscar_finalizados():
 
 
 # =========================================================
-# TELEGRAM
-# =========================================================
-
-def enviar_telegram(mensagem):
-    if not TOKEN or not CHAT_ID:
-        print("TELEGRAM_TOKEN ou CHAT_ID não configurado.", flush=True)
-        return False
-
-    try:
-        resposta = requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            data={
-                "chat_id": CHAT_ID,
-                "text": mensagem,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True
-            },
-            timeout=20
-        )
-
-        if resposta.status_code != 200:
-            print(
-                f"ERRO TELEGRAM {resposta.status_code}: {resposta.text}",
-                flush=True
-            )
-            return False
-
-        return True
-
-    except Exception as erro:
-        print(f"ERRO TELEGRAM: {erro}", flush=True)
-        return False
-
-
-# =========================================================
-# ANÁLISE DE FAVORITO
+# FILTRO DE FAVORITO
 # =========================================================
 
 def get_favorito_info(jogo):
@@ -642,79 +627,104 @@ def get_favorito_info(jogo):
     away_odd = 99.0
 
     for odd in odds:
-        if not isinstance(odd, dict):
-            continue
-
         texto = texto_odds(odd)
         preco = valor_odd(odd)
 
         if preco < 1.01:
             continue
 
-        eh_vencedor = any(
-            termo in texto
-            for termo in [
-                "match winner",
-                "1x2",
-                "full time result",
-                "winner",
-                "vencedor",
-                "resultado final",
-                "home",
-                "away"
-            ]
+        mercado_vencedor = (
+            "winner" in texto
+            or "match winner" in texto
+            or "1x2" in texto
+            or "moneyline" in texto
+            or "vencedor" in texto
+            or texto.strip() in ["1", "2"]
         )
 
-        if not eh_vencedor:
+        if not mercado_vencedor:
             continue
 
-        eh_home = (
-            "home" in texto
-            or "casa" in texto
-            or "selection 1" in texto
-            or texto.strip() == "1"
-        )
+        lado = str(
+            primeiro_valor(
+                odd.get("team"),
+                odd.get("side"),
+                odd.get("selection"),
+                odd.get("outcome"),
+                odd.get("name"),
+                ""
+            )
+        ).lower()
 
-        eh_away = (
-            "away" in texto
-            or "fora" in texto
-            or "selection 2" in texto
-            or texto.strip() == "2"
-        )
+        if (
+            "home" in lado
+            or "casa" in lado
+            or lado.strip() == "1"
+            or "home" in texto
+        ):
+            home_odd = min(home_odd, preco)
 
-        if eh_home and preco < home_odd:
-            home_odd = preco
+        elif (
+            "away" in lado
+            or "fora" in lado
+            or "visitante" in lado
+            or lado.strip() == "2"
+            or "away" in texto
+        ):
+            away_odd = min(away_odd, preco)
 
-        if eh_away and preco < away_odd:
-            away_odd = preco
-
-    if home_odd <= away_odd and home_odd <= ODD_FAVORITO_MAXIMA:
+    if home_odd <= ODD_FAVORITO_MAXIMA and home_odd < away_odd:
         return "HOME", home_odd, home_odd, away_odd
 
-    if away_odd < home_odd and away_odd <= ODD_FAVORITO_MAXIMA:
+    if away_odd <= ODD_FAVORITO_MAXIMA and away_odd < home_odd:
         return "AWAY", away_odd, home_odd, away_odd
 
-    return None, 0.0, home_odd, away_odd
+    return None, 0, home_odd, away_odd
 
 
 # =========================================================
-# FILTRO OVER 2.5
+# FILTRO CORRETO OVER 2.5
 # =========================================================
 
 def filtra_over25(jogo):
+    """
+    Aceita somente:
+    - Over 2.5
+    - Mais de 2.5 gols
+
+    Não aceita:
+    - Over 2.0
+    - Over 2
+    - Over 1.5
+    - Over 3.5
+
+    Odd entre 1.70 e 2.50.
+    """
+
     odds = extrair_odds(jogo)
 
     for odd in odds:
-        if not isinstance(odd, dict):
-            continue
-
         texto = texto_odds(odd)
         preco = valor_odd(odd)
 
         if preco <= 0:
             continue
 
-        tem_over = "over" in texto or "mais de" in texto
+        texto = (
+            texto
+            .replace(",", ".")
+            .replace("over2.5", "over 2.5")
+            .replace("over2,5", "over 2.5")
+            .replace("maisde2.5", "mais de 2.5")
+            .replace("maisde2,5", "mais de 2.5")
+        )
+
+        tem_over = (
+            "over" in texto
+            or "mais de" in texto
+            or "mais_de" in texto
+        )
+
         tem_gols = (
             "goal" in texto
             or "goals" in texto
@@ -722,372 +732,345 @@ def filtra_over25(jogo):
             or "gols" in texto
         )
 
-        # Aceita somente linha 2.5
-        linha_25 = (
+        # O ponto principal da correção:
+        # exige especificamente a linha 2.5
+        tem_linha_25 = (
             "2.5" in texto
             or "2,5" in texto
-            or "over 2 5" in texto
+            or "2 5" in texto
         )
 
-        # Evita aceitar Over 2.0 ou mercados diferentes
-        linha_20 = (
-            "2.0" in texto
+        # Bloqueia linhas diferentes
+        linha_incorreta = (
+            "1.5" in texto
+            or "1,5" in texto
+            or "2.0" in texto
             or "2,0" in texto
-            or "over 2 " in texto
+            or "3.5" in texto
+            or "3,5" in texto
         )
 
-        if tem_over and tem_gols and linha_25 and not linha_20:
-            if ODD_OVER_MINIMA <= preco <= ODD_OVER_MAXIMA:
-                mercado = primeiro_valor(
-                    odd.get("market"),
-                    odd.get("name"),
-                    odd.get("selection"),
-                    "Over 2.5 Gols"
-                )
+        if not tem_over:
+            continue
 
-                return preco, str(mercado)
+        if not tem_gols:
+            continue
+
+        if not tem_linha_25:
+            continue
+
+        if linha_incorreta:
+            continue
+
+        if not (
+            ODD_OVER_MINIMA
+            <= preco
+            <= ODD_OVER_MAXIMA
+        ):
+            continue
+
+        mercado = primeiro_valor(
+            odd.get("market"),
+            odd.get("name"),
+            odd.get("selection"),
+            odd.get("label"),
+            "Over 2.5 Gols"
+        )
+
+        return preco, str(mercado)
 
     return None
 
 
 # =========================================================
-# HISTÓRICO
+# RESULTADOS
 # =========================================================
 
-def registrar_historico(tipo, resultado, info, dados_finais=None):
-    registro = {
-        "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "tipo": tipo,
-        "resultado": resultado,
-        "home": info.get("home"),
-        "away": info.get("away"),
-        "odd": info.get("odd"),
-        "favorito": info.get("fav"),
-        "minuto_entrada": info.get("minuto"),
-        "cantos_entrada": info.get("cantos"),
-        "placar_entrada": info.get("placar"),
-    }
+def finalizar_live(fid, jogo):
+    if fid not in pendentes_live:
+        return
 
-    if dados_finais:
-        registro.update(dados_finais)
+    info = pendentes_live.pop(fid)
 
-    with lock:
-        historico.append(registro)
-
-        # Mantém no máximo 5.000 registros
-        if len(historico) > 5000:
-            del historico[:-5000]
-
-
-# =========================================================
-# FECHAMENTO DOS SINAIS
-# =========================================================
-
-def fechar_live(jogo, info):
     total_cantos = extrair_cantos(jogo)
-    gols_home, gols_away = extrair_placar(jogo)
-    total_gols = gols_home + gols_away
+    casa_gols, fora_gols = extrair_placar(jogo)
+    total_gols = casa_gols + fora_gols
 
-    if total_cantos > 9:
+    if total_cantos >= 10:
         resultado = "GREEN"
         emoji = "🟢"
-
         stats["live_wins"] += 1
 
     elif total_cantos == 9:
         resultado = "VOID"
         emoji = "⚪"
-
         stats["live_voids"] += 1
 
     else:
         resultado = "RED"
         emoji = "🔴"
-
         stats["live_losses"] += 1
-
-    registrar_historico(
-        "LIVE OVER 9.0",
-        resultado,
-        info,
-        {
-            "cantos_finais": total_cantos,
-            "gols_finais": total_gols
-        }
-    )
 
     salvar_dados()
 
-    enviar_telegram(
+    percentual = taxa(
+        stats["live_wins"],
+        stats["live_losses"]
+    )
+
+    tg_msg(
         f"{emoji} <b>{resultado} - LIVE OVER 9.0</b>\n\n"
         f"🏟️ {info['home']} x {info['away']}\n"
         f"🚩 Escanteios finais: {total_cantos}\n"
         f"⚽ Gols finais: {total_gols}\n"
-        f"📌 Entrada: Over 9.0 FT\n\n"
+        f"💰 Entrada: Over 9.0 FT\n\n"
         f"📊 Live: "
         f"{stats['live_wins']}W-"
         f"{stats['live_losses']}L-"
-        f"{stats['live_voids']}V\n"
-        f"📈 Taxa Live: {taxa_live()}%"
+        f"{stats['live_voids']}V "
+        f"({percentual}%)"
+    )
+
+    registrar_historico(
+        "LIVE_OVER_9",
+        resultado,
+        jogo,
+        {
+            "escanteios_finais": total_cantos,
+            "gols_finais": total_gols,
+            "odd_favorito": info.get("odd")
+        }
     )
 
 
-def fechar_pre(jogo, info):
-    gols_home, gols_away = extrair_placar(jogo)
-    total_gols = gols_home + gols_away
+def finalizar_pre(fid, jogo):
+    if fid not in pendentes_pre:
+        return
+
+    info = pendentes_pre.pop(fid)
+
+    casa_gols, fora_gols = extrair_placar(jogo)
+    total_gols = casa_gols + fora_gols
 
     if total_gols >= 3:
         resultado = "GREEN"
         emoji = "🟢"
-
         stats["pre_wins"] += 1
 
     else:
         resultado = "RED"
         emoji = "🔴"
-
         stats["pre_losses"] += 1
-
-    registrar_historico(
-        "PRÉ OVER 2.5",
-        resultado,
-        info,
-        {
-            "gols_finais": total_gols
-        }
-    )
 
     salvar_dados()
 
-    enviar_telegram(
-        f"{emoji} <b>{resultado} - PRÉ OVER 2.5</b>\n\n"
+    percentual = taxa(
+        stats["pre_wins"],
+        stats["pre_losses"]
+    )
+
+    tg_msg(
+        f"{emoji} <b>{resultado} - PRE OVER 2.5</b>\n\n"
         f"🏟️ {info['home']} x {info['away']}\n"
         f"⚽ Gols finais: {total_gols}\n"
-        f"💰 Odd: {info['odd']}\n"
-        f"📌 Entrada: Over 2.5 Gols\n\n"
+        f"💰 Entrada: Over 2.5 @ {info['odd']}\n\n"
         f"📊 Pré: "
         f"{stats['pre_wins']}W-"
-        f"{stats['pre_losses']}L\n"
-        f"📈 Taxa Pré: {taxa_pre()}%"
+        f"{stats['pre_losses']}L "
+        f"({percentual}%)"
+    )
+
+    registrar_historico(
+        "PRE_OVER_2.5",
+        resultado,
+        jogo,
+        {
+            "gols_finais": total_gols,
+            "odd": info.get("odd"),
+            "mercado": info.get("mercado")
+        }
     )
 
 
 # =========================================================
-# PROCESSAMENTO LIVE
+# ANÁLISE LIVE
 # =========================================================
 
-def processar_live():
-    jogos = buscar_live()
+def analisar_live(jogo):
+    fid = extrair_id(jogo)
 
-    for jogo in jogos:
-        try:
-            fid = extrair_id(jogo)
-
-            if not fid:
-                continue
-
-            if fid in entradas_live:
-                continue
-
-            minuto = extrair_minuto(jogo)
-
-            if not (
-                MINUTO_INICIAL_LIVE
-                <= minuto
-                <= MINUTO_FINAL_LIVE
-            ):
-                continue
-
-            home, away = extrair_times(jogo)
-            gols_home, gols_away = extrair_placar(jogo)
-            cantos = extrair_cantos(jogo)
-
-            if cantos < MIN_CANTOS_LIVE:
-                continue
-
-            favorito, odd_favorito, home_odd, away_odd = (
-                get_favorito_info(jogo)
-            )
-
-            if not favorito:
-                continue
-
-            condicao = False
-            descricao = ""
-
-            if favorito == "HOME":
-                diferenca = gols_away - gols_home
-
-                if diferenca == 0:
-                    condicao = True
-                    descricao = (
-                        f"{gols_home}x{gols_away} - "
-                        "favorito da casa empatando"
-                    )
-
-                elif 1 <= diferenca <= 2:
-                    condicao = True
-                    descricao = (
-                        f"{gols_home}x{gols_away} - "
-                        f"favorito da casa perdendo por {diferenca}"
-                    )
-
-            elif favorito == "AWAY":
-                diferenca = gols_home - gols_away
-
-                if diferenca == 0:
-                    condicao = True
-                    descricao = (
-                        f"{gols_home}x{gols_away} - "
-                        "favorito visitante empatando"
-                    )
-
-                elif 1 <= diferenca <= 2:
-                    condicao = True
-                    descricao = (
-                        f"{gols_home}x{gols_away} - "
-                        f"favorito visitante perdendo por {diferenca}"
-                    )
-
-            if not condicao:
-                continue
-
-            info = {
-                "home": home,
-                "away": away,
-                "odd": odd_favorito,
-                "fav": favorito,
-                "minuto": minuto,
-                "cantos": cantos,
-                "placar": f"{gols_home}x{gols_away}",
-                "entrada": datetime.now().strftime("%H:%M:%S")
-            }
-
-            entradas_live[fid] = True
-            pendentes_live[fid] = info
-
-            stats["total_sinais"] += 1
-            salvar_dados()
-
-            enviar_telegram(
-                f"🔥 <b>LIVE - OVER 9.0 ESCANTEIOS</b>\n\n"
-                f"🏟️ {home} x {away}\n"
-                f"⏰ Minuto: {minuto}'\n"
-                f"📊 Placar: {descricao}\n"
-                f"⭐ Favorito: {favorito} @ {odd_favorito}\n"
-                f"🚩 Cantos atuais: {cantos}\n\n"
-                f"👉 <b>ENTRADA: Over 9.0 FT</b>\n"
-                f"📈 Taxa Live: {taxa_live()}%"
-            )
-
-            print(
-                f"SINAL LIVE: {home} x {away} | "
-                f"{minuto}' | cantos {cantos}",
-                flush=True
-            )
-
-        except Exception as erro:
-            print(f"ERRO AO PROCESSAR LIVE: {erro}", flush=True)
-
-
-# =========================================================
-# PROCESSAMENTO PRÉ-JOGO
-# =========================================================
-
-def processar_pre():
-    jogos = buscar_pre()
-
-    for jogo in jogos:
-        try:
-            fid = extrair_id(jogo)
-
-            if not fid:
-                continue
-
-            if fid in entradas_pre:
-                continue
-
-            resultado_odd = filtra_over25(jogo)
-
-            if not resultado_odd:
-                continue
-
-            odd_valor, mercado = resultado_odd
-
-            home, away = extrair_times(jogo)
-
-            info = {
-                "home": home,
-                "away": away,
-                "odd": odd_valor,
-                "fav": None,
-                "minuto": None,
-                "cantos": None,
-                "placar": None,
-                "mercado": mercado,
-                "entrada": datetime.now().strftime("%H:%M:%S")
-            }
-
-            entradas_pre[fid] = True
-            pendentes_pre[fid] = info
-
-            stats["total_sinais"] += 1
-            salvar_dados()
-
-            enviar_telegram(
-                f"⚽ <b>PRÉ-JOGO - OVER 2.5 GOLS</b>\n\n"
-                f"🏟️ {home} x {away}\n"
-                f"💰 Mercado: {mercado}\n"
-                f"📌 Odd: {odd_valor}\n\n"
-                f"👉 <b>ENTRADA: Mais de 2.5 gols</b>\n"
-                f"📈 Taxa Pré: {taxa_pre()}%"
-            )
-
-            print(
-                f"SINAL PRÉ: {home} x {away} | odd {odd_valor}",
-                flush=True
-            )
-
-            # Mantém apenas um sinal pré por ciclo
-            break
-
-        except Exception as erro:
-            print(f"ERRO AO PROCESSAR PRÉ: {erro}", flush=True)
-
-
-# =========================================================
-# CONFERIR RESULTADOS
-# =========================================================
-
-def conferir_resultados():
-    if not pendentes_live and not pendentes_pre:
+    if not fid:
         return
 
-    jogos = buscar_finalizados()
+    if fid in entradas_live:
+        return
 
-    for jogo in jogos:
-        try:
-            fid = extrair_id(jogo)
+    minuto = extrair_minuto(jogo)
 
-            if not fid:
-                continue
+    if not (
+        MINUTO_INICIAL_LIVE
+        <= minuto
+        <= MINUTO_FINAL_LIVE
+    ):
+        return
 
-            if not eh_finalizado(jogo):
-                continue
+    cantos = extrair_cantos(jogo)
 
-            if fid in pendentes_live:
-                info = pendentes_live.pop(fid)
-                fechar_live(jogo, info)
+    if cantos < MIN_CANTOS_LIVE:
+        return
 
-            if fid in pendentes_pre:
-                info = pendentes_pre.pop(fid)
-                fechar_pre(jogo, info)
+    casa, fora = extrair_times(jogo)
+    gols_casa, gols_fora = extrair_placar(jogo)
 
-        except Exception as erro:
-            print(
-                f"ERRO AO CONFERIR RESULTADO: {erro}",
-                flush=True
+    favorito, odd_favorito, home_odd, away_odd = (
+        get_favorito_info(jogo)
+    )
+
+    if not favorito:
+        return
+
+    condicao = False
+    descricao = ""
+
+    if favorito == "HOME":
+        diferenca = gols_fora - gols_casa
+
+        if diferenca == 0:
+            condicao = True
+            descricao = (
+                f"{gols_casa}x{gols_fora} - "
+                f"favorito da casa empatando"
             )
+
+        elif 1 <= diferenca <= 2:
+            condicao = True
+            descricao = (
+                f"{gols_casa}x{gols_fora} - "
+                f"favorito da casa perdendo por "
+                f"{diferenca}"
+            )
+
+    elif favorito == "AWAY":
+        diferenca = gols_casa - gols_fora
+
+        if diferenca == 0:
+            condicao = True
+            descricao = (
+                f"{gols_casa}x{gols_fora} - "
+                f"favorito visitante empatando"
+            )
+
+        elif 1 <= diferenca <= 2:
+            condicao = True
+            descricao = (
+                f"{gols_casa}x{gols_fora} - "
+                f"favorito visitante perdendo por "
+                f"{diferenca}"
+            )
+
+    if not condicao:
+        return
+
+    entradas_live[fid] = True
+
+    pendentes_live[fid] = {
+        "home": casa,
+        "away": fora,
+        "odd": odd_favorito,
+        "favorito": favorito,
+        "minuto": minuto,
+        "cantos_inicio": cantos,
+        "hora": datetime.now().strftime("%H:%M:%S")
+    }
+
+    stats["total_sinais"] += 1
+    salvar_dados()
+
+    percentual = taxa(
+        stats["live_wins"],
+        stats["live_losses"]
+    )
+
+    tg_msg(
+        f"🔥 <b>LIVE - OVER 9.0 ESCANTEIOS</b>\n\n"
+        f"🏟️ {casa} x {fora}\n"
+        f"⏰ Minuto: {minuto}'\n"
+        f"📊 Placar: {descricao}\n"
+        f"⭐ Favorito: {favorito} @ {odd_favorito}\n"
+        f"🚩 Cantos atuais: {cantos}\n\n"
+        f"👉 <b>ENTRADA: Over 9.0 FT</b>\n"
+        f"📊 Live atual: "
+        f"{stats['live_wins']}W-"
+        f"{stats['live_losses']}L "
+        f"({percentual}%)"
+    )
+
+    print(
+        f"SINAL LIVE ENVIADO: {casa} x {fora} | "
+        f"{minuto}' | cantos {cantos}",
+        flush=True
+    )
+
+
+# =========================================================
+# ANÁLISE PRÉ-JOGO
+# =========================================================
+
+def analisar_pre(jogo):
+    fid = extrair_id(jogo)
+
+    if not fid:
+        return False
+
+    if fid in entradas_pre:
+        return False
+
+    resultado = filtra_over25(jogo)
+
+    if not resultado:
+        return False
+
+    odd_valor, mercado = resultado
+
+    casa, fora = extrair_times(jogo)
+
+    entradas_pre[fid] = True
+
+    pendentes_pre[fid] = {
+        "home": casa,
+        "away": fora,
+        "odd": odd_valor,
+        "mercado": mercado,
+        "hora": datetime.now().strftime("%H:%M:%S")
+    }
+
+    stats["total_sinais"] += 1
+    salvar_dados()
+
+    percentual = taxa(
+        stats["pre_wins"],
+        stats["pre_losses"]
+    )
+
+    tg_msg(
+        f"⚽ <b>PRÉ-JOGO - OVER 2.5 GOLS</b>\n\n"
+        f"🏟️ {casa} x {fora}\n"
+        f"💰 Mercado: {mercado}\n"
+        f"📈 Odd: {odd_valor}\n\n"
+        f"👉 <b>ENTRADA: Mais de 2.5 gols</b>\n"
+        f"📊 Pré atual: "
+        f"{stats['pre_wins']}W-"
+        f"{stats['pre_losses']}L "
+        f"({percentual}%)"
+    )
+
+    print(
+        f"SINAL PRÉ ENVIADO: {casa} x {fora} | "
+        f"Over 2.5 @ {odd_valor}",
+        flush=True
+    )
+
+    return True
 
 
 # =========================================================
@@ -1095,51 +1078,109 @@ def conferir_resultados():
 # =========================================================
 
 def iniciar_bot():
-    print("========================================", flush=True)
-    print("BOT DE ESCANTEIOS INICIADO", flush=True)
-    print(f"BASE API: {BASE_URL}", flush=True)
-    print(f"LIVE: {MINUTO_INICIAL_LIVE}-{MINUTO_FINAL_LIVE} minutos", flush=True)
-    print(f"MÍNIMO DE CANTOS: {MIN_CANTOS_LIVE}", flush=True)
-    print("========================================", flush=True)
-
-    enviar_telegram(
-        f"🤖 <b>BOT DE ESCANTEIOS ONLINE</b>\n\n"
-        f"📊 Live: "
+    tg_msg(
+        f"🤖 <b>ROBÔ DE ESCANTEIOS ONLINE</b>\n\n"
+        f"🔥 Live: "
         f"{stats['live_wins']}W-"
         f"{stats['live_losses']}L-"
-        f"{stats.get('live_voids', 0)}V\n"
-        f"📊 Pré: "
+        f"{stats['live_voids']}V\n"
+        f"⚽ Pré: "
         f"{stats['pre_wins']}W-"
         f"{stats['pre_losses']}L\n"
-        f"📈 Taxa Live: {taxa_live()}%\n"
-        f"📈 Taxa Pré: {taxa_pre()}%\n\n"
-        f"✅ API configurada: {'SIM' if API_KEY else 'NÃO'}"
+        f"📊 Total de sinais: "
+        f"{stats['total_sinais']}"
+    )
+
+    print(
+        "ROBÔ INICIADO - Aguardando jogos...",
+        flush=True
     )
 
     ultimo_pre = 0
-    ultimo_resultado = 0
+    ultimo_resultados = 0
 
     while True:
         try:
-            processar_live()
+            # -----------------------------
+            # LIVE
+            # -----------------------------
+            jogos_live = buscar_live()
 
-            agora = time.time()
+            for jogo in jogos_live:
+                try:
+                    analisar_live(jogo)
 
-            if agora - ultimo_pre >= INTERVALO_PRE:
-                ultimo_pre = agora
-                processar_pre()
+                except Exception as erro:
+                    print(
+                        f"ERRO AO ANALISAR LIVE: {erro}",
+                        flush=True
+                    )
 
-            if agora - ultimo_resultado >= INTERVALO_RESULTADOS:
-                ultimo_resultado = agora
-                conferir_resultados()
+            # -----------------------------
+            # PRÉ-JOGO
+            # -----------------------------
+            if time.time() - ultimo_pre >= INTERVALO_PRE:
+                ultimo_pre = time.time()
+
+                jogos_pre = buscar_pre()
+
+                for jogo in jogos_pre:
+                    try:
+                        enviado = analisar_pre(jogo)
+
+                        # Envia no máximo um pré por ciclo
+                        if enviado:
+                            break
+
+                    except Exception as erro:
+                        print(
+                            f"ERRO AO ANALISAR PRÉ: {erro}",
+                            flush=True
+                        )
+
+            # -----------------------------
+            # RESULTADOS
+            # -----------------------------
+            if (
+                time.time() - ultimo_resultados
+                >= INTERVALO_RESULTADOS
+            ):
+                ultimo_resultados = time.time()
+
+                if pendentes_live or pendentes_pre:
+                    finalizados = buscar_finalizados()
+
+                    for jogo in finalizados:
+                        try:
+                            fid = extrair_id(jogo)
+
+                            if not fid:
+                                continue
+
+                            if not eh_finalizado(jogo):
+                                continue
+
+                            if fid in pendentes_live:
+                                finalizar_live(fid, jogo)
+
+                            if fid in pendentes_pre:
+                                finalizar_pre(fid, jogo)
+
+                        except Exception as erro:
+                            print(
+                                f"ERRO AO FINALIZAR JOGO: {erro}",
+                                flush=True
+                            )
+
+            time.sleep(INTERVALO_LIVE)
 
         except Exception as erro:
             print(
-                f"ERRO NO LOOP PRINCIPAL: {erro}",
+                f"ERRO GERAL DO LOOP: {erro}",
                 flush=True
             )
 
-        time.sleep(INTERVALO_LIVE)
+            time.sleep(30)
 
 
 # =========================================================
@@ -1148,48 +1189,76 @@ def iniciar_bot():
 
 @app.route("/")
 def home():
+    live_percentual = taxa(
+        stats["live_wins"],
+        stats["live_losses"]
+    )
+
+    pre_percentual = taxa(
+        stats["pre_wins"],
+        stats["pre_losses"]
+    )
+
+    geral_percentual = taxa(
+        stats["live_wins"] + stats["pre_wins"],
+        stats["live_losses"] + stats["pre_losses"]
+    )
+
     return (
-        "BOT ONLINE | "
-        f"Live: {stats['live_wins']}W-"
+        "ROBÔ ONLINE | "
+        f"Live: {live_percentual}% "
+        f"({stats['live_wins']}W-"
         f"{stats['live_losses']}L-"
-        f"{stats.get('live_voids', 0)}V "
-        f"({taxa_live()}%) | "
-        f"Pré: {stats['pre_wins']}W-"
-        f"{stats['pre_losses']}L "
-        f"({taxa_pre()}%) | "
-        f"Geral: {taxa_geral()}% | "
-        f"Sinais: {stats.get('total_sinais', 0)}"
+        f"{stats['live_voids']}V) | "
+        f"Pré: {pre_percentual}% "
+        f"({stats['pre_wins']}W-"
+        f"{stats['pre_losses']}L) | "
+        f"Geral: {geral_percentual}% | "
+        f"Pendentes Live: {len(pendentes_live)} | "
+        f"Pendentes Pré: {len(pendentes_pre)}"
     )
 
 
 @app.route("/stats")
 def rota_stats():
     with lock:
-        return jsonify({
-            "stats": stats,
-            "taxa_live": taxa_live(),
-            "taxa_pre": taxa_pre(),
-            "taxa_geral": taxa_geral(),
-            "pendentes_live": len(pendentes_live),
-            "pendentes_pre": len(pendentes_pre)
-        })
+        resultado = stats.copy()
+
+    resultado["live_taxa"] = taxa(
+        stats["live_wins"],
+        stats["live_losses"]
+    )
+
+    resultado["pre_taxa"] = taxa(
+        stats["pre_wins"],
+        stats["pre_losses"]
+    )
+
+    resultado["geral_taxa"] = taxa(
+        stats["live_wins"] + stats["pre_wins"],
+        stats["live_losses"] + stats["pre_losses"]
+    )
+
+    resultado["pendentes_live"] = len(pendentes_live)
+    resultado["pendentes_pre"] = len(pendentes_pre)
+
+    return jsonify(resultado)
 
 
 @app.route("/historico")
 def rota_historico():
     with lock:
-        return jsonify(historico[-100:])
+        return jsonify(historico[-200:])
 
 
 @app.route("/health")
 def health():
     return jsonify({
-        "status": "online",
-        "api_configurada": bool(API_KEY),
-        "telegram_configurado": bool(TOKEN and CHAT_ID),
+        "online": True,
+        "hora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "pendentes_live": len(pendentes_live),
         "pendentes_pre": len(pendentes_pre),
-        "hora": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "total_historico": len(historico)
     })
 
 
@@ -1197,20 +1266,20 @@ def health():
 # INICIALIZAÇÃO
 # =========================================================
 
-thread_bot = threading.Thread(
-    target=iniciar_bot,
-    daemon=True
-)
+def iniciar_thread():
+    thread = threading.Thread(
+        target=iniciar_bot,
+        daemon=True
+    )
 
-thread_bot.start()
+    thread.start()
+
+
+iniciar_thread()
 
 
 if __name__ == "__main__":
-    porta = int(os.getenv("PORT", "10000"))
-
     app.run(
         host="0.0.0.0",
-        port=porta,
-        debug=False,
-        use_reloader=False
+        port=PORT
     )

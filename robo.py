@@ -1,1285 +1,242 @@
-import os
-import json
-import time
-import threading
-import tempfile
-from datetime import datetime
-
+import os, json, time, threading, tempfile
+from datetime import datetime, timezone
 import requests
 from flask import Flask, jsonify
 
-# =========================================================
-# CONFIGURAÇÕES
-# =========================================================
-
 app = Flask(__name__)
-
 BASE_API = "https://api.5dollarfootballapi.com/v1"
-
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("FIVE_DOLLAR_KEY")
-
-HEADERS = {
-    "Authorization": f"Bearer {API_KEY}",
-    "Accept": "application/json",
-    "User-Agent": "robo-escanteios/1.0"
-}
-
+HEADERS = {"Authorization": f"Bearer {API_KEY}", "Accept": "application/json", "User-Agent": "robo-pre/1.0"}
 ARQUIVO_STATS = "stats.json"
 ARQUIVO_HISTORICO = "historico.json"
-
 PORT = int(os.getenv("PORT", "10000"))
 
-# Filtros LIVE
-MINUTO_INICIAL_LIVE = 20
-MINUTO_FINAL_LIVE = 45
-MIN_CANTOS_LIVE = 4
-ODD_FAVORITO_MAXIMA = 1.70
-
-# Filtros PRÉ-JOGO
-ODD_OVER_MINIMA = 1.70
-ODD_OVER_MAXIMA = 2.50
-INTERVALO_PRE = 1800       # 30 minutos
-INTERVALO_RESULTADOS = 300 # 5 minutos
-INTERVALO_LIVE = 60        # 1 minuto
+ODD_MIN = 1.70
+ODD_MAX = 2.50
+INTERVALO_PRE = 1800
+INTERVALO_RESULTADOS = 300
 
 lock = threading.RLock()
-
-# =========================================================
-# ESTATÍSTICAS
-# =========================================================
-
-STATS_PADRAO = {
-    "live_wins": 0,
-    "live_losses": 0,
-    "live_voids": 0,
-    "pre_wins": 0,
-    "pre_losses": 0,
-    "total_sinais": 0
-}
-
+STATS_PADRAO = {"gols_wins":0,"gols_losses":0,"cantos_wins":0,"cantos_losses":0,"total_sinais":0}
 stats = STATS_PADRAO.copy()
 
-
 def carregar_json(arquivo, padrao):
-    if not os.path.exists(arquivo):
-        return padrao.copy() if isinstance(padrao, dict) else []
-
+    if not os.path.exists(arquivo): return padrao.copy() if isinstance(padrao, dict) else []
     try:
-        with open(arquivo, "r", encoding="utf-8") as f:
-            dados = json.load(f)
-
-        if isinstance(padrao, dict):
-            resultado = padrao.copy()
-            if isinstance(dados, dict):
-                resultado.update(dados)
-            return resultado
-
-        return dados if isinstance(dados, list) else padrao
-
-    except Exception as erro:
-        print(f"ERRO AO CARREGAR {arquivo}: {erro}", flush=True)
-        return padrao.copy() if isinstance(padrao, dict) else []
-
+        with open(arquivo,"r",encoding="utf-8") as f: dados=json.load(f)
+        if isinstance(padrao,dict):
+            r=padrao.copy()
+            if isinstance(dados,dict): r.update(dados)
+            return r
+        return dados if isinstance(dados,list) else padrao
+    except: return padrao.copy() if isinstance(padrao,dict) else []
 
 stats = carregar_json(ARQUIVO_STATS, STATS_PADRAO)
 historico = carregar_json(ARQUIVO_HISTORICO, [])
-
-entradas_live = {}
 entradas_pre = {}
-pendentes_live = {}
 pendentes_pre = {}
 
-
-def salvar_json_seguro(arquivo, dados):
-    """
-    Salva usando arquivo temporário para evitar corromper
-    o JSON caso o processo seja interrompido.
-    """
+def salvar_json_seguro(arquivo,dados):
     try:
-        pasta = os.path.dirname(arquivo) or "."
-        fd, temporario = tempfile.mkstemp(
-            prefix="tmp_",
-            suffix=".json",
-            dir=pasta
-        )
-
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(
-                dados,
-                f,
-                ensure_ascii=False,
-                indent=2
-            )
-
-        os.replace(temporario, arquivo)
-
-    except Exception as erro:
-        print(f"ERRO AO SALVAR {arquivo}: {erro}", flush=True)
-
+        fd,tmp=tempfile.mkstemp(prefix="tmp_",suffix=".json",dir=".")
+        with os.fdopen(fd,"w",encoding="utf-8") as f: json.dump(dados,f,ensure_ascii=False,indent=2)
+        os.replace(tmp,arquivo)
+    except Exception as e: print(f"ERRO SALVAR {e}",flush=True)
 
 def salvar_dados():
     with lock:
-        salvar_json_seguro(ARQUIVO_STATS, stats)
-        salvar_json_seguro(ARQUIVO_HISTORICO, historico)
+        salvar_json_seguro(ARQUIVO_STATS,stats)
+        salvar_json_seguro(ARQUIVO_HISTORICO,historico)
 
-
-def taxa(vitorias, derrotas):
-    total = vitorias + derrotas
-
-    if total == 0:
-        return 0.0
-
-    return round((vitorias / total) * 100, 2)
-
-
-def registrar_historico(tipo, resultado, jogo, informacoes=None):
-    if informacoes is None:
-        informacoes = {}
-
-    registro = {
-        "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "tipo": tipo,
-        "resultado": resultado,
-        "fixture_id": extrair_id(jogo),
-        "casa": extrair_times(jogo)[0],
-        "fora": extrair_times(jogo)[1],
-        "informacoes": informacoes
-    }
-
-    with lock:
-        historico.append(registro)
-
-        # Mantém no máximo os últimos 2.000 resultados
-        if len(historico) > 2000:
-            del historico[:-2000]
-
-        salvar_dados()
-
-
-# =========================================================
-# FUNÇÕES AUXILIARES
-# =========================================================
-
-def primeiro_valor(*valores):
-    for valor in valores:
-        if valor is not None and valor != "":
-            return valor
-
+def taxa(w,l): return 0.0 if w+l==0 else round(w/(w+l)*100,2)
+def primeiro_valor(*v):
+    for x in v:
+        if x is not None and x!="": return x
     return None
-
-
-def numero(valor, padrao=0.0):
+def numero(v,p=0.0):
     try:
-        if valor is None or valor == "":
-            return padrao
-
-        if isinstance(valor, str):
-            valor = valor.replace(",", ".").strip()
-
-        return float(valor)
-
-    except Exception:
-        return padrao
-
-
-def inteiro(valor, padrao=0):
-    try:
-        return int(float(numero(valor, padrao)))
-
-    except Exception:
-        return padrao
-
-
-def nome_time(time_data, padrao):
-    if isinstance(time_data, dict):
-        return str(
-            primeiro_valor(
-                time_data.get("name"),
-                time_data.get("short_name"),
-                time_data.get("title"),
-                padrao
-            )
-        )
-
-    if time_data:
-        return str(time_data)
-
-    return padrao
-
-
-def extrair_id(jogo):
-    fixture = jogo.get("fixture", {})
-
-    return str(
-        primeiro_valor(
-            jogo.get("id"),
-            fixture.get("id"),
-            jogo.get("fixture_id"),
-            ""
-        )
-    )
-
-
-def extrair_times(jogo):
-    teams = jogo.get("teams", {}) or {}
-
-    casa = nome_time(
-        primeiro_valor(
-            jogo.get("home_team"),
-            jogo.get("home"),
-            teams.get("home")
-        ),
-        "Casa"
-    )
-
-    fora = nome_time(
-        primeiro_valor(
-            jogo.get("away_team"),
-            jogo.get("away"),
-            teams.get("away")
-        ),
-        "Fora"
-    )
-
-    return casa, fora
-
-
-def extrair_placar(jogo):
-    goals = jogo.get("goals", {}) or {}
-    scores = jogo.get("score", {}) or {}
-
-    casa = inteiro(
-        primeiro_valor(
-            jogo.get("home_score"),
-            jogo.get("home_goals"),
-            goals.get("home"),
-            scores.get("home"),
-            0
-        )
-    )
-
-    fora = inteiro(
-        primeiro_valor(
-            jogo.get("away_score"),
-            jogo.get("away_goals"),
-            goals.get("away"),
-            scores.get("away"),
-            0
-        )
-    )
-
-    return casa, fora
-
-
-def extrair_minuto(jogo):
-    fixture = jogo.get("fixture", {}) or {}
-    status = fixture.get("status", {}) or {}
-
-    return inteiro(
-        primeiro_valor(
-            jogo.get("elapsed"),
-            jogo.get("minute"),
-            status.get("elapsed"),
-            0
-        )
-    )
-
-
-def extrair_status(jogo):
-    fixture = jogo.get("fixture", {}) or {}
-    status = fixture.get("status", {}) or {}
-
-    valor = primeiro_valor(
-        jogo.get("status"),
-        status.get("short"),
-        status.get("long"),
-        ""
-    )
-
-    return str(valor).lower()
-
-
-def eh_finalizado(jogo):
-    status = extrair_status(jogo)
-
-    status_finais = [
-        "ft",
-        "finished",
-        "finalizado",
-        "aet",
-        "pen",
-        "after extra time"
-    ]
-
-    return any(item in status for item in status_finais)
-
-
-def extrair_cantos(jogo):
-    """
-    Aceita vários formatos possíveis da API:
-    - corners: 8
-    - corners: {"total": 8}
-    - corners: {"home": 4, "away": 4}
-    - statistics com corner kicks
-    """
-
-    corners = primeiro_valor(
-        jogo.get("corners"),
-        jogo.get("corner"),
-        jogo.get("escanteios"),
-        jogo.get("cantos")
-    )
-
-    if isinstance(corners, (int, float, str)):
-        return inteiro(corners)
-
-    if isinstance(corners, dict):
-        total = primeiro_valor(
-            corners.get("total"),
-            corners.get("value"),
-            corners.get("count")
-        )
-
-        if total is not None:
-            return inteiro(total)
-
-        casa = primeiro_valor(
-            corners.get("home"),
-            corners.get("local"),
-            corners.get("casa"),
-            0
-        )
-
-        fora = primeiro_valor(
-            corners.get("away"),
-            corners.get("visitor"),
-            corners.get("visitante"),
-            corners.get("fora"),
-            0
-        )
-
-        return inteiro(casa) + inteiro(fora)
-
-    statistics = jogo.get("statistics", [])
-
-    if isinstance(statistics, list):
-        total = 0
-
-        for equipe in statistics:
-            if not isinstance(equipe, dict):
-                continue
-
-            estatisticas_equipe = (
-                equipe.get("statistics")
-                or equipe.get("stats")
-                or []
-            )
-
-            if not isinstance(estatisticas_equipe, list):
-                continue
-
-            for item in estatisticas_equipe:
-                if not isinstance(item, dict):
-                    continue
-
-                nome = str(
-                    primeiro_valor(
-                        item.get("type"),
-                        item.get("name"),
-                        ""
-                    )
-                ).lower()
-
-                if (
-                    "corner" in nome
-                    or "escante" in nome
-                    or "canto" in nome
-                ):
-                    total += inteiro(
-                        primeiro_valor(
-                            item.get("value"),
-                            item.get("total"),
-                            0
-                        )
-                    )
-
-        return total
-
+        if v is None or v=="": return p
+        if isinstance(v,str): v=v.replace(",",".").strip()
+        return float(v)
+    except: return p
+def inteiro(v,p=0):
+    try: return int(float(numero(v,p)))
+    except: return p
+def nome_time(d,p):
+    if isinstance(d,dict): return str(primeiro_valor(d.get("name"),d.get("short_name"),d.get("title"),p))
+    return str(d) if d else p
+def extrair_id(j):
+    f=j.get("fixture",{})
+    return str(primeiro_valor(j.get("id"),f.get("id"),j.get("fixture_id"),""))
+def extrair_times(j):
+    t=j.get("teams",{}) or {}
+    casa=nome_time(primeiro_valor(j.get("home_team"),j.get("home"),t.get("home")),"Casa")
+    fora=nome_time(primeiro_valor(j.get("away_team"),j.get("away"),t.get("away")),"Fora")
+    return casa,fora
+def extrair_placar(j):
+    g=j.get("goals",{}) or {}; s=j.get("score",{}) or {}
+    casa=inteiro(primeiro_valor(j.get("home_score"),g.get("home"),s.get("home"),0))
+    fora=inteiro(primeiro_valor(j.get("away_score"),g.get("away"),s.get("away"),0))
+    return casa,fora
+def extrair_status(j):
+    f=j.get("fixture",{}) or {}; st=f.get("status",{}) or {}
+    return str(primeiro_valor(j.get("status"),st.get("short"),st.get("long"),"")).lower()
+def eh_finalizado(j): return any(x in extrair_status(j) for x in ["ft","finished","aet","pen"])
+def extrair_cantos(j):
+    c=primeiro_valor(j.get("corners"),j.get("corner"))
+    if isinstance(c,(int,float,str)): return inteiro(c)
+    if isinstance(c,dict):
+        tot=primeiro_valor(c.get("total"),c.get("value"))
+        if tot is not None: return inteiro(tot)
+        return inteiro(primeiro_valor(c.get("home"),0))+inteiro(primeiro_valor(c.get("away"),0))
     return 0
+def extrair_odds(j):
+    o=primeiro_valor(j.get("odds"),j.get("pre_odds"),j.get("bets"),[])
+    if isinstance(o,dict): o=o.get("data") or o.get("markets") or []
+    return [x for x in o if isinstance(x,dict)] if isinstance(o,list) else []
+def texto_odds(o): return " ".join(str(o.get(k,"")) for k in ["market","name","selection","label","outcome","line"]).lower()
+def valor_odd(o): return numero(primeiro_valor(o.get("odd"),o.get("price"),o.get("value"),o.get("rate")),0)
 
-
-def extrair_odds(jogo):
-    odds = primeiro_valor(
-        jogo.get("odds"),
-        jogo.get("pre_odds"),
-        jogo.get("bets"),
-        jogo.get("markets"),
-        []
-    )
-
-    if isinstance(odds, dict):
-        odds = (
-            odds.get("data")
-            or odds.get("odds")
-            or odds.get("markets")
-            or odds.get("bets")
-            or []
-        )
-
-    if not isinstance(odds, list):
-        return []
-
-    resultado = []
-
-    for item in odds:
-        if isinstance(item, dict):
-            resultado.append(item)
-
-    return resultado
-
-
-def texto_odds(odd):
-    partes = [
-        odd.get("market"),
-        odd.get("name"),
-        odd.get("selection"),
-        odd.get("label"),
-        odd.get("outcome"),
-        odd.get("team"),
-        odd.get("side"),
-        odd.get("line"),
-        odd.get("handicap")
-    ]
-
-    return " ".join(
-        str(parte)
-        for parte in partes
-        if parte is not None
-    ).lower()
-
-
-def valor_odd(odd):
-    return numero(
-        primeiro_valor(
-            odd.get("odd"),
-            odd.get("price"),
-            odd.get("value"),
-            odd.get("rate"),
-            odd.get("decimal")
-        ),
-        0
-    )
-
-
-# =========================================================
-# TELEGRAM
-# =========================================================
-
-def tg_msg(mensagem):
-    if not TOKEN or not CHAT_ID:
-        print("TELEGRAM_TOKEN ou CHAT_ID não configurado.", flush=True)
-        return
-
-    try:
-        resposta = requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            data={
-                "chat_id": CHAT_ID,
-                "text": mensagem,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True
-            },
-            timeout=15
-        )
-
-        if resposta.status_code != 200:
-            print(
-                f"ERRO TELEGRAM {resposta.status_code}: "
-                f"{resposta.text}",
-                flush=True
-            )
-
-    except Exception as erro:
-        print(f"ERRO TELEGRAM: {erro}", flush=True)
-
-
-# =========================================================
-# API
-# =========================================================
+def tg_msg(m):
+    if not TOKEN or not CHAT_ID: print(m,flush=True); return
+    try: requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",data={"chat_id":CHAT_ID,"text":m,"parse_mode":"HTML"},timeout=15)
+    except Exception as e: print(f"ERRO TG {e}",flush=True)
 
 def api_get(endpoint, params=None):
-    url = f"{BASE_API}/{endpoint.lstrip('/')}"
-
+    url=f"{BASE_API}/{endpoint.lstrip('/')}"
     try:
-        resposta = requests.get(
-            url,
-            headers=HEADERS,
-            params=params or {},
-            timeout=25
-        )
-
-        texto = resposta.text[:1000]
-
-        print(
-            f"API {url} | HTTP {resposta.status_code}",
-            flush=True
-        )
-
-        if resposta.status_code != 200:
-            print(f"RESPOSTA API: {texto}", flush=True)
+        r=requests.get(url,headers=HEADERS,params=params or {},timeout=25)
+        print(f"API {endpoint} HTTP {r.status_code}",flush=True)
+        if r.status_code!=200:
+            print(f"RESPOSTA {r.text[:500]}",flush=True)
             return []
-
-        dados = resposta.json()
-
-        if isinstance(dados, list):
-            return dados
-
-        if not isinstance(dados, dict):
-            return []
-
-        resultado = primeiro_valor(
-            dados.get("data"),
-            dados.get("response"),
-            dados.get("results"),
-            []
-        )
-
-        if isinstance(resultado, dict):
-            resultado = (
-                resultado.get("data")
-                or resultado.get("fixtures")
-                or resultado.get("response")
-                or []
-            )
-
-        return resultado if isinstance(resultado, list) else []
-
-    except Exception as erro:
-        print(f"ERRO API {endpoint}: {erro}", flush=True)
+        d=r.json()
+        if isinstance(d,list): return d
+        res=primeiro_valor(d.get("data"),d.get("response"),[])
+        if isinstance(res,dict): res=res.get("data") or res.get("fixtures") or []
+        return res if isinstance(res,list) else []
+    except Exception as e:
+        print(f"ERRO API {e}",flush=True)
         return []
 
-
-def buscar_live():
-    """
-    O endpoint /livescores estava retornando 404.
-    Por isso usamos /fixtures com status=live.
-    """
-
-    jogos = api_get(
-        "fixtures",
-        {
-            "status": "live"
-        }
-    )
-
-    print(
-        f"LIVE: {len(jogos)} jogos encontrados",
-        flush=True
-    )
-
-    return jogos
-
+def unix_hoje():
+    agora=datetime.now(timezone.utc)
+    inicio=agora.replace(hour=0,minute=0,second=0,microsecond=0)
+    fim=agora.replace(hour=23,minute=59,second=59,microsecond=0)
+    return int(inicio.timestamp()), int(fim.timestamp())
 
 def buscar_pre():
-    jogos = api_get(
-        "fixtures",
-        {
-            "date": "today",
-            "status": "scheduled"
-        }
-    )
-
-    print(
-        f"PRE: {len(jogos)} jogos encontrados",
-        flush=True
-    )
-
+    s,e=unix_hoje()
+    jogos=api_get("fixtures",{"start_time":s,"end_time":e})
+    print(f"PRE: {len(jogos)} jogos",flush=True)
     return jogos
-
 
 def buscar_finalizados():
-    jogos = api_get(
-        "fixtures",
-        {
-            "date": "today",
-            "status": "finished"
-        }
-    )
+    s,e=unix_hoje()
+    jogos=api_get("fixtures",{"start_time":s,"end_time":e})
+    fin=[j for j in jogos if eh_finalizado(j)]
+    print(f"FIN: {len(fin)} finalizados",flush=True)
+    return fin
 
-    print(
-        f"FINALIZADOS: {len(jogos)} jogos encontrados",
-        flush=True
-    )
-
-    return jogos
-
-
-# =========================================================
-# FILTRO DE FAVORITO
-# =========================================================
-
-def get_favorito_info(jogo):
-    odds = extrair_odds(jogo)
-
-    home_odd = 99.0
-    away_odd = 99.0
-
-    for odd in odds:
-        texto = texto_odds(odd)
-        preco = valor_odd(odd)
-
-        if preco < 1.01:
-            continue
-
-        mercado_vencedor = (
-            "winner" in texto
-            or "match winner" in texto
-            or "1x2" in texto
-            or "moneyline" in texto
-            or "vencedor" in texto
-            or texto.strip() in ["1", "2"]
-        )
-
-        if not mercado_vencedor:
-            continue
-
-        lado = str(
-            primeiro_valor(
-                odd.get("team"),
-                odd.get("side"),
-                odd.get("selection"),
-                odd.get("outcome"),
-                odd.get("name"),
-                ""
-            )
-        ).lower()
-
-        if (
-            "home" in lado
-            or "casa" in lado
-            or lado.strip() == "1"
-            or "home" in texto
-        ):
-            home_odd = min(home_odd, preco)
-
-        elif (
-            "away" in lado
-            or "fora" in lado
-            or "visitante" in lado
-            or lado.strip() == "2"
-            or "away" in texto
-        ):
-            away_odd = min(away_odd, preco)
-
-    if home_odd <= ODD_FAVORITO_MAXIMA and home_odd < away_odd:
-        return "HOME", home_odd, home_odd, away_odd
-
-    if away_odd <= ODD_FAVORITO_MAXIMA and away_odd < home_odd:
-        return "AWAY", away_odd, home_odd, away_odd
-
-    return None, 0, home_odd, away_odd
-
-
-# =========================================================
-# FILTRO CORRETO OVER 2.5
-# =========================================================
-
-def filtra_over25(jogo):
-    """
-    Aceita somente:
-    - Over 2.5
-    - Mais de 2.5 gols
-
-    Não aceita:
-    - Over 2.0
-    - Over 2
-    - Over 1.5
-    - Over 3.5
-
-    Odd entre 1.70 e 2.50.
-    """
-
-    odds = extrair_odds(jogo)
-
-    for odd in odds:
-        texto = texto_odds(odd)
-        preco = valor_odd(odd)
-
-        if preco <= 0:
-            continue
-
-        texto = (
-            texto
-            .replace(",", ".")
-            .replace("over2.5", "over 2.5")
-            .replace("over2,5", "over 2.5")
-            .replace("maisde2.5", "mais de 2.5")
-            .replace("maisde2,5", "mais de 2.5")
-        )
-
-        tem_over = (
-            "over" in texto
-            or "mais de" in texto
-            or "mais_de" in texto
-        )
-
-        tem_gols = (
-            "goal" in texto
-            or "goals" in texto
-            or "gol" in texto
-            or "gols" in texto
-        )
-
-        # O ponto principal da correção:
-        # exige especificamente a linha 2.5
-        tem_linha_25 = (
-            "2.5" in texto
-            or "2,5" in texto
-            or "2 5" in texto
-        )
-
-        # Bloqueia linhas diferentes
-        linha_incorreta = (
-            "1.5" in texto
-            or "1,5" in texto
-            or "2.0" in texto
-            or "2,0" in texto
-            or "3.5" in texto
-            or "3,5" in texto
-        )
-
-        if not tem_over:
-            continue
-
-        if not tem_gols:
-            continue
-
-        if not tem_linha_25:
-            continue
-
-        if linha_incorreta:
-            continue
-
-        if not (
-            ODD_OVER_MINIMA
-            <= preco
-            <= ODD_OVER_MAXIMA
-        ):
-            continue
-
-        mercado = primeiro_valor(
-            odd.get("market"),
-            odd.get("name"),
-            odd.get("selection"),
-            odd.get("label"),
-            "Over 2.5 Gols"
-        )
-
-        return preco, str(mercado)
-
+def filtra_over_gols(jogo):
+    for odd in extrair_odds(jogo):
+        t=texto_odds(odd).replace(",",".").replace("over2.5","over 2.5")
+        p=valor_odd(odd)
+        if not (ODD_MIN<=p<=ODD_MAX): continue
+        if ("over" in t or "mais de" in t) and ("2.5" in t) and ("goal" in t or "gol" in t):
+            if "1.5" in t or "3.5" in t or "2.0" in t: continue
+            return p, "Over 2.5 Gols"
     return None
 
-
-# =========================================================
-# RESULTADOS
-# =========================================================
-
-def finalizar_live(fid, jogo):
-    if fid not in pendentes_live:
-        return
-
-    info = pendentes_live.pop(fid)
-
-    total_cantos = extrair_cantos(jogo)
-    casa_gols, fora_gols = extrair_placar(jogo)
-    total_gols = casa_gols + fora_gols
-
-    if total_cantos >= 10:
-        resultado = "GREEN"
-        emoji = "🟢"
-        stats["live_wins"] += 1
-
-    elif total_cantos == 9:
-        resultado = "VOID"
-        emoji = "⚪"
-        stats["live_voids"] += 1
-
-    else:
-        resultado = "RED"
-        emoji = "🔴"
-        stats["live_losses"] += 1
-
-    salvar_dados()
-
-    percentual = taxa(
-        stats["live_wins"],
-        stats["live_losses"]
-    )
-
-    tg_msg(
-        f"{emoji} <b>{resultado} - LIVE OVER 9.0</b>\n\n"
-        f"🏟️ {info['home']} x {info['away']}\n"
-        f"🚩 Escanteios finais: {total_cantos}\n"
-        f"⚽ Gols finais: {total_gols}\n"
-        f"💰 Entrada: Over 9.0 FT\n\n"
-        f"📊 Live: "
-        f"{stats['live_wins']}W-"
-        f"{stats['live_losses']}L-"
-        f"{stats['live_voids']}V "
-        f"({percentual}%)"
-    )
-
-    registrar_historico(
-        "LIVE_OVER_9",
-        resultado,
-        jogo,
-        {
-            "escanteios_finais": total_cantos,
-            "gols_finais": total_gols,
-            "odd_favorito": info.get("odd")
-        }
-    )
-
-
-def finalizar_pre(fid, jogo):
-    if fid not in pendentes_pre:
-        return
-
-    info = pendentes_pre.pop(fid)
-
-    casa_gols, fora_gols = extrair_placar(jogo)
-    total_gols = casa_gols + fora_gols
-
-    if total_gols >= 3:
-        resultado = "GREEN"
-        emoji = "🟢"
-        stats["pre_wins"] += 1
-
-    else:
-        resultado = "RED"
-        emoji = "🔴"
-        stats["pre_losses"] += 1
-
-    salvar_dados()
-
-    percentual = taxa(
-        stats["pre_wins"],
-        stats["pre_losses"]
-    )
-
-    tg_msg(
-        f"{emoji} <b>{resultado} - PRE OVER 2.5</b>\n\n"
-        f"🏟️ {info['home']} x {info['away']}\n"
-        f"⚽ Gols finais: {total_gols}\n"
-        f"💰 Entrada: Over 2.5 @ {info['odd']}\n\n"
-        f"📊 Pré: "
-        f"{stats['pre_wins']}W-"
-        f"{stats['pre_losses']}L "
-        f"({percentual}%)"
-    )
-
-    registrar_historico(
-        "PRE_OVER_2.5",
-        resultado,
-        jogo,
-        {
-            "gols_finais": total_gols,
-            "odd": info.get("odd"),
-            "mercado": info.get("mercado")
-        }
-    )
-
-
-# =========================================================
-# ANÁLISE LIVE
-# =========================================================
-
-def analisar_live(jogo):
-    fid = extrair_id(jogo)
-
-    if not fid:
-        return
-
-    if fid in entradas_live:
-        return
-
-    minuto = extrair_minuto(jogo)
-
-    if not (
-        MINUTO_INICIAL_LIVE
-        <= minuto
-        <= MINUTO_FINAL_LIVE
-    ):
-        return
-
-    cantos = extrair_cantos(jogo)
-
-    if cantos < MIN_CANTOS_LIVE:
-        return
-
-    casa, fora = extrair_times(jogo)
-    gols_casa, gols_fora = extrair_placar(jogo)
-
-    favorito, odd_favorito, home_odd, away_odd = (
-        get_favorito_info(jogo)
-    )
-
-    if not favorito:
-        return
-
-    condicao = False
-    descricao = ""
-
-    if favorito == "HOME":
-        diferenca = gols_fora - gols_casa
-
-        if diferenca == 0:
-            condicao = True
-            descricao = (
-                f"{gols_casa}x{gols_fora} - "
-                f"favorito da casa empatando"
-            )
-
-        elif 1 <= diferenca <= 2:
-            condicao = True
-            descricao = (
-                f"{gols_casa}x{gols_fora} - "
-                f"favorito da casa perdendo por "
-                f"{diferenca}"
-            )
-
-    elif favorito == "AWAY":
-        diferenca = gols_casa - gols_fora
-
-        if diferenca == 0:
-            condicao = True
-            descricao = (
-                f"{gols_casa}x{gols_fora} - "
-                f"favorito visitante empatando"
-            )
-
-        elif 1 <= diferenca <= 2:
-            condicao = True
-            descricao = (
-                f"{gols_casa}x{gols_fora} - "
-                f"favorito visitante perdendo por "
-                f"{diferenca}"
-            )
-
-    if not condicao:
-        return
-
-    entradas_live[fid] = True
-
-    pendentes_live[fid] = {
-        "home": casa,
-        "away": fora,
-        "odd": odd_favorito,
-        "favorito": favorito,
-        "minuto": minuto,
-        "cantos_inicio": cantos,
-        "hora": datetime.now().strftime("%H:%M:%S")
-    }
-
-    stats["total_sinais"] += 1
-    salvar_dados()
-
-    percentual = taxa(
-        stats["live_wins"],
-        stats["live_losses"]
-    )
-
-    tg_msg(
-        f"🔥 <b>LIVE - OVER 9.0 ESCANTEIOS</b>\n\n"
-        f"🏟️ {casa} x {fora}\n"
-        f"⏰ Minuto: {minuto}'\n"
-        f"📊 Placar: {descricao}\n"
-        f"⭐ Favorito: {favorito} @ {odd_favorito}\n"
-        f"🚩 Cantos atuais: {cantos}\n\n"
-        f"👉 <b>ENTRADA: Over 9.0 FT</b>\n"
-        f"📊 Live atual: "
-        f"{stats['live_wins']}W-"
-        f"{stats['live_losses']}L "
-        f"({percentual}%)"
-    )
-
-    print(
-        f"SINAL LIVE ENVIADO: {casa} x {fora} | "
-        f"{minuto}' | cantos {cantos}",
-        flush=True
-    )
-
-
-# =========================================================
-# ANÁLISE PRÉ-JOGO
-# =========================================================
+def filtra_over_cantos(jogo):
+    for odd in extrair_odds(jogo):
+        t=texto_odds(odd).replace(",",".")
+        p=valor_odd(odd)
+        if not (ODD_MIN<=p<=ODD_MAX): continue
+        if "corner" in t or "escante" in t or "canto" in t:
+            # aceita 8.5, 9, 9.5, 10.5
+            if any(x in t for x in ["8.5","9","9.5","10","10.5"]):
+                # bloqueia linhas baixas
+                if "1.5" in t or "2.5" in t or "3.5" in t or "4.5" in t or "5.5" in t: continue
+                linha = primeiro_valor(odd.get("line"), odd.get("handicap"), "9.5")
+                return p, f"Over {linha} Escanteios"
+    return None
 
 def analisar_pre(jogo):
-    fid = extrair_id(jogo)
+    fid=extrair_id(jogo)
+    if not fid or fid in entradas_pre: return False
+    casa,fora=extrair_times(jogo)
 
-    if not fid:
-        return False
+    # tenta gols primeiro
+    res_gols = filtra_over_gols(jogo)
+    if res_gols:
+        odd, mercado = res_gols
+        entradas_pre[fid]=True
+        pendentes_pre[fid]={"tipo":"GOLS","home":casa,"away":fora,"odd":odd,"mercado":mercado,"linha":2.5}
+        stats["total_sinais"]+=1; salvar_dados()
+        tg_msg(f"⚽ <b>PRÉ - OVER 2.5 GOLS</b>\n\n🏟️ {casa} x {fora}\n💰 {mercado} @ {odd:.2f}\n\n👉 Mais de 2.5 gols")
+        return True
 
-    if fid in entradas_pre:
-        return False
+    res_cantos = filtra_over_cantos(jogo)
+    if res_cantos:
+        odd, mercado = res_cantos
+        entradas_pre[fid]=True
+        pendentes_pre[fid]={"tipo":"CANTOS","home":casa,"away":fora,"odd":odd,"mercado":mercado,"linha":9.5}
+        stats["total_sinais"]+=1; salvar_dados()
+        tg_msg(f"🚩 <b>PRÉ - OVER ESCANTEIOS</b>\n\n🏟️ {casa} x {fora}\n💰 {mercado} @ {odd:.2f}\n\n👉 Mais de 9 escanteios")
+        return True
+    return False
 
-    resultado = filtra_over25(jogo)
+def finalizar(fid,jogo):
+    if fid not in pendentes_pre: return
+    info=pendentes_pre.pop(fid)
+    cg,fg=extrair_placar(jogo); tot_gols=cg+fg; tot_cantos=extrair_cantos(jogo)
 
-    if not resultado:
-        return False
-
-    odd_valor, mercado = resultado
-
-    casa, fora = extrair_times(jogo)
-
-    entradas_pre[fid] = True
-
-    pendentes_pre[fid] = {
-        "home": casa,
-        "away": fora,
-        "odd": odd_valor,
-        "mercado": mercado,
-        "hora": datetime.now().strftime("%H:%M:%S")
-    }
-
-    stats["total_sinais"] += 1
+    if info["tipo"]=="GOLS":
+        win = tot_gols>=3
+        if win: stats["gols_wins"]+=1; res="GREEN"; emo="🟢"
+        else: stats["gols_losses"]+=1; res="RED"; emo="🔴"
+        tg_msg(f"{emo} <b>{res} - OVER 2.5</b>\n\n🏟️ {info['home']} x {info['away']}\n⚽ {tot_gols} gols\n\n📊 Gols: {stats['gols_wins']}W-{stats['gols_losses']}L ({taxa(stats['gols_wins'],stats['gols_losses'])}%)")
+    else:
+        win = tot_cantos>=10
+        if win: stats["cantos_wins"]+=1; res="GREEN"; emo="🟢"
+        else: stats["cantos_losses"]+=1; res="RED"; emo="🔴"
+        tg_msg(f"{emo} <b>{res} - OVER CANTOS</b>\n\n🏟️ {info['home']} x {info['away']}\n🚩 {tot_cantos} cantos | ⚽ {tot_gols} gols\n\n📊 Cantos: {stats['cantos_wins']}W-{stats['cantos_losses']}L ({taxa(stats['cantos_wins'],stats['cantos_losses'])}%)")
     salvar_dados()
 
-    percentual = taxa(
-        stats["pre_wins"],
-        stats["pre_losses"]
-    )
-
-    tg_msg(
-        f"⚽ <b>PRÉ-JOGO - OVER 2.5 GOLS</b>\n\n"
-        f"🏟️ {casa} x {fora}\n"
-        f"💰 Mercado: {mercado}\n"
-        f"📈 Odd: {odd_valor}\n\n"
-        f"👉 <b>ENTRADA: Mais de 2.5 gols</b>\n"
-        f"📊 Pré atual: "
-        f"{stats['pre_wins']}W-"
-        f"{stats['pre_losses']}L "
-        f"({percentual}%)"
-    )
-
-    print(
-        f"SINAL PRÉ ENVIADO: {casa} x {fora} | "
-        f"Over 2.5 @ {odd_valor}",
-        flush=True
-    )
-
-    return True
-
-
-# =========================================================
-# LOOP PRINCIPAL
-# =========================================================
-
 def iniciar_bot():
-    tg_msg(
-        f"🤖 <b>ROBÔ DE ESCANTEIOS ONLINE</b>\n\n"
-        f"🔥 Live: "
-        f"{stats['live_wins']}W-"
-        f"{stats['live_losses']}L-"
-        f"{stats['live_voids']}V\n"
-        f"⚽ Pré: "
-        f"{stats['pre_wins']}W-"
-        f"{stats['pre_losses']}L\n"
-        f"📊 Total de sinais: "
-        f"{stats['total_sinais']}"
-    )
-
-    print(
-        "ROBÔ INICIADO - Aguardando jogos...",
-        flush=True
-    )
-
-    ultimo_pre = 0
-    ultimo_resultados = 0
-
+    tg_msg(f"🤖 <b>ROBÔ PRÉ ONLINE</b>\n⚽ Gols: {stats['gols_wins']}W-{stats['gols_losses']}L\n🚩 Cantos: {stats['cantos_wins']}W-{stats['cantos_losses']}L\nTotal: {stats['total_sinais']}")
+    print("BOT PRE INICIADO",flush=True)
+    ultimo_pre=0; ultimo_res=0
     while True:
         try:
-            # -----------------------------
-            # LIVE
-            # -----------------------------
-            jogos_live = buscar_live()
-
-            for jogo in jogos_live:
-                try:
-                    analisar_live(jogo)
-
-                except Exception as erro:
-                    print(
-                        f"ERRO AO ANALISAR LIVE: {erro}",
-                        flush=True
-                    )
-
-            # -----------------------------
-            # PRÉ-JOGO
-            # -----------------------------
-            if time.time() - ultimo_pre >= INTERVALO_PRE:
-                ultimo_pre = time.time()
-
-                jogos_pre = buscar_pre()
-
-                for jogo in jogos_pre:
+            if time.time()-ultimo_pre>=INTERVALO_PRE:
+                ultimo_pre=time.time()
+                for jogo in buscar_pre():
                     try:
-                        enviado = analisar_pre(jogo)
-
-                        # Envia no máximo um pré por ciclo
-                        if enviado:
-                            break
-
-                    except Exception as erro:
-                        print(
-                            f"ERRO AO ANALISAR PRÉ: {erro}",
-                            flush=True
-                        )
-
-            # -----------------------------
-            # RESULTADOS
-            # -----------------------------
-            if (
-                time.time() - ultimo_resultados
-                >= INTERVALO_RESULTADOS
-            ):
-                ultimo_resultados = time.time()
-
-                if pendentes_live or pendentes_pre:
-                    finalizados = buscar_finalizados()
-
-                    for jogo in finalizados:
-                        try:
-                            fid = extrair_id(jogo)
-
-                            if not fid:
-                                continue
-
-                            if not eh_finalizado(jogo):
-                                continue
-
-                            if fid in pendentes_live:
-                                finalizar_live(fid, jogo)
-
-                            if fid in pendentes_pre:
-                                finalizar_pre(fid, jogo)
-
-                        except Exception as erro:
-                            print(
-                                f"ERRO AO FINALIZAR JOGO: {erro}",
-                                flush=True
-                            )
-
-            time.sleep(INTERVALO_LIVE)
-
-        except Exception as erro:
-            print(
-                f"ERRO GERAL DO LOOP: {erro}",
-                flush=True
-            )
-
-            time.sleep(30)
-
-
-# =========================================================
-# ROTAS FLASK
-# =========================================================
+                        if analisar_pre(jogo): break
+                    except: pass
+            if time.time()-ultimo_res>=INTERVALO_RESULTADOS and pendentes_pre:
+                ultimo_res=time.time()
+                for jogo in buscar_finalizados():
+                    fid=extrair_id(jogo)
+                    if fid in pendentes_pre: finalizar(fid,jogo)
+            time.sleep(60)
+        except Exception as e:
+            print(f"ERRO LOOP {e}",flush=True); time.sleep(30)
 
 @app.route("/")
 def home():
-    live_percentual = taxa(
-        stats["live_wins"],
-        stats["live_losses"]
-    )
-
-    pre_percentual = taxa(
-        stats["pre_wins"],
-        stats["pre_losses"]
-    )
-
-    geral_percentual = taxa(
-        stats["live_wins"] + stats["pre_wins"],
-        stats["live_losses"] + stats["pre_losses"]
-    )
-
-    return (
-        "ROBÔ ONLINE | "
-        f"Live: {live_percentual}% "
-        f"({stats['live_wins']}W-"
-        f"{stats['live_losses']}L-"
-        f"{stats['live_voids']}V) | "
-        f"Pré: {pre_percentual}% "
-        f"({stats['pre_wins']}W-"
-        f"{stats['pre_losses']}L) | "
-        f"Geral: {geral_percentual}% | "
-        f"Pendentes Live: {len(pendentes_live)} | "
-        f"Pendentes Pré: {len(pendentes_pre)}"
-    )
-
+    return f"PRE ONLINE | Gols {taxa(stats['gols_wins'],stats['gols_losses'])}% ({stats['gols_wins']}W-{stats['gols_losses']}L) | Cantos {taxa(stats['cantos_wins'],stats['cantos_losses'])}% ({stats['cantos_wins']}W-{stats['cantos_losses']}L)"
 
 @app.route("/stats")
-def rota_stats():
-    with lock:
-        resultado = stats.copy()
-
-    resultado["live_taxa"] = taxa(
-        stats["live_wins"],
-        stats["live_losses"]
-    )
-
-    resultado["pre_taxa"] = taxa(
-        stats["pre_wins"],
-        stats["pre_losses"]
-    )
-
-    resultado["geral_taxa"] = taxa(
-        stats["live_wins"] + stats["pre_wins"],
-        stats["live_losses"] + stats["pre_losses"]
-    )
-
-    resultado["pendentes_live"] = len(pendentes_live)
-    resultado["pendentes_pre"] = len(pendentes_pre)
-
-    return jsonify(resultado)
-
-
-@app.route("/historico")
-def rota_historico():
-    with lock:
-        return jsonify(historico[-200:])
-
+def rota_stats(): return jsonify(stats)
 
 @app.route("/health")
-def health():
-    return jsonify({
-        "online": True,
-        "hora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "pendentes_live": len(pendentes_live),
-        "pendentes_pre": len(pendentes_pre),
-        "total_historico": len(historico)
-    })
+def health(): return jsonify({"online":True})
 
-
-# =========================================================
-# INICIALIZAÇÃO
-# =========================================================
-
-def iniciar_thread():
-    thread = threading.Thread(
-        target=iniciar_bot,
-        daemon=True
-    )
-
-    thread.start()
-
-
+def iniciar_thread(): threading.Thread(target=iniciar_bot,daemon=True).start()
 iniciar_thread()
-
-
-if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=PORT
-    )
+if __name__=="__main__": app.run(host="0.0.0.0",port=PORT)

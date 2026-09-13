@@ -15,7 +15,7 @@ from flask import Flask, jsonify
 
 
 # ============================================================
-# LOGGING (com flush para o Render mostrar em tempo real)
+# LOGGING
 # ============================================================
 
 logging.basicConfig(
@@ -1048,72 +1048,4 @@ def loop_bot():
     log.info("================================")
     log.info("ROBÔ GOLS + ESCANTEIOS")
     log.info("INICIANDO...")
-    log.info(f"API_KEY configurada? {bool(API_KEY)}")
-    log.info(f"TELEGRAM configurado? {bool(TELEGRAM_TOKEN and CHAT_ID)}")
-    log.info(
-        f"HORAS_ANTES={HORAS_ANTES} | JANELA={JANELA_MINUTOS}min | "
-        f"ODD={ODD_MIN}-{ODD_MAX}"
-    )
-    log.info("================================")
-
-    if TELEGRAM_TOKEN and CHAT_ID:
-        enviar_telegram(
-            "🟢 <b>ROBÔ ONLINE</b>\n\n"
-            "Sistema de sinais combinados iniciado."
-        )
-    else:
-        log.warning("Telegram NÃO configurado")
-
-    ultimo_pre = 0
-    ultimo_resultado = 0
-
-    while True:
-        agora = time.time()
-
-        if agora - ultimo_pre >= INTERVALO_PRE:
-            ultimo_pre = agora
-            log.info("🔎 Verificando pré-jogos...")
-            try:
-                jogos = buscar_pre()
-                enviados = 0
-                for jogo in jogos:
-                    if enviados >= QTD_POR_RODADA:
-                        break
-                    if analisar_pre(jogo):
-                        enviados += 1
-                log.info(f"Sinais enviados nesta rodada: {enviados}")
-            except Exception:
-                log.exception("Erro análise pré")
-
-        if agora - ultimo_resultado >= INTERVALO_RESULTADOS:
-            ultimo_resultado = agora
-            log.info(
-                f"🏁 Verificando resultados... "
-                f"({len(estado['pendentes'])} pendentes)"
-            )
-            try:
-                verificar_resultados()
-            except Exception:
-                log.exception("Erro resultados")
-
-        time.sleep(20)
-
-
-# ============================================================
-# ROTAS FLASK
-# ============================================================
-
-@app.route("/")
-def home():
-    return jsonify({
-        "status": "online",
-        "bot": "Gols + Escanteios",
-        "modo": "combinado",
-        "pendentes": len(estado["pendentes"])
-    })
-
-
-@app.route("/health")
-def health():
-    return jsonify({
-        "status": "ok",
+    log.info(f"API_KEY configurada? {bool

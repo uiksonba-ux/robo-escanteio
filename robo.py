@@ -99,7 +99,6 @@ def salvar_estado():
 def carregar_estado():
     global estado
     if not os.path.exists(ARQUIVO_ESTADO):
-        log.info("Nenhum estado anterior encontrado.")
         return
     try:
         with open(ARQUIVO_ESTADO, "r", encoding="utf-8") as f:
@@ -111,10 +110,6 @@ def carregar_estado():
                 estado["pendentes"] = dados["pendentes"]
             if "historico" in dados:
                 estado["historico"] = dados["historico"]
-        log.info(
-            f"Estado carregado: {len(estado['pendentes'])} pendentes, "
-            f"{len(estado['historico'])} no histórico"
-        )
     except Exception as e:
         log.error(f"Erro ao carregar estado: {e}")
 
@@ -219,16 +214,6 @@ def extrair_placar(jogo):
             return int(goals.get("home", 0) or 0), int(goals.get("away", 0) or 0)
         except Exception:
             pass
-    score = jogo.get("score")
-    if isinstance(score, dict):
-        home = score.get("home")
-        away = score.get("away")
-        try:
-            gh = home.get("goals") if isinstance(home, dict) else home
-            ga = away.get("goals") if isinstance(away, dict) else away
-            return int(gh or 0), int(ga or 0)
-        except Exception:
-            pass
     return 0, 0
 
 
@@ -238,9 +223,7 @@ def extrair_cantos(jogo):
     corners = jogo.get("corners")
     if isinstance(corners, dict):
         try:
-            h = int(corners.get("home", 0) or 0)
-            a = int(corners.get("away", 0) or 0)
-            return h + a
+            return int(corners.get("home", 0) or 0) + int(corners.get("away", 0) or 0)
         except Exception:
             pass
     return 0
@@ -261,6 +244,13 @@ def eh_finalizado(jogo):
     status = extrair_status(jogo).lower()
     return any(f in status for f in (
         "ft", "aet", "pen", "finished", "finalizado", "ended", "match finished"
+    ))
+
+
+def eh_em_andamento(jogo):
+    status = extrair_status(jogo).lower()
+    return any(f in status for f in (
+        "in_play", "live", "1h", "2h", "ht", "half", "playing", "inprogress"
     ))
 
 
@@ -421,11 +411,11 @@ def obter_melhor_odd(fixture_id, mercado):
 
 
 def linha_gols_valida(linha):
-    return linha in (0.5, 1.5, 2.5)
+    return linha in (0.5, 1.5, 2.5, 3.5)
 
 
 def linha_cantos_valida(linha):
-    return linha in (6.5, 7.5, 8.5, 9.5, 10.5)
+    return linha in (6.5, 7.5, 8.5, 9.5, 10.5, 11.5)
 
 
 def filtrar_gols(odd_info):
@@ -496,23 +486,45 @@ def assertividade_7_dias():
 
 
 def buscar_pre():
-    data = api_get("/fixtures", params={"per_page": 200, "lang": "pt"})
+    data = api_get("/fixtures", params={"per_page": 500, "lang": "pt"})
     jogos = extrair_lista(data)
     log.info(f"buscar_pre: API retornou {len(jogos)} jogos")
 
     candidatos = []
+    total_futuros = 0
+    total_in_play = 0
+    total_finalizados = 0
+
     for jogo in jogos:
         fid = extrair_id(jogo)
         minutos = minutos_ate_jogo(jogo)
+        status = extrair_status(jogo)
 
         if fid is None or minutos is None:
             continue
+
+        # Pula jogos em andamento ou finalizados
+        if eh_em_andamento(jogo):
+            total_in_play += 1
+            continue
+        if eh_finalizado(jogo):
+            total_finalizados += 1
+            continue
+
+        # Pula jogos que já começaram (minutos negativos)
         if minutos < 0:
             continue
-        if dentro_da_janela(jogo):
-            candidatos.append(jogo)
 
-    log.info(f"buscar_pre: {len(candidatos)} candidatos na janela")
+        total_futuros += 1
+
+        if (HORAS_MIN * 60) <= minutos <= (HORAS_MAX * 60):
+            candidatos.append(jogo)
+            log.info(f"[{fid}] {minutos:.0f}min até o jogo | status={status}")
+
+    log.info(
+        f"buscar_pre: {total_futuros} futuros, {total_in_play} em andamento, "
+        f"{total_finalizados} finalizados | {len(candidatos)} candidatos na janela"
+    )
     return candidatos
 
 
@@ -525,20 +537,31 @@ def criar_sinal_combinado(jogo):
     gols = obter_melhor_odd(fid, "gols")
     cantos = obter_melhor_odd(fid, "cantos")
 
-    if not gols or not cantos:
+    if not gols:
+        log.info(f"[{fid}] sem odds de gols")
         return None
-    if not filtrar_gols(gols) or not filtrar_cantos(cantos):
+    if not cantos:
+        log.info(f"[{fid}] sem odds de cantos")
+        return None
+    if not filtrar_gols(gols):
+        log.info(f"[{fid}] linha gols inválida: {gols['linha']}")
+        return None
+    if not filtrar_cantos(cantos):
+        log.info(f"[{fid}] linha cantos inválida: {cantos['linha']}")
         return None
     if gols["bookmaker"].lower() != cantos["bookmaker"].lower():
+        log.info(f"[{fid}] bookmakers diferentes: {gols['bookmaker']} x {cantos['bookmaker']}")
         return None
 
     odd_combinada = gols["odd"] * cantos["odd"]
     if not (ODD_MIN <= odd_combinada <= ODD_MAX):
+        log.info(f"[{fid}] odd combinada fora: {odd_combinada:.2f}")
         return None
 
     historico = assertividade_7_dias()
     if (historico["sinais"] >= MINIMO_HISTORICO
             and historico["assertividade"] < ASSERTIVIDADE_MINIMA):
+        log.info(f"[{fid}] filtrado por assertividade")
         return None
 
     return {
@@ -584,6 +607,8 @@ def analisar_pre(jogo):
     if any(h.get("id") == fid for h in estado.get("historico", [])[-2000:]):
         return False
     if not dentro_da_janela(jogo):
+        return False
+    if eh_em_andamento(jogo) or eh_finalizado(jogo):
         return False
 
     sinal = criar_sinal_combinado(jogo)
@@ -702,7 +727,6 @@ def gerar_stats():
 
 
 def rodar_se_preciso(forcar=False):
-    """Executa o bot se passou tempo suficiente desde a última rodada."""
     agora = time.time()
 
     if forcar or (agora - _ultimo_run["pre"] >= INTERVALO_PRE):
@@ -729,13 +753,8 @@ def rodar_se_preciso(forcar=False):
             log.exception("Erro resultados")
 
 
-# ============================================================
-# ROTAS
-# ============================================================
-
 @app.before_request
 def _antes_do_request():
-    """Dispara o bot em QUALQUER request (modo sob demanda)."""
     try:
         rodar_se_preciso()
     except Exception:
@@ -785,7 +804,8 @@ def debug_rodar_agora():
 
 @app.route("/debug/api-crua")
 def debug_api_crua():
-    data = api_get("/fixtures", params={"per_page": 5, "lang": "pt"})
+    per_page = request.args.get("per_page", "5")
+    data = api_get("/fixtures", params={"per_page": per_page, "lang": "pt"})
     return jsonify({"fixtures": data})
 
 
@@ -800,21 +820,41 @@ def debug_odds_crua(fid):
     return jsonify(resultados)
 
 
-# ============================================================
-# INICIALIZAÇÃO
-# ============================================================
+@app.route("/debug/proximos")
+def debug_proximos():
+    """Lista os próximos jogos com minutos até o início."""
+    data = api_get("/fixtures", params={"per_page": 200, "lang": "pt"})
+    jogos = extrair_lista(data)
+    lista = []
+    for jogo in jogos:
+        fid = extrair_id(jogo)
+        minutos = minutos_ate_jogo(jogo)
+        status = extrair_status(jogo)
+        if fid is None or minutos is None:
+            continue
+        if minutos < -30:
+            continue
+        home, away = extrair_times(jogo)
+        lista.append({
+            "id": fid,
+            "home": home,
+            "away": away,
+            "minutos_ate": round(minutos, 1),
+            "status": status
+        })
+    lista.sort(key=lambda x: x["minutos_ate"])
+    return jsonify(lista[:50])
+
 
 carregar_estado()
 log.info("================================")
 log.info("ROBÔ GOLS + ESCANTEIOS (modo sob demanda)")
 log.info(f"API_KEY? {bool(API_KEY)} | Telegram? {bool(TELEGRAM_TOKEN and CHAT_ID)}")
 log.info(f"Janela: {HORAS_MIN}h a {HORAS_MAX}h | ODD: {ODD_MIN}-{ODD_MAX}")
-log.info(f"INTERVALO_PRE: {INTERVALO_PRE}s | INTERVALO_RESULTADOS: {INTERVALO_RESULTADOS}s")
 log.info("================================")
 
 
 if __name__ == "__main__":
-    # Roda uma vez na inicialização (para o caso do container acordar sem tráfego ainda)
     try:
         rodar_se_preciso(forcar=True)
     except Exception:

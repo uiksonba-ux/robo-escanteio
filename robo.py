@@ -486,9 +486,31 @@ def assertividade_7_dias():
 
 
 def buscar_pre():
-    data = api_get("/fixtures", params={"per_page": 500, "lang": "pt"})
-    jogos = extrair_lista(data)
-    log.info(f"buscar_pre: API retornou {len(jogos)} jogos")
+    hoje = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    amanha = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    jogos = []
+
+    # Busca jogos de hoje
+    data_hoje = api_get(
+        "/fixtures",
+        params={"date": hoje, "per_page": 500, "lang": "pt"}
+    )
+    jogos.extend(extrair_lista(data_hoje))
+
+    # Busca jogos de amanhã
+    data_amanha = api_get(
+        "/fixtures",
+        params={"date": amanha, "per_page": 500, "lang": "pt"}
+    )
+    jogos.extend(extrair_lista(data_amanha))
+
+    # Fallback: se nenhuma das duas retornou nada, busca sem filtro
+    if not jogos:
+        data = api_get("/fixtures", params={"per_page": 500, "lang": "pt"})
+        jogos = extrair_lista(data)
+
+    log.info(f"buscar_pre: {len(jogos)} jogos encontrados (hoje + amanhã)")
 
     candidatos = []
     total_futuros = 0
@@ -848,7 +870,6 @@ def debug_procurar_odds(fid):
 
 @app.route("/debug/fixture-completo/<fid>")
 def debug_fixture_completo(fid):
-    """Busca o fixture na lista geral e mostra o objeto COMPLETO."""
     data = api_get("/fixtures", params={"per_page": 500, "lang": "pt"})
     jogos = extrair_lista(data)
     for jogo in jogos:
@@ -884,6 +905,37 @@ def debug_proximos():
         })
     lista.sort(key=lambda x: x["minutos_ate"])
     return jsonify(lista[:50])
+
+
+@app.route("/debug/testar-datas")
+def debug_testar_datas():
+    """Testa vários formatos de parâmetro de data."""
+    hoje = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    amanha = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+    depois = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%d")
+
+    testes = {
+        "date_hoje": {"date": hoje, "per_page": 100, "lang": "pt"},
+        "date_amanha": {"date": amanha, "per_page": 100, "lang": "pt"},
+        "date_depois": {"date": depois, "per_page": 100, "lang": "pt"},
+        "date_from_to": {"date_from": hoje, "date_to": amanha, "per_page": 100, "lang": "pt"},
+        "from_to": {"from": hoje, "to": amanha, "per_page": 100, "lang": "pt"},
+        "day": {"day": amanha, "per_page": 100, "lang": "pt"},
+        "só_per_page": {"per_page": 100, "lang": "pt"},
+    }
+
+    resultados = {}
+    for nome, params in testes.items():
+        data = api_get("/fixtures", params=params)
+        jogos = extrair_lista(data)
+        futuros = [j for j in jogos if (minutos_ate_jogo(j) or -1) > 0]
+        resultados[nome] = {
+            "params": params,
+            "total": len(jogos),
+            "futuros": len(futuros)
+        }
+
+    return jsonify(resultados)
 
 
 carregar_estado()

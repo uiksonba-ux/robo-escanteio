@@ -11,7 +11,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 
 logging.basicConfig(
@@ -38,8 +38,8 @@ ODD_MAX = float(os.getenv("ODD_MAX", "3.50"))
 QTD_POR_RODADA = int(os.getenv("QTD_POR_RODADA", "8"))
 HORAS_MIN = float(os.getenv("HORAS_MIN", "0.5"))
 HORAS_MAX = float(os.getenv("HORAS_MAX", "12"))
-INTERVALO_PRE = int(os.getenv("INTERVALO_PRE", "600"))
-INTERVALO_RESULTADOS = int(os.getenv("INTERVALO_RESULTADOS", "600"))
+INTERVALO_PRE = int(os.getenv("INTERVALO_PRE", "60"))
+INTERVALO_RESULTADOS = int(os.getenv("INTERVALO_RESULTADOS", "120"))
 MINIMO_HISTORICO = int(os.getenv("MINIMO_HISTORICO", "5"))
 ASSERTIVIDADE_MINIMA = float(os.getenv("ASSERTIVIDADE_MINIMA", "60"))
 ARQUIVO_ESTADO = "bot_state.json"
@@ -78,6 +78,12 @@ estado = {
     },
     "pendentes": {},
     "historico": []
+}
+
+_ultimo_run = {
+    "pre": 0,
+    "resultado": 0,
+    "iniciado_em": time.time()
 }
 
 
@@ -505,7 +511,6 @@ def buscar_pre():
             continue
         if dentro_da_janela(jogo):
             candidatos.append(jogo)
-            log.info(f"[{fid}] {minutos:.0f}min → candidato")
 
     log.info(f"buscar_pre: {len(candidatos)} candidatos na janela")
     return candidatos
@@ -520,31 +525,20 @@ def criar_sinal_combinado(jogo):
     gols = obter_melhor_odd(fid, "gols")
     cantos = obter_melhor_odd(fid, "cantos")
 
-    if not gols:
-        log.info(f"[{fid}] sem odds de gols")
+    if not gols or not cantos:
         return None
-    if not cantos:
-        log.info(f"[{fid}] sem odds de cantos")
-        return None
-    if not filtrar_gols(gols):
-        log.info(f"[{fid}] linha gols inválida: {gols['linha']}")
-        return None
-    if not filtrar_cantos(cantos):
-        log.info(f"[{fid}] linha cantos inválida: {cantos['linha']}")
+    if not filtrar_gols(gols) or not filtrar_cantos(cantos):
         return None
     if gols["bookmaker"].lower() != cantos["bookmaker"].lower():
-        log.info(f"[{fid}] bookmakers diferentes")
         return None
 
     odd_combinada = gols["odd"] * cantos["odd"]
     if not (ODD_MIN <= odd_combinada <= ODD_MAX):
-        log.info(f"[{fid}] odd combinada fora: {odd_combinada:.2f}")
         return None
 
     historico = assertividade_7_dias()
     if (historico["sinais"] >= MINIMO_HISTORICO
             and historico["assertividade"] < ASSERTIVIDADE_MINIMA):
-        log.info(f"[{fid}] filtrado por assertividade")
         return None
 
     return {
@@ -700,50 +694,52 @@ def gerar_stats():
             "combinados": estatisticas_combinadas(),
             "ultimos_7_dias": assertividade_7_dias(),
             "pendentes": len(estado["pendentes"]),
-            "total_sinais": estado["stats"]["total_sinais"]
+            "total_sinais": estado["stats"]["total_sinais"],
+            "ultimo_run_pre": _ultimo_run["pre"],
+            "ultimo_run_resultado": _ultimo_run["resultado"],
+            "uptime_segundos": int(time.time() - _ultimo_run["iniciado_em"])
         }
 
 
-def loop_bot():
-    log.info("================================")
-    log.info("ROBÔ GOLS + ESCANTEIOS")
-    log.info(f"API_KEY? {bool(API_KEY)} | Telegram? {bool(TELEGRAM_TOKEN and CHAT_ID)}")
-    log.info(f"Janela: {HORAS_MIN}h a {HORAS_MAX}h | ODD: {ODD_MIN}-{ODD_MAX}")
-    log.info("================================")
+def rodar_se_preciso(forcar=False):
+    """Executa o bot se passou tempo suficiente desde a última rodada."""
+    agora = time.time()
 
-    if TELEGRAM_TOKEN and CHAT_ID:
-        enviar_telegram("🟢 <b>ROBÔ ONLINE</b>\n\nSistema iniciado.")
+    if forcar or (agora - _ultimo_run["pre"] >= INTERVALO_PRE):
+        _ultimo_run["pre"] = agora
+        try:
+            log.info("🔎 Rodando checagem pré-jogos...")
+            jogos = buscar_pre()
+            enviados = 0
+            for jogo in jogos:
+                if enviados >= QTD_POR_RODADA:
+                    break
+                if analisar_pre(jogo):
+                    enviados += 1
+            log.info(f"Sinais enviados nesta rodada: {enviados}")
+        except Exception:
+            log.exception("Erro análise pré")
 
-    ultimo_pre = 0
-    ultimo_resultado = 0
+    if forcar or (agora - _ultimo_run["resultado"] >= INTERVALO_RESULTADOS):
+        _ultimo_run["resultado"] = agora
+        try:
+            log.info(f"🏁 Verificando resultados ({len(estado['pendentes'])} pendentes)...")
+            verificar_resultados()
+        except Exception:
+            log.exception("Erro resultados")
 
-    while True:
-        agora = time.time()
 
-        if agora - ultimo_pre >= INTERVALO_PRE:
-            ultimo_pre = agora
-            log.info("🔎 Verificando pré-jogos...")
-            try:
-                jogos = buscar_pre()
-                enviados = 0
-                for jogo in jogos:
-                    if enviados >= QTD_POR_RODADA:
-                        break
-                    if analisar_pre(jogo):
-                        enviados += 1
-                log.info(f"Sinais enviados: {enviados}")
-            except Exception:
-                log.exception("Erro análise pré")
+# ============================================================
+# ROTAS
+# ============================================================
 
-        if agora - ultimo_resultado >= INTERVALO_RESULTADOS:
-            ultimo_resultado = agora
-            log.info(f"🏁 Resultados... ({len(estado['pendentes'])} pendentes)")
-            try:
-                verificar_resultados()
-            except Exception:
-                log.exception("Erro resultados")
-
-        time.sleep(30)
+@app.before_request
+def _antes_do_request():
+    """Dispara o bot em QUALQUER request (modo sob demanda)."""
+    try:
+        rodar_se_preciso()
+    except Exception:
+        log.exception("Erro no before_request")
 
 
 @app.route("/")
@@ -770,40 +766,18 @@ def stats():
     return jsonify(gerar_stats())
 
 
-@app.route("/debug/thread")
-def debug_thread():
-    return jsonify({
-        "thread_ativa": _bot_thread.is_alive() if "_bot_thread" in globals() else False,
-        "thread_nome": _bot_thread.name if "_bot_thread" in globals() else None,
-        "watchdog_ativa": _watchdog_thread.is_alive() if "_watchdog_thread" in globals() else False,
-        "threads": [t.name for t in threading.enumerate()],
-        "pendentes": len(estado["pendentes"]),
-        "total_sinais": estado["stats"]["total_sinais"]
-    })
-
-
 @app.route("/debug/rodar-agora")
 def debug_rodar_agora():
     resultado = {
         "api_key_ok": bool(API_KEY),
         "telegram_ok": bool(TELEGRAM_TOKEN and CHAT_ID),
         "jogos_encontrados": 0,
-        "candidatos_janela": 0,
         "sinais_enviados": 0,
         "erros": []
     }
     try:
-        jogos = buscar_pre()
-        resultado["jogos_encontrados"] = len(jogos)
-        resultado["candidatos_janela"] = len(jogos)
-
-        enviados = 0
-        for jogo in jogos:
-            if enviados >= QTD_POR_RODADA:
-                break
-            if analisar_pre(jogo):
-                enviados += 1
-        resultado["sinais_enviados"] = enviados
+        rodar_se_preciso(forcar=True)
+        resultado["jogos_encontrados"] = len(buscar_pre())
     except Exception as e:
         resultado["erros"].append(str(e))
     return jsonify(resultado)
@@ -827,39 +801,22 @@ def debug_odds_crua(fid):
 
 
 # ============================================================
-# INICIALIZAÇÃO COM WATCHDOG
+# INICIALIZAÇÃO
 # ============================================================
 
 carregar_estado()
-
-
-def _iniciar_bot():
-    global _bot_thread
-    if "_bot_thread" in globals() and _bot_thread.is_alive():
-        return _bot_thread
-    _bot_thread = threading.Thread(target=loop_bot, daemon=True, name="loop_bot")
-    _bot_thread.start()
-    log.info("Thread do bot iniciada")
-    return _bot_thread
-
-
-def _watchdog():
-    while True:
-        time.sleep(60)
-        try:
-            if "_bot_thread" not in globals() or not _bot_thread.is_alive():
-                log.warning("⚠️ Thread morta. Reiniciando...")
-                _iniciar_bot()
-        except Exception as e:
-            log.error(f"Erro no watchdog: {e}")
-
-
-_iniciar_bot()
-
-_watchdog_thread = threading.Thread(target=_watchdog, daemon=True, name="watchdog")
-_watchdog_thread.start()
-log.info("Watchdog iniciado")
+log.info("================================")
+log.info("ROBÔ GOLS + ESCANTEIOS (modo sob demanda)")
+log.info(f"API_KEY? {bool(API_KEY)} | Telegram? {bool(TELEGRAM_TOKEN and CHAT_ID)}")
+log.info(f"Janela: {HORAS_MIN}h a {HORAS_MAX}h | ODD: {ODD_MIN}-{ODD_MAX}")
+log.info(f"INTERVALO_PRE: {INTERVALO_PRE}s | INTERVALO_RESULTADOS: {INTERVALO_RESULTADOS}s")
+log.info("================================")
 
 
 if __name__ == "__main__":
+    # Roda uma vez na inicialização (para o caso do container acordar sem tráfego ainda)
+    try:
+        rodar_se_preciso(forcar=True)
+    except Exception:
+        log.exception("Erro no startup")
     app.run(host="0.0.0.0", port=PORT)

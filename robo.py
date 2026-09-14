@@ -819,7 +819,6 @@ def debug_odds_crua(fid):
 
 @app.route("/debug/procurar-odds/<fid>")
 def debug_procurar_odds(fid):
-    """Testa VÁRIAS URLs pra descobrir o endpoint correto de odds."""
     urls_teste = [
         f"/fixtures/{fid}/odds",
         f"/odds/{fid}",
@@ -836,7 +835,6 @@ def debug_procurar_odds(fid):
             if data is None:
                 resultados[url] = {"ok": False, "info": "null/erro"}
             else:
-                # Pega só um pedaço pra não estourar
                 amostra = json.dumps(data, ensure_ascii=False)[:600]
                 resultados[url] = {
                     "ok": True,
@@ -848,9 +846,23 @@ def debug_procurar_odds(fid):
     return jsonify(resultados)
 
 
+@app.route("/debug/fixture-completo/<fid>")
+def debug_fixture_completo(fid):
+    """Busca o fixture na lista geral e mostra o objeto COMPLETO."""
+    data = api_get("/fixtures", params={"per_page": 500, "lang": "pt"})
+    jogos = extrair_lista(data)
+    for jogo in jogos:
+        if str(jogo.get("id")) == str(fid):
+            return jsonify({"encontrado": True, "fixture": jogo})
+    return jsonify({
+        "encontrado": False,
+        "total_jogos": len(jogos),
+        "ids_disponiveis": [j.get("id") for j in jogos[:20]]
+    })
+
+
 @app.route("/debug/proximos")
 def debug_proximos():
-    """Lista os próximos jogos com minutos até o início."""
     data = api_get("/fixtures", params={"per_page": 200, "lang": "pt"})
     jogos = extrair_lista(data)
     lista = []

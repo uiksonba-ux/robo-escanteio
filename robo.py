@@ -503,15 +503,12 @@ def buscar_pre():
         if fid is None or minutos is None:
             continue
 
-        # Pula jogos em andamento ou finalizados
         if eh_em_andamento(jogo):
             total_in_play += 1
             continue
         if eh_finalizado(jogo):
             total_finalizados += 1
             continue
-
-        # Pula jogos que já começaram (minutos negativos)
         if minutos < 0:
             continue
 
@@ -519,11 +516,11 @@ def buscar_pre():
 
         if (HORAS_MIN * 60) <= minutos <= (HORAS_MAX * 60):
             candidatos.append(jogo)
-            log.info(f"[{fid}] {minutos:.0f}min até o jogo | status={status}")
+            log.info(f"[{fid}] {minutos:.0f}min | status={status}")
 
     log.info(
         f"buscar_pre: {total_futuros} futuros, {total_in_play} em andamento, "
-        f"{total_finalizados} finalizados | {len(candidatos)} candidatos na janela"
+        f"{total_finalizados} finalizados | {len(candidatos)} candidatos"
     )
     return candidatos
 
@@ -550,7 +547,7 @@ def criar_sinal_combinado(jogo):
         log.info(f"[{fid}] linha cantos inválida: {cantos['linha']}")
         return None
     if gols["bookmaker"].lower() != cantos["bookmaker"].lower():
-        log.info(f"[{fid}] bookmakers diferentes: {gols['bookmaker']} x {cantos['bookmaker']}")
+        log.info(f"[{fid}] bookmakers diferentes")
         return None
 
     odd_combinada = gols["odd"] * cantos["odd"]
@@ -817,6 +814,37 @@ def debug_odds_crua(fid):
             f"/fixtures/{fid}/odds",
             params={"market": mercado, "lang": "pt"}
         )
+    return jsonify(resultados)
+
+
+@app.route("/debug/procurar-odds/<fid>")
+def debug_procurar_odds(fid):
+    """Testa VÁRIAS URLs pra descobrir o endpoint correto de odds."""
+    urls_teste = [
+        f"/fixtures/{fid}/odds",
+        f"/odds/{fid}",
+        f"/fixtures/{fid}/markets",
+        f"/fixtures/{fid}/bookmakers",
+        f"/odds?fixture_id={fid}",
+        f"/fixtures/{fid}/predictions",
+        f"/fixtures/{fid}",
+    ]
+    resultados = {}
+    for url in urls_teste:
+        try:
+            data = api_get(url, params={"lang": "pt"})
+            if data is None:
+                resultados[url] = {"ok": False, "info": "null/erro"}
+            else:
+                # Pega só um pedaço pra não estourar
+                amostra = json.dumps(data, ensure_ascii=False)[:600]
+                resultados[url] = {
+                    "ok": True,
+                    "tipo": type(data).__name__,
+                    "amostra": amostra
+                }
+        except Exception as e:
+            resultados[url] = {"ok": False, "erro": str(e)}
     return jsonify(resultados)
 
 

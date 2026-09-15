@@ -1,10 +1,9 @@
 import os
 import json
 import time
-import html
-import logging
 import threading
-from datetime import datetime, timezone, timedelta
+import html
+from datetime import datetime, timezone
 
 import requests
 from flask import Flask, jsonify
@@ -18,272 +17,1033 @@ app = Flask(__name__)
 
 BASE_API = "https://api.5dollarfootballapi.com/v1"
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
-CHAT_ID = os.getenv("CHAT_ID", "").strip()
-API_KEY = os.getenv("FIVE_DOLLAR_API_KEY", "").strip()
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+API_KEY = os.getenv("FIVE_DOLLAR_API_KEY")
 
 ARQUIVO_STATS = "stats.json"
 
-# Limite oficial informado anteriormente: aproximadamente 10/minuto.
-# Usamos 8 para manter margem de segurança.
-LIMITE_REQUISICOES_MINUTO = int(
-    os.getenv("LIMITE_REQUISICOES_MINUTO", "8")
-)
+INTERVALO_ANALISE = 60
+JOGOS_HISTORICO = 5
+MINIMO_HISTORICO = 5
 
-INTERVALO_ANALISE = int(
-    os.getenv("INTERVALO_ANALISE", "600")
-)
+ODD_MINIMA = 1.01
+ODD_MAXIMA = 2.50
 
-INTERVALO_RESULTADOS = int(
-    os.getenv("INTERVALO_RESULTADOS", "300")
-)
+# Linha principal do mercado
+LINHA_ESCANTEIOS_HT = 4.5
 
-MAX_JOGOS_ANALISAR = int(
-    os.getenv("MAX_JOGOS_ANALISAR", "5")
-)
+# Caso queira exigir uma odd mínima mais específica,
+# altere aqui para 1.70, 1.80, 1.85 etc.
+ODD_MINIMA_SINAL = 1.01
 
-MAX_SINAIS_POR_CICLO = int(
-    os.getenv("MAX_SINAIS_POR_CICLO", "2")
-)
+# Tempo máximo para considerar um jogo ao vivo
+MINUTO_MAXIMO_ANALISE = 45
 
-# Percentual mínimo para enviar sinal
-ASSERTIVIDADE_MINIMA = float(
-    os.getenv("ASSERTIVIDADE_MINIMA", "72")
-)
-
-# Mercados
-LINHA_GOLS = 2.5
-LINHA_ESCANTEIOS = 8.5
+# Arquivo de controle dos jogos já utilizados
+ARQUIVO_FIXTURES = "fixtures_usadas.json"
 
 
 # ============================================================
-# LOGGING
+# ESTADO GLOBAL
 # ============================================================
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
+# RLock evita deadlock quando uma função chama outra
+# que também utiliza o mesmo lock.
+estado_lock = threading.RLock()
 
-logger = logging.getLogger("ROBO_COMBINADO")
-
-
-# ============================================================
-# CONTROLE DE REQUISIÇÕES
-# ============================================================
-
-request_times = []
-request_lock = threading.Lock()
-
-
-def pode_fazer_request():
-    """
-    Controla o limite de requisições por minuto.
-
-    Quando o limite é atingido, o robô aguarda automaticamente
-    em vez de continuar gerando erros.
-    """
-
-    while True:
-        agora = time.time()
-
-        with request_lock:
-            limite_inicio = agora - 60
-
-            while request_times and request_times[0] < limite_inicio:
-                request_times.pop(0)
-
-            if len(request_times) < LIMITE_REQUISICOES_MINUTO:
-                request_times.append(agora)
-                return True
-
-            tempo_espera = 60 - (agora - request_times[0])
-            tempo_espera = max(1, int(tempo_espera) + 1)
-
-        logger.warning(
-            "Limite interno atingido. Aguardando %s segundos.",
-            tempo_espera
-        )
-
-        time.sleep(tempo_espera)
-
-
-# ============================================================
-# ARQUIVO DE ESTATÍSTICAS
-# ============================================================
-
-stats_lock = threading.Lock()
-
-stats_padrao = {
-    "sinais_enviados": 0,
-    "sinais_resolvidos": 0,
+stats = {
+    "sinais_total": 0,
     "wins": 0,
     "losses": 0,
     "pendentes": 0,
-    "assertividade": 0,
-    "ultima_atualizacao": None,
-    "historico": []
+    "historico_analisado": 0,
+    "ultimo_sinal": None,
+    "ultima_analise": None,
+    "erros_api": 0
 }
 
+sinais_pendentes = {}
+fixtures_usadas = set()
 
-def carregar_stats():
-    if not os.path.exists(ARQUIVO_STATS):
-        return stats_padrao.copy()
+
+# ============================================================
+# CARREGAMENTO E SALVAMENTO
+# ============================================================
+
+def carregar_json(caminho, padrao):
+    if not os.path.exists(caminho):
+        return padrao
 
     try:
-        with open(ARQUIVO_STATS, "r", encoding="utf-8") as arquivo:
-            dados = json.load(arquivo)
+        with open(caminho, "r", encoding="utf-8") as arquivo:
+            return json.load(arquivo)
+    except Exception:
+        return padrao
 
-        for chave, valor in stats_padrao.items():
-            if chave not in dados:
-                dados[chave] = valor
 
-        return dados
-
+def salvar_json(caminho, dados):
+    try:
+        with open(caminho, "w", encoding="utf-8") as arquivo:
+            json.dump(
+                dados,
+                arquivo,
+                ensure_ascii=False,
+                indent=2
+            )
     except Exception as erro:
-        logger.error("Erro ao carregar stats: %s", erro)
-        return stats_padrao.copy()
+        print(f"[ERRO] Falha ao salvar {caminho}: {erro}")
 
 
-stats = carregar_stats()
+def carregar_estado():
+    global stats
+    global fixtures_usadas
+
+    dados_stats = carregar_json(ARQUIVO_STATS, {})
+
+    if isinstance(dados_stats, dict):
+        stats.update(dados_stats)
+
+    dados_fixtures = carregar_json(ARQUIVO_FIXTURES, [])
+
+    if isinstance(dados_fixtures, list):
+        fixtures_usadas = set(str(item) for item in dados_fixtures)
 
 
 def salvar_stats():
-    with stats_lock:
-        try:
-            with open(
-                ARQUIVO_STATS,
-                "w",
-                encoding="utf-8"
-            ) as arquivo:
-                json.dump(
-                    stats,
-                    arquivo,
-                    ensure_ascii=False,
-                    indent=2
-                )
-
-        except Exception as erro:
-            logger.error("Erro ao salvar stats: %s", erro)
+    with estado_lock:
+        salvar_json(ARQUIVO_STATS, stats)
 
 
-def atualizar_assertividade():
-    resolvidos = stats["wins"] + stats["losses"]
-
-    if resolvidos > 0:
-        stats["assertividade"] = round(
-            stats["wins"] / resolvidos * 100,
-            2
-        )
-    else:
-        stats["assertividade"] = 0
-
-
-# ============================================================
-# CACHE DE HISTÓRICO
-# ============================================================
-
-cache_historico = {}
-cache_lock = threading.Lock()
-
-CACHE_MINUTOS = 60
-
-
-def obter_cache(chave):
-    with cache_lock:
-        item = cache_historico.get(chave)
-
-        if not item:
-            return None
-
-        horario, dados = item
-
-        if time.time() - horario > CACHE_MINUTOS * 60:
-            del cache_historico[chave]
-            return None
-
-        return dados
-
-
-def salvar_cache(chave, dados):
-    with cache_lock:
-        cache_historico[chave] = (
-            time.time(),
-            dados
+def salvar_fixtures():
+    with estado_lock:
+        salvar_json(
+            ARQUIVO_FIXTURES,
+            list(fixtures_usadas)
         )
 
 
+carregar_estado()
+
+
 # ============================================================
-# REQUISIÇÃO À API
+# FUNÇÕES AUXILIARES
 # ============================================================
 
-def api_get(endpoint, params=None):
-    """
-    Faz requisição segura à API.
+def agora_utc():
+    return datetime.now(timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
 
-    O status da API deve ser:
-    all, scheduled, live, finished ou unknown.
-    """
 
-    pode_fazer_request()
+def numero(valor, padrao=0.0):
+    try:
+        if valor is None:
+            return padrao
 
-    url = f"{BASE_API}/{endpoint.lstrip('/')}"
+        if isinstance(valor, bool):
+            return padrao
 
+        if isinstance(valor, str):
+            valor = valor.replace(",", ".").strip()
+
+        return float(valor)
+    except Exception:
+        return padrao
+
+
+def inteiro(valor, padrao=0):
+    try:
+        return int(float(valor))
+    except Exception:
+        return padrao
+
+
+def primeiro_valor(dicionario, chaves, padrao=None):
+    if not isinstance(dicionario, dict):
+        return padrao
+
+    for chave in chaves:
+        if chave in dicionario:
+            valor = dicionario[chave]
+
+            if valor is not None:
+                return valor
+
+    return padrao
+
+
+def nome_time(time_data):
+    if isinstance(time_data, str):
+        return time_data
+
+    if not isinstance(time_data, dict):
+        return "Desconhecido"
+
+    return (
+        time_data.get("name")
+        or time_data.get("short_name")
+        or time_data.get("shortName")
+        or time_data.get("title")
+        or "Desconhecido"
+    )
+
+
+def extrair_fixture_id(jogo):
+    if not isinstance(jogo, dict):
+        return None
+
+    valor = primeiro_valor(
+        jogo,
+        [
+            "id",
+            "fixture_id",
+            "fixtureId",
+            "match_id",
+            "matchId",
+            "event_id",
+            "eventId"
+        ]
+    )
+
+    if valor is None:
+        return None
+
+    return str(valor)
+
+
+def extrair_minuto(jogo):
+    status = jogo.get("status", {}) if isinstance(jogo, dict) else {}
+
+    valor = primeiro_valor(
+        jogo,
+        [
+            "minute",
+            "elapsed",
+            "current_minute",
+            "currentMinute"
+        ]
+    )
+
+    if valor is None and isinstance(status, dict):
+        valor = primeiro_valor(
+            status,
+            [
+                "minute",
+                "elapsed",
+                "current_minute",
+                "currentMinute"
+            ]
+        )
+
+    return inteiro(valor, 0)
+
+
+def jogo_ao_vivo(jogo):
+    status = jogo.get("status", {}) if isinstance(jogo, dict) else {}
+
+    textos = []
+
+    if isinstance(status, dict):
+        textos.extend([
+            str(status.get("short", "")),
+            str(status.get("long", "")),
+            str(status.get("type", ""))
+        ])
+
+    textos.extend([
+        str(jogo.get("status", "")),
+        str(jogo.get("state", ""))
+    ])
+
+    texto = " ".join(textos).lower()
+
+    palavras_ao_vivo = [
+        "live",
+        "inplay",
+        "in-play",
+        "1h",
+        "2h",
+        "first half",
+        "second half",
+        "ao vivo"
+    ]
+
+    return any(palavra in texto for palavra in palavras_ao_vivo)
+
+
+def extrair_times(jogo):
+    home = (
+        jogo.get("home")
+        or jogo.get("home_team")
+        or jogo.get("homeTeam")
+        or jogo.get("teams", {}).get("home", {})
+        if isinstance(jogo.get("teams", {}), dict)
+        else jogo.get("home")
+    )
+
+    away = (
+        jogo.get("away")
+        or jogo.get("away_team")
+        or jogo.get("awayTeam")
+        or jogo.get("teams", {}).get("away", {})
+        if isinstance(jogo.get("teams", {}), dict)
+        else jogo.get("away")
+    )
+
+    return nome_time(home), nome_time(away)
+
+
+def extrair_odd(jogo):
+    possiveis = [
+        "odd",
+        "odds",
+        "price",
+        "value",
+        "selection_odd",
+        "selectionOdd",
+        "market_odd",
+        "marketOdd"
+    ]
+
+    valor = primeiro_valor(jogo, possiveis)
+
+    if isinstance(valor, dict):
+        valor = primeiro_valor(
+            valor,
+            [
+                "value",
+                "price",
+                "odd",
+                "decimal"
+            ]
+        )
+
+    return numero(valor, 0.0)
+
+
+# ============================================================
+# API
+# ============================================================
+
+def headers_api():
     headers = {
-        "Accept": "application/json"
+        "Accept": "application/json",
+        "Content-Type": "application/json"
     }
 
     if API_KEY:
-        headers["X-API-Key"] = API_KEY
+        headers["x-api-key"] = API_KEY
+        headers["X-API-KEY"] = API_KEY
         headers["Authorization"] = f"Bearer {API_KEY}"
+
+    return headers
+
+
+def requisicao_api(endpoint, params=None):
+    url = f"{BASE_API.rstrip('/')}/{endpoint.lstrip('/')}"
 
     try:
         resposta = requests.get(
             url,
-            headers=headers,
+            headers=headers_api(),
             params=params or {},
-            timeout=30
+            timeout=25
         )
 
-        if resposta.status_code == 429:
-            logger.warning(
-                "API retornou 429. Aguardando 60 segundos."
+        if resposta.status_code != 200:
+            print(
+                f"[API] Status {resposta.status_code}: "
+                f"{resposta.text[:300]}"
             )
-            time.sleep(60)
-            return None
 
-        if resposta.status_code >= 400:
-            logger.error(
-                "API HTTP %s: %s",
-                resposta.status_code,
-                resposta.text[:500]
-            )
+            with estado_lock:
+                stats["erros_api"] += 1
+
+            salvar_stats()
             return None
 
         try:
-            dados = resposta.json()
+            return resposta.json()
         except Exception:
-            logger.error("Resposta não é JSON válido.")
+            print("[API] Resposta não é JSON válido")
             return None
 
-        if isinstance(dados, dict):
-            if dados.get("success") == 0:
-                erro = dados.get("error", {})
-                logger.error(
-                    "Erro da API: %s",
-                    erro
-                )
-                return None
-
-        return dados
-
     except requests.RequestException as erro:
-        logger.error("Erro de conexão com API: %s", erro)
+        print(f"[API] Erro de conexão: {erro}")
+
+        with estado_lock:
+            stats["erros_api"] += 1
+
+        salvar_stats()
         return None
 
-    except Exception as erro:
-        logger.error("Erro inesperado na API: %s", erro)
+
+def extrair_lista_resposta(resposta):
+    if resposta is None:
+        return []
+
+    if isinstance(resposta, list):
+        return resposta
+
+    if not isinstance(resposta, dict):
+        return []
+
+    for chave in [
+        "data",
+        "results",
+        "fixtures",
+        "matches",
+        "events",
+        "games"
+    ]:
+        valor = resposta.get(chave)
+
+        if isinstance(valor, list):
+            return valor
+
+        if isinstance(valor, dict):
+            for chave_interna in [
+                "data",
+                "results",
+                "fixtures",
+                "matches",
+                "events",
+                "games"
+            ]:
+                lista = valor.get(chave_interna)
+
+                if isinstance(lista, list):
+                    return lista
+
+    return []
+
+
+def buscar_jogos_ao_vivo():
+    endpoints = [
+        "fixtures",
+        "matches",
+        "events",
+        "games"
+    ]
+
+    parametros = [
+        {"live": "all"},
+        {"status": "live"},
+        {"inplay": "true"},
+        {"is_live": "true"}
+    ]
+
+    for endpoint in endpoints:
+        for params in parametros:
+            resposta = requisicao_api(
+                endpoint,
+                params
+            )
+
+            lista = extrair_lista_resposta(resposta)
+
+            if lista:
+                jogos_validos = [
+                    jogo for jogo in lista
+                    if isinstance(jogo, dict)
+                ]
+
+                if jogos_validos:
+                    return jogos_validos
+
+    return []
+
+
+def buscar_historico_time(time_id):
+    endpoints = [
+        "fixtures",
+        "matches",
+        "events",
+        "games"
+    ]
+
+    parametros = [
+        {
+            "team_id": time_id,
+            "last": JOGOS_HISTORICO
+        },
+        {
+            "teamId": time_id,
+            "limit": JOGOS_HISTORICO
+        },
+        {
+            "team": time_id,
+            "last": JOGOS_HISTORICO
+        }
+    ]
+
+    for endpoint in endpoints:
+        for params in parametros:
+            resposta = requisicao_api(
+                endpoint,
+                params
+            )
+
+            lista = extrair_lista_resposta(resposta)
+
+            if lista:
+                return lista[:JOGOS_HISTORICO]
+
+    return []
+
+
+def buscar_detalhes_jogo(fixture_id):
+    endpoints = [
+        f"fixtures/{fixture_id}",
+        f"matches/{fixture_id}",
+        f"events/{fixture_id}",
+        f"games/{fixture_id}"
+    ]
+
+    for endpoint in endpoints:
+        resposta = requisicao_api(endpoint)
+
+        if isinstance(resposta, dict):
+            lista = extrair_lista_resposta(resposta)
+
+            if lista:
+                return lista[0]
+
+            if resposta:
+                return resposta
+
+    return {}
+
+
+# ============================================================
+# EXTRAÇÃO DE ESCANTEIOS
+# ============================================================
+
+def extrair_valor_estatistica(objeto, chaves):
+    if not isinstance(objeto, dict):
         return None
+
+    valor = primeiro_valor(objeto, chaves)
+
+    if valor is not None:
+        return numero(valor, None)
+
+    # Alguns fornecedores enviam:
+    # {"statistics": [{"type": "corners", "value": 3}]}
+    listas = [
+        objeto.get("statistics"),
+        objeto.get("stats"),
+        objeto.get("statistics_home"),
+        objeto.get("statisticsHome"),
+        objeto.get("home_statistics"),
+        objeto.get("away_statistics")
+    ]
+
+    for lista in listas:
+        if not isinstance(lista, list):
+            continue
+
+        for item in lista:
+            if not isinstance(item, dict):
+                continue
+
+            nome = str(
+                item.get("type")
+                or item.get("name")
+                or item.get("label")
+                or ""
+            ).lower()
+
+            if any(chave.lower() in nome for chave in chaves):
+                valor = (
+                    item.get("value")
+                    or item.get("total")
+                    or item.get("count")
+                )
+
+                if valor is not None:
+                    return numero(valor, None)
+
+    return None
+
+
+def extrair_escanteios_primeiro_tempo(jogo):
+    """
+    Tenta localizar escanteios do primeiro tempo.
+
+    Nomes possíveis:
+    - corners_1h
+    - first_half_corners
+    - corners_first_half
+    - corners_ht
+    - corners_first
+    - period_1_corners
+    - 1h_corners
+    """
+
+    if not isinstance(jogo, dict):
+        return None
+
+    chaves_diretas = [
+        "corners_1h",
+        "corners_1H",
+        "first_half_corners",
+        "firstHalfCorners",
+        "corners_first_half",
+        "cornersFirstHalf",
+        "corners_ht",
+        "cornersHT",
+        "corners_first",
+        "cornersFirst",
+        "period_1_corners",
+        "period1Corners",
+        "1h_corners",
+        "ht_corners",
+        "half_time_corners"
+    ]
+
+    valor = extrair_valor_estatistica(
+        jogo,
+        chaves_diretas
+    )
+
+    if valor is not None:
+        return valor
+
+    # Verifica objetos aninhados
+    objetos = [
+        jogo.get("stats"),
+        jogo.get("statistics"),
+        jogo.get("periods"),
+        jogo.get("period"),
+        jogo.get("score"),
+        jogo.get("scores"),
+        jogo.get("halftime"),
+        jogo.get("half_time"),
+        jogo.get("first_half"),
+        jogo.get("firstHalf")
+    ]
+
+    for objeto in objetos:
+        if isinstance(objeto, dict):
+            valor = extrair_valor_estatistica(
+                objeto,
+                chaves_diretas
+            )
+
+            if valor is not None:
+                return valor
+
+            # Alguns formatos:
+            # {"first_half": {"corners": 3}}
+            valor = extrair_valor_estatistica(
+                objeto,
+                [
+                    "corners",
+                    "corner",
+                    "total_corners",
+                    "totalCorners"
+                ]
+            )
+
+            if valor is not None:
+                return valor
+
+    return None
+
+
+def extrair_escanteios_total(jogo):
+    if not isinstance(jogo, dict):
+        return None
+
+    chaves = [
+        "corners",
+        "corner",
+        "total_corners",
+        "totalCorners",
+        "corners_total",
+        "cornersTotal"
+    ]
+
+    valor = extrair_valor_estatistica(
+        jogo,
+        chaves
+    )
+
+    if valor is not None:
+        return valor
+
+    return None
+
+
+def extrair_gols_total(jogo):
+    if not isinstance(jogo, dict):
+        return 0
+
+    gols = primeiro_valor(
+        jogo,
+        [
+            "goals",
+            "total_goals",
+            "totalGoals",
+            "goals_total",
+            "goalsTotal"
+        ],
+        0
+    )
+
+    if isinstance(gols, dict):
+        home = numero(
+            primeiro_valor(
+                gols,
+                ["home", "home_goals", "homeGoals"],
+                0
+            )
+        )
+
+        away = numero(
+            primeiro_valor(
+                gols,
+                ["away", "away_goals", "awayGoals"],
+                0
+            )
+        )
+
+        return home + away
+
+    return numero(gols, 0)
+
+
+# ============================================================
+# HISTÓRICO
+# ============================================================
+
+def extrair_time_id(jogo, casa=True):
+    if not isinstance(jogo, dict):
+        return None
+
+    teams = jogo.get("teams")
+
+    if isinstance(teams, dict):
+        lado = teams.get("home" if casa else "away")
+
+        if isinstance(lado, dict):
+            return (
+                lado.get("id")
+                or lado.get("team_id")
+                or lado.get("teamId")
+            )
+
+    chave = "home" if casa else "away"
+
+    lado = jogo.get(chave)
+
+    if isinstance(lado, dict):
+        return (
+            lado.get("id")
+            or lado.get("team_id")
+            or lado.get("teamId")
+        )
+
+    return (
+        jogo.get(f"{chave}_id")
+        or jogo.get(f"{chave}Id")
+    )
+
+
+def montar_historico(jogo):
+    historico = []
+
+    home_id = extrair_time_id(jogo, True)
+    away_id = extrair_time_id(jogo, False)
+
+    jogos_consultados = []
+
+    if home_id:
+        jogos_consultados.extend(
+            buscar_historico_time(home_id)
+        )
+
+    if away_id:
+        jogos_consultados.extend(
+            buscar_historico_time(away_id)
+        )
+
+    vistos = set()
+
+    for partida in jogos_consultados:
+        fixture_id = extrair_fixture_id(partida)
+
+        if fixture_id and fixture_id in vistos:
+            continue
+
+        if fixture_id:
+            vistos.add(fixture_id)
+
+        detalhes = partida
+
+        # Se a partida não possui escanteios do 1º tempo,
+        # tenta consultar os detalhes.
+        cantos_ht = extrair_escanteios_primeiro_tempo(
+            detalhes
+        )
+
+        if cantos_ht is None and fixture_id:
+            detalhes_api = buscar_detalhes_jogo(
+                fixture_id
+            )
+
+            if detalhes_api:
+                detalhes = detalhes_api
+                cantos_ht = extrair_escanteios_primeiro_tempo(
+                    detalhes
+                )
+
+        if cantos_ht is None:
+            continue
+
+        historico.append({
+            "fixture_id": fixture_id,
+            "cantos_ht": cantos_ht,
+            "gols_total": extrair_gols_total(detalhes),
+            "escanteios_total": extrair_escanteios_total(detalhes)
+        })
+
+        if len(historico) >= JOGOS_HISTORICO:
+            break
+
+    with estado_lock:
+        stats["historico_analisado"] += len(historico)
+
+    salvar_stats()
+
+    return historico
+
+
+def calcular_assertividade_under(historico, linha):
+    if not historico:
+        return 0.0
+
+    acertos = 0
+
+    for partida in historico:
+        valor = numero(
+            partida.get("cantos_ht"),
+            999
+        )
+
+        if valor < linha:
+            acertos += 1
+
+    return round(
+        (acertos / len(historico)) * 100,
+        2
+    )
+
+
+def historico_aprovado(historico, linha):
+    if len(historico) < MINIMO_HISTORICO:
+        return False
+
+    assertividade = calcular_assertividade_under(
+        historico,
+        linha
+    )
+
+    # Filtro principal de assertividade
+    return assertividade >= 80.0
+
+
+# ============================================================
+# MERCADO E ODDS
+# ============================================================
+
+def extrair_mercados(jogo):
+    mercados = []
+
+    possiveis = [
+        jogo.get("markets"),
+        jogo.get("odds"),
+        jogo.get("betting"),
+        jogo.get("bookmakers"),
+        jogo.get("selections")
+    ]
+
+    for item in possiveis:
+        if isinstance(item, list):
+            mercados.extend(item)
+
+        elif isinstance(item, dict):
+            mercados.append(item)
+
+    return mercados
+
+
+def localizar_odd_under_ht(jogo):
+    """
+    Procura uma odd de Under 4.5 escanteios no primeiro tempo.
+
+    A API pode retornar o mercado em formatos diferentes.
+    """
+
+    mercados = extrair_mercados(jogo)
+
+    # Também tenta o próprio jogo como objeto de mercado
+    if isinstance(jogo, dict):
+        mercados.append(jogo)
+
+    for mercado in mercados:
+        if not isinstance(mercado, dict):
+            continue
+
+        texto = json.dumps(
+            mercado,
+            ensure_ascii=False
+        ).lower()
+
+        eh_escanteio = (
+            "corner" in texto
+            or "corners" in texto
+            or "escanteio" in texto
+        )
+
+        eh_primeiro_tempo = (
+            "first half" in texto
+            or "first_half" in texto
+            or "firsthalf" in texto
+            or "1h" in texto
+            or "ht" in texto
+            or "half time" in texto
+        )
+
+        eh_under = (
+            "under" in texto
+            or "menos de" in texto
+            or "under 4.5" in texto
+        )
+
+        if not eh_escanteio:
+            continue
+
+        if not eh_primeiro_tempo:
+            continue
+
+        if not eh_under:
+            continue
+
+        linha = (
+            primeiro_valor(
+                mercado,
+                [
+                    "line",
+                    "total",
+                    "handicap",
+                    "value",
+                    "points"
+                ]
+            )
+        )
+
+        linha_numero = numero(linha, 0)
+
+        if linha_numero not in [0, 4.5]:
+            # Caso o texto contenha "4.5"
+            if "4.5" not in texto:
+                continue
+
+        odd = extrair_odd(mercado)
+
+        if ODD_MINIMA_SINAL <= odd <= ODD_MAXIMA:
+            return {
+                "odd": odd,
+                "linha": LINHA_ESCANTEIOS_HT,
+                "mercado": "Under 4.5 escanteios 1º tempo"
+            }
+
+    return None
+
+
+# ============================================================
+# SINAIS
+# ============================================================
+
+def fixture_ja_usado(fixture_id):
+    with estado_lock:
+        return str(fixture_id) in fixtures_usadas
+
+
+def marcar_fixture_usado(fixture_id):
+    with estado_lock:
+        fixtures_usadas.add(str(fixture_id))
+
+    salvar_fixtures()
+
+
+def criar_sinal(jogo):
+    fixture_id = extrair_fixture_id(jogo)
+
+    if not fixture_id:
+        return None
+
+    if fixture_ja_usado(fixture_id):
+        return None
+
+    if not jogo_ao_vivo(jogo):
+        return None
+
+    minuto = extrair_minuto(jogo)
+
+    if minuto <= 0:
+        return None
+
+    if minuto > MINUTO_MAXIMO_ANALISE:
+        return None
+
+    home, away = extrair_times(jogo)
+
+    odd_data = localizar_odd_under_ht(jogo)
+
+    if not odd_data:
+        return None
+
+    historico = montar_historico(jogo)
+
+    if not historico_aprovado(
+        historico,
+        LINHA_ESCANTEIOS_HT
+    ):
+        return None
+
+    assertividade = calcular_assertividade_under(
+        historico,
+        LINHA_ESCANTEIOS_HT
+    )
+
+    sinal = {
+        "fixture_id": fixture_id,
+        "home": home,
+        "away": away,
+        "minuto": minuto,
+        "mercado": odd_data["mercado"],
+        "linha": odd_data["linha"],
+        "odd": odd_data["odd"],
+        "assertividade": assertividade,
+        "historico_jogos": len(historico),
+        "criado_em": agora_utc(),
+        "status": "PENDENTE"
+    }
+
+    with estado_lock:
+        sinais_pendentes[fixture_id] = sinal
+        stats["sinais_total"] += 1
+        stats["pendentes"] = len(sinais_pendentes)
+        stats["ultimo_sinal"] = sinal
+
+    marcar_fixture_usado(fixture_id)
+    salvar_stats()
+
+    return sinal
 
 
 # ============================================================
@@ -292,9 +1052,7 @@ def api_get(endpoint, params=None):
 
 def enviar_telegram(mensagem):
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        logger.warning(
-            "TELEGRAM_TOKEN ou CHAT_ID não configurado."
-        )
+        print("[TELEGRAM] Token ou Chat ID não configurado")
         return False
 
     url = (
@@ -313,762 +1071,282 @@ def enviar_telegram(mensagem):
         resposta = requests.post(
             url,
             json=dados,
-            timeout=30
+            timeout=20
         )
 
-        if resposta.status_code != 200:
-            logger.error(
-                "Erro Telegram HTTP %s: %s",
-                resposta.status_code,
-                resposta.text[:500]
-            )
-            return False
+        if resposta.status_code == 200:
+            print("[TELEGRAM] Mensagem enviada")
+            return True
 
-        retorno = resposta.json()
+        print(
+            f"[TELEGRAM] Erro {resposta.status_code}: "
+            f"{resposta.text[:300]}"
+        )
 
-        if not retorno.get("ok"):
-            logger.error(
-                "Telegram rejeitou mensagem: %s",
-                retorno
-            )
-            return False
-
-        logger.info("Mensagem enviada ao Telegram.")
-        return True
+        return False
 
     except requests.RequestException as erro:
-        logger.error("Erro ao enviar Telegram: %s", erro)
+        print(f"[TELEGRAM] Erro: {erro}")
         return False
 
 
-# ============================================================
-# BUSCAR JOGOS
-# ============================================================
-
-def buscar_jogos():
-    """
-    Busca jogos agendados e ao vivo.
-
-    Não utiliza status inválido como 'upcoming'.
-    """
-
-    jogos = []
-
-    for status in ["live", "scheduled"]:
-        dados = api_get(
-            "fixtures",
-            params={
-                "status": status
-            }
-        )
-
-        if not dados:
-            continue
-
-        if isinstance(dados, dict):
-            lista = (
-                dados.get("data")
-                or dados.get("fixtures")
-                or dados.get("results")
-                or []
-            )
-        elif isinstance(dados, list):
-            lista = dados
-        else:
-            lista = []
-
-        if isinstance(lista, list):
-            jogos.extend(lista)
-
-    # Remove duplicados
-    resultado = []
-    ids_vistos = set()
-
-    for jogo in jogos:
-        fixture_id = extrair_id_jogo(jogo)
-
-        if fixture_id is None:
-            continue
-
-        if fixture_id in ids_vistos:
-            continue
-
-        ids_vistos.add(fixture_id)
-        resultado.append(jogo)
-
-    return resultado
-
-
-def extrair_id_jogo(jogo):
-    if not isinstance(jogo, dict):
-        return None
+def mensagem_entrada(sinal):
+    home = html.escape(str(sinal["home"]))
+    away = html.escape(str(sinal["away"]))
+    mercado = html.escape(str(sinal["mercado"]))
 
     return (
-        jogo.get("id")
-        or jogo.get("fixture_id")
-        or jogo.get("fixtureId")
-        or jogo.get("match_id")
+        "⚽ <b>NOVO SINAL AO VIVO</b>\n\n"
+        f"🏟️ <b>{home} x {away}</b>\n"
+        f"⏱️ Minuto: <b>{sinal['minuto']}'</b>\n\n"
+        f"🎯 Mercado: <b>{mercado}</b>\n"
+        f"💰 Odd: <b>{sinal['odd']:.2f}</b>\n"
+        f"📊 Assertividade histórica: "
+        f"<b>{sinal['assertividade']:.2f}%</b>\n"
+        f"📚 Jogos analisados: "
+        f"<b>{sinal['historico_jogos']}</b>\n\n"
+        "⚠️ <i>Entrada sugerida. "
+        "Aposte com responsabilidade.</i>"
     )
 
 
-def extrair_nome_time(jogo, casa=True):
-    if not isinstance(jogo, dict):
-        return "Time desconhecido"
-
-    home = (
-        jogo.get("home_team")
-        or jogo.get("homeTeam")
-        or jogo.get("home")
-        or {}
-    )
-
-    away = (
-        jogo.get("away_team")
-        or jogo.get("awayTeam")
-        or jogo.get("away")
-        or {}
-    )
-
-    time = home if casa else away
-
-    if isinstance(time, dict):
-        return (
-            time.get("name")
-            or time.get("short_name")
-            or time.get("shortName")
-            or "Time desconhecido"
-        )
-
-    if isinstance(time, str):
-        return time
-
-    return "Time desconhecido"
-
-
 # ============================================================
-# HISTÓRICO DO JOGO
+# RESOLUÇÃO DOS SINAIS
 # ============================================================
 
-def buscar_historico(fixture_id):
-    chave = f"historico_{fixture_id}"
-
-    cache = obter_cache(chave)
-
-    if cache is not None:
-        return cache
-
-    endpoints = [
-        f"fixtures/{fixture_id}/statistics",
-        f"fixtures/{fixture_id}/events"
-    ]
-
-    resultado = {}
-
-    for endpoint in endpoints:
-        dados = api_get(endpoint)
-
-        if dados:
-            resultado[endpoint] = dados
-
-    salvar_cache(chave, resultado)
-
-    return resultado
-
-
-# ============================================================
-# EXTRAÇÃO DE ESTATÍSTICAS
-# ============================================================
-
-def numero(dados, chaves, padrao=0):
-    if not isinstance(dados, dict):
-        return padrao
-
-    for chave in chaves:
-        valor = dados.get(chave)
-
-        if isinstance(valor, (int, float)):
-            return valor
-
-        if isinstance(valor, str):
-            try:
-                return float(valor.replace(",", "."))
-            except ValueError:
-                pass
-
-    return padrao
-
-
-def extrair_estatisticas(jogo, historico):
+def resultado_sinal(sinal, jogo_atual):
     """
-    Tenta extrair os números mais comuns retornados pelas APIs.
+    Resolve o sinal usando os escanteios do primeiro tempo.
+
+    Para Under 4.5:
+    - WIN se total de escanteios HT < 4.5
+    - LOSS se total de escanteios HT >= 4.5
     """
 
-    gols_casa = numero(
-        jogo,
-        [
-            "home_goals",
-            "homeGoals",
-            "goals_home",
-            "score_home"
-        ]
+    cantos_ht = extrair_escanteios_primeiro_tempo(
+        jogo_atual
     )
 
-    gols_fora = numero(
-        jogo,
-        [
-            "away_goals",
-            "awayGoals",
-            "goals_away",
-            "score_away"
-        ]
-    )
-
-    escanteios_casa = numero(
-        jogo,
-        [
-            "home_corners",
-            "homeCorners",
-            "corners_home"
-        ]
-    )
-
-    escanteios_fora = numero(
-        jogo,
-        [
-            "away_corners",
-            "awayCorners",
-            "corners_away"
-        ]
-    )
-
-    finalizados = {
-        "gols_casa": gols_casa,
-        "gols_fora": gols_fora,
-        "escanteios_casa": escanteios_casa,
-        "escanteios_fora": escanteios_fora
-    }
-
-    # Algumas APIs retornam estatísticas dentro do histórico
-    if isinstance(historico, dict):
-        texto = json.dumps(
-            historico,
-            ensure_ascii=False
-        ).lower()
-
-        # Apenas sinaliza que há dados históricos.
-        # Não inventa números que não foram retornados.
-        finalizados["tem_historico"] = len(texto) > 10
-    else:
-        finalizados["tem_historico"] = False
-
-    return finalizados
-
-
-# ============================================================
-# ANÁLISE DO SINAL
-# ============================================================
-
-def analisar_jogo(jogo):
-    fixture_id = extrair_id_jogo(jogo)
-
-    if fixture_id is None:
+    if cantos_ht is None:
         return None
 
-    nome_casa = extrair_nome_time(jogo, True)
-    nome_fora = extrair_nome_time(jogo, False)
+    if cantos_ht < sinal["linha"]:
+        return "WIN"
 
-    historico = buscar_historico(fixture_id)
-
-    estatisticas = extrair_estatisticas(
-        jogo,
-        historico
-    )
-
-    gols_casa = estatisticas["gols_casa"]
-    gols_fora = estatisticas["gols_fora"]
-
-    escanteios_casa = estatisticas["escanteios_casa"]
-    escanteios_fora = estatisticas["escanteios_fora"]
-
-    gols_total = gols_casa + gols_fora
-    escanteios_total = (
-        escanteios_casa + escanteios_fora
-    )
-
-    # Indicadores
-    prob_gols = 0
-    prob_escanteios = 0
-
-    # Análise conservadora:
-    # sem estatística suficiente, não força sinal.
-    if gols_total >= 1:
-        prob_gols += 25
-
-    if gols_total >= 2:
-        prob_gols += 20
-
-    if escanteios_total >= 4:
-        prob_escanteios += 20
-
-    if escanteios_total >= 6:
-        prob_escanteios += 20
-
-    if estatisticas["tem_historico"]:
-        prob_gols += 10
-        prob_escanteios += 10
-
-    assertividade = (
-        prob_gols * 0.5
-        + prob_escanteios * 0.5
-    )
-
-    assertividade = min(95, round(assertividade, 2))
-
-    mercado = (
-        f"Over {LINHA_GOLS} gols "
-        f"+ Over {LINHA_ESCANTEIOS} escanteios"
-    )
-
-    # Filtros mínimos
-    if not estatisticas["tem_historico"]:
-        return None
-
-    if assertividade < ASSERTIVIDADE_MINIMA:
-        return None
-
-    return {
-        "fixture_id": fixture_id,
-        "casa": nome_casa,
-        "fora": nome_fora,
-        "mercado": mercado,
-        "assertividade": assertividade,
-        "gols_total": gols_total,
-        "escanteios_total": escanteios_total,
-        "horario": datetime.now(
-            timezone.utc
-        ).isoformat(),
-        "status": "pendente"
-    }
+    return "LOSS"
 
 
-# ============================================================
-# MENSAGEM DO SINAL
-# ============================================================
-
-def formatar_sinal(sinal):
-    return (
-        "🚨 <b>SINAL COMBINADO</b>\n\n"
-        f"⚽ <b>{html.escape(sinal['casa'])}</b> "
-        f"x "
-        f"<b>{html.escape(sinal['fora'])}</b>\n\n"
-        f"🎯 Mercado: <b>{sinal['mercado']}</b>\n"
-        f"📊 Assertividade estimada: "
-        f"<b>{sinal['assertividade']}%</b>\n"
-        f"⚽ Gols atuais: {sinal['gols_total']}\n"
-        f"🚩 Escanteios atuais: "
-        f"{sinal['escanteios_total']}\n\n"
-        "⚠️ Sinal estatístico. "
-        "Não existe garantia de green."
-    )
-
-
-# ============================================================
-# CONTROLE DE DUPLICIDADE
-# ============================================================
-
-sinais_enviados = {}
-sinais_lock = threading.Lock()
-
-
-def sinal_ja_enviado(fixture_id):
-    with sinais_lock:
-        return fixture_id in sinais_enviados
-
-
-def registrar_sinal_enviado(sinal):
-    with sinais_lock:
-        sinais_enviados[
-            sinal["fixture_id"]
-        ] = time.time()
-
-
-# ============================================================
-# CICLO DE ANÁLISE
-# ============================================================
-
-def ciclo_analise():
-    logger.info("Iniciando ciclo de análise.")
-
-    jogos = buscar_jogos()
-
-    if not jogos:
-        logger.info("Nenhum jogo encontrado.")
+def resolver_sinais():
+    if not sinais_pendentes:
         return
 
-    logger.info(
-        "Jogos encontrados: %s | Jogos analisados: %s",
-        len(jogos),
-        min(len(jogos), MAX_JOGOS_ANALISAR)
-    )
-
-    sinais_ciclo = 0
-
-    # Limita a quantidade de jogos para evitar excesso de API
-    jogos_limitados = jogos[:MAX_JOGOS_ANALISAR]
-
-    for jogo in jogos_limitados:
-        if sinais_ciclo >= MAX_SINAIS_POR_CICLO:
-            break
-
-        try:
-            sinal = analisar_jogo(jogo)
-
-            if not sinal:
-                continue
-
-            fixture_id = sinal["fixture_id"]
-
-            if sinal_ja_enviado(fixture_id):
-                logger.info(
-                    "Sinal já enviado para jogo %s.",
-                    fixture_id
-                )
-                continue
-
-            mensagem = formatar_sinal(sinal)
-
-            enviado = enviar_telegram(mensagem)
-
-            if enviado:
-                registrar_sinal_enviado(sinal)
-
-                with stats_lock:
-                    stats["sinais_enviados"] += 1
-                    stats["pendentes"] += 1
-                    stats["ultima_atualizacao"] = (
-                        datetime.now(
-                            timezone.utc
-                        ).isoformat()
-                    )
-
-                    stats["historico"].append(sinal)
-
-                    # Mantém somente os últimos 200 registros
-                    stats["historico"] = (
-                        stats["historico"][-200:]
-                    )
-
-                salvar_stats()
-
-                sinais_ciclo += 1
-
-                logger.info(
-                    "Sinal enviado: %s x %s | %s%%",
-                    sinal["casa"],
-                    sinal["fora"],
-                    sinal["assertividade"]
-                )
-
-        except Exception as erro:
-            logger.exception(
-                "Erro analisando jogo: %s",
-                erro
-            )
-
-    logger.info(
-        "Ciclo concluído. Sinais enviados: %s",
-        sinais_ciclo
-    )
-
-
-# ============================================================
-# RESOLUÇÃO DE RESULTADOS
-# ============================================================
-
-def buscar_resultados():
-    """
-    Busca partidas finalizadas.
-
-    Usa status=finished, que é aceito pela API.
-    """
-
-    dados = api_get(
-        "fixtures",
-        params={
-            "status": "finished"
-        }
-    )
-
-    if not dados:
-        return []
-
-    if isinstance(dados, dict):
-        resultados = (
-            dados.get("data")
-            or dados.get("fixtures")
-            or dados.get("results")
-            or []
+    for fixture_id, sinal in list(
+        sinais_pendentes.items()
+    ):
+        detalhes = buscar_detalhes_jogo(
+            fixture_id
         )
-    elif isinstance(dados, list):
-        resultados = dados
-    else:
-        resultados = []
 
-    return resultados
-
-
-def extrair_resultado(jogo):
-    gols_casa = numero(
-        jogo,
-        [
-            "home_goals",
-            "homeGoals",
-            "goals_home",
-            "score_home"
-        ]
-    )
-
-    gols_fora = numero(
-        jogo,
-        [
-            "away_goals",
-            "awayGoals",
-            "goals_away",
-            "score_away"
-        ]
-    )
-
-    escanteios_casa = numero(
-        jogo,
-        [
-            "home_corners",
-            "homeCorners",
-            "corners_home"
-        ]
-    )
-
-    escanteios_fora = numero(
-        jogo,
-        [
-            "away_corners",
-            "awayCorners",
-            "corners_away"
-        ]
-    )
-
-    return {
-        "gols_total": gols_casa + gols_fora,
-        "escanteios_total": (
-            escanteios_casa + escanteios_fora
-        )
-    }
-
-
-def ciclo_resultados():
-    logger.info("Iniciando ciclo de resultados.")
-
-    resultados = buscar_resultados()
-
-    if not resultados:
-        logger.info("Nenhum resultado encontrado.")
-        return
-
-    with stats_lock:
-        pendentes = [
-            item
-            for item in stats["historico"]
-            if item.get("status") == "pendente"
-        ]
-
-    if not pendentes:
-        logger.info("Nenhum sinal pendente.")
-        return
-
-    for sinal in pendentes:
-        fixture_id = sinal["fixture_id"]
-
-        jogo_encontrado = None
-
-        for jogo in resultados:
-            if extrair_id_jogo(jogo) == fixture_id:
-                jogo_encontrado = jogo
-                break
-
-        if not jogo_encontrado:
+        if not detalhes:
             continue
 
-        resultado = extrair_resultado(
-            jogo_encontrado
+        resultado = resultado_sinal(
+            sinal,
+            detalhes
         )
 
-        gols_ok = (
-            resultado["gols_total"] > LINHA_GOLS
-        )
+        if resultado is None:
+            continue
 
-        escanteios_ok = (
-            resultado["escanteios_total"]
-            > LINHA_ESCANTEIOS
-        )
-
-        green = gols_ok and escanteios_ok
-
-        with stats_lock:
-            for item in stats["historico"]:
-                if item.get("fixture_id") == fixture_id:
-                    item["status"] = (
-                        "win" if green else "loss"
-                    )
-                    item["resultado_gols"] = (
-                        resultado["gols_total"]
-                    )
-                    item["resultado_escanteios"] = (
-                        resultado["escanteios_total"]
-                    )
-
-                    break
-
-            stats["sinais_resolvidos"] += 1
-
-            if green:
+        with estado_lock:
+            if resultado == "WIN":
                 stats["wins"] += 1
             else:
                 stats["losses"] += 1
 
-            if stats["pendentes"] > 0:
-                stats["pendentes"] -= 1
+            sinais_pendentes.pop(
+                fixture_id,
+                None
+            )
 
-            atualizar_assertividade()
-
-            stats["ultima_atualizacao"] = (
-                datetime.now(
-                    timezone.utc
-                ).isoformat()
+            stats["pendentes"] = len(
+                sinais_pendentes
             )
 
         salvar_stats()
 
-        logger.info(
-            "Sinal resolvido: %s | %s",
-            fixture_id,
-            "WIN" if green else "LOSS"
+        mensagem = (
+            "📌 <b>RESOLUÇÃO DO SINAL</b>\n\n"
+            f"🏟️ {html.escape(str(sinal['home']))} "
+            f"x "
+            f"{html.escape(str(sinal['away']))}\n"
+            f"🎯 {html.escape(str(sinal['mercado']))}\n"
+            f"💰 Odd: <b>{sinal['odd']:.2f}</b>\n"
+            f"📊 Assertividade prevista: "
+            f"<b>{sinal['assertividade']:.2f}%</b>\n\n"
+            f"🏁 Resultado: <b>{resultado}</b>"
         )
 
+        enviar_telegram(mensagem)
+
 
 # ============================================================
-# THREAD DE ANÁLISE
+# ASSERTIVIDADE DO ROBÔ
 # ============================================================
 
-def worker_analise():
+def assertividade_robo():
+    with estado_lock:
+        wins = inteiro(stats.get("wins"), 0)
+        losses = inteiro(stats.get("losses"), 0)
+
+    total = wins + losses
+
+    if total == 0:
+        return 0.0
+
+    return round(
+        (wins / total) * 100,
+        2
+    )
+
+
+# ============================================================
+# LOOP PRINCIPAL
+# ============================================================
+
+def analisar_jogos():
+    print("[ROBO] Iniciando análise de jogos ao vivo...")
+
     while True:
         try:
-            ciclo_analise()
+            jogos = buscar_jogos_ao_vivo()
 
-        except Exception as erro:
-            logger.exception(
-                "Erro no worker de análise: %s",
-                erro
+            with estado_lock:
+                stats["ultima_analise"] = agora_utc()
+
+            salvar_stats()
+
+            print(
+                f"[ROBO] Jogos encontrados: {len(jogos)}"
             )
 
-        logger.info(
-            "Aguardando %s segundos para nova análise.",
-            INTERVALO_ANALISE
-        )
+            for jogo in jogos:
+                try:
+                    sinal = criar_sinal(jogo)
+
+                    if sinal:
+                        print(
+                            "[ROBO] Novo sinal: "
+                            f"{sinal['home']} x "
+                            f"{sinal['away']}"
+                        )
+
+                        enviar_telegram(
+                            mensagem_entrada(sinal)
+                        )
+
+                except Exception as erro:
+                    print(
+                        f"[ROBO] Erro ao analisar jogo: "
+                        f"{erro}"
+                    )
+
+            try:
+                resolver_sinais()
+            except Exception as erro:
+                print(
+                    f"[ROBO] Erro ao resolver sinais: "
+                    f"{erro}"
+                )
+
+        except Exception as erro:
+            print(
+                f"[ROBO] Erro geral no ciclo: {erro}"
+            )
 
         time.sleep(INTERVALO_ANALISE)
 
 
 # ============================================================
-# THREAD DE RESULTADOS
-# ============================================================
-
-def worker_resultados():
-    while True:
-        try:
-            ciclo_resultados()
-
-        except Exception as erro:
-            logger.exception(
-                "Erro no worker de resultados: %s",
-                erro
-            )
-
-        logger.info(
-            "Aguardando %s segundos para resultados.",
-            INTERVALO_RESULTADOS
-        )
-
-        time.sleep(INTERVALO_RESULTADOS)
-
-
-# ============================================================
-# ROTAS FLASK
+# ENDPOINTS FLASK
 # ============================================================
 
 @app.route("/")
-def inicio():
+def home():
     return jsonify({
         "status": "online",
-        "bot": "Robô Gols + Escanteios",
-        "horario": datetime.now(
-            timezone.utc
-        ).isoformat()
+        "robo": "Robô de escanteios HT",
+        "mercado": "Under 4.5 escanteios no 1º tempo",
+        "odd_maxima": ODD_MAXIMA,
+        "historico_jogos": JOGOS_HISTORICO,
+        "minimo_historico": MINIMO_HISTORICO,
+        "horario": agora_utc()
     })
 
 
 @app.route("/status")
 def status():
-    with stats_lock:
-        atualizar_assertividade()
+    with estado_lock:
+        dados = dict(stats)
+        dados["assertividade"] = assertividade_robo()
+        dados["sinais_pendentes"] = list(
+            sinais_pendentes.values()
+        )
+        dados["fixtures_usadas"] = len(
+            fixtures_usadas
+        )
 
-        return jsonify({
-            "status": "online",
-            "stats": stats,
-            "limite_requisicoes_minuto": (
-                LIMITE_REQUISICOES_MINUTO
-            ),
-            "intervalo_analise": INTERVALO_ANALISE,
-            "intervalo_resultados": INTERVALO_RESULTADOS,
-            "max_jogos_analisar": MAX_JOGOS_ANALISAR,
-            "assertividade_minima": ASSERTIVIDADE_MINIMA
-        })
+    return jsonify(dados)
 
 
-@app.route("/stats")
-def rota_stats():
-    with stats_lock:
-        atualizar_assertividade()
-        return jsonify(stats)
+@app.route("/health")
+def health():
+    return jsonify({
+        "status": "healthy",
+        "horario": agora_utc()
+    })
 
 
 # ============================================================
-# INICIALIZAÇÃO
+# INICIAR THREAD DO ROBÔ
 # ============================================================
 
-def iniciar_workers():
-    thread_analise = threading.Thread(
-        target=worker_analise,
-        daemon=True
-    )
+_thread_iniciada = False
+_thread_lock = threading.Lock()
 
-    thread_resultados = threading.Thread(
-        target=worker_resultados,
-        daemon=True
-    )
 
-    thread_analise.start()
-    thread_resultados.start()
+def iniciar_robo():
+    global _thread_iniciada
 
-    logger.info("Workers iniciados.")
+    with _thread_lock:
+        if _thread_iniciada:
+            return
 
+        thread = threading.Thread(
+            target=analisar_jogos,
+            daemon=True
+        )
+
+        thread.start()
+        _thread_iniciada = True
+
+        print("[ROBO] Thread iniciada")
+
+
+# No Render/Gunicorn, este trecho será executado
+# quando o módulo app for importado.
+iniciar_robo()
+
+
+# ============================================================
+# EXECUÇÃO LOCAL
+# ============================================================
 
 if __name__ == "__main__":
-    iniciar_workers()
-
-    porta = int(
-        os.getenv("PORT", "10000")
-    )
-
     app.run(
         host="0.0.0.0",
-        port=porta
+        port=int(
+            os.getenv("PORT", "5000")
+        ),
+        debug=False
     )

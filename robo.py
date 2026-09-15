@@ -3,86 +3,27 @@ import json
 import time
 import threading
 import logging
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from datetime import datetime, timezone, timedelta
 
 import requests
 from flask import Flask, jsonify
 
 
 # ============================================================
-# CONFIGURAÇÕES GERAIS
+# CONFIGURAÇÃO
 # ============================================================
 
 app = Flask(__name__)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s UTC | %(levelname)s | %(message)s"
-)
 
 BASE_API = os.getenv(
     "BASE_API",
     "https://api.5dollarfootballapi.com/v1"
 ).rstrip("/")
 
-API_KEY = os.getenv("FIVE_DOLLAR_API_KEY", "").strip()
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
-CHAT_ID = os.getenv("CHAT_ID", "").strip()
+FIVE_DOLLAR_API_KEY = os.getenv("FIVE_DOLLAR_API_KEY")
 
-# Banca e Gale
-ENTRADA_INICIAL = float(os.getenv("ENTRADA_INICIAL", "10"))
-MULTIPLICADOR_GALE = float(os.getenv("MULTIPLICADOR_GALE", "2"))
-MAX_GALES = int(os.getenv("MAX_GALES", "2"))
-TOTAL_BANCAS = int(os.getenv("TOTAL_BANCAS", "3"))
-
-# Janela de análise
-JANELA_HORAS = int(os.getenv("JANELA_HORAS", "24"))
-INTERVALO_ANALISE_SEGUNDOS = int(
-    os.getenv("INTERVALO_ANALISE_SEGUNDOS", "900")
-)
-
-# Odd da combinada
-ODD_MINIMA = float(os.getenv("ODD_MINIMA", "1.80"))
-ODD_MAXIMA = float(os.getenv("ODD_MAXIMA", "2.50"))
-ODD_ALVO = float(os.getenv("ODD_ALVO", "2.00"))
-
-# Mercados
-MERCADO_ESCANTEIOS = os.getenv(
-    "MERCADO_ESCANTEIOS",
-    "over_8.5"
-)
-
-MERCADO_GOLS = os.getenv(
-    "MERCADO_GOLS",
-    "under_4.5"
-)
-
-# Filtros de segurança
-MIN_JOGOS_HISTORICO = int(
-    os.getenv("MIN_JOGOS_HISTORICO", "5")
-)
-
-MIN_MEDIA_ESCANTEIOS = float(
-    os.getenv("MIN_MEDIA_ESCANTEIOS", "8.5")
-)
-
-MAX_MEDIA_GOLS = float(
-    os.getenv("MAX_MEDIA_GOLS", "4.0")
-)
-
-MIN_PROBABILIDADE_HISTORICA = float(
-    os.getenv("MIN_PROBABILIDADE_HISTORICA", "0.62")
-)
-
-MAX_JOGOS_ODDS_POR_CICLO = int(
-    os.getenv("MAX_JOGOS_ODDS_POR_CICLO", "25")
-)
-
-TIMEZONE_OFFSET = os.getenv(
-    "TIMEZONE_OFFSET",
-    "-03:00"
-)
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 ARQUIVO_STATS = os.getenv(
     "ARQUIVO_STATS",
@@ -99,125 +40,1569 @@ ARQUIVO_CACHE = os.getenv(
     "cache.json"
 )
 
-LOCK = threading.Lock()
+
+# ============================================================
+# PARÂMETROS DO ROBÔ
+# ============================================================
+
+ENTRADA_INICIAL = float(
+    os.getenv("ENTRADA_INICIAL", "10")
+)
+
+MULTIPLICADOR_GALE = float(
+    os.getenv("MULTIPLICADOR_GALE", "2")
+)
+
+MAX_GALES = int(
+    os.getenv("MAX_GALES", "2")
+)
+
+TOTAL_BANCAS = int(
+    os.getenv("TOTAL_BANCAS", "3")
+)
+
+JANELA_HORAS = int(
+    os.getenv("JANELA_HORAS", "24")
+)
+
+INTERVALO_ANALISE_SEGUNDOS = int(
+    os.getenv(
+        "INTERVALO_ANALISE_SEGUNDOS",
+        "900"
+    )
+)
+
+ODD_MINIMA = float(
+    os.getenv("ODD_MINIMA", "1.80")
+)
+
+ODD_MAXIMA = float(
+    os.getenv("ODD_MAXIMA", "2.50")
+)
+
+ODD_ALVO = float(
+    os.getenv("ODD_ALVO", "2.00")
+)
+
+MERCADO_ESCANTEIOS = os.getenv(
+    "MERCADO_ESCANTEIOS",
+    "over_8.5"
+)
+
+MERCADO_GOLS = os.getenv(
+    "MERCADO_GOLS",
+    "under_4.5"
+)
+
+MIN_JOGOS_HISTORICO = int(
+    os.getenv("MIN_JOGOS_HISTORICO", "5")
+)
+
+MIN_MEDIA_ESCANTEIOS = float(
+    os.getenv("MIN_MEDIA_ESCANTEIOS", "8.5")
+)
+
+MAX_MEDIA_GOLS = float(
+    os.getenv("MAX_MEDIA_GOLS", "4.0")
+)
+
+MIN_PROBABILIDADE_HISTORICA = float(
+    os.getenv(
+        "MIN_PROBABILIDADE_HISTORICA",
+        "0.62"
+    )
+)
+
+MAX_JOGOS_ODDS_POR_CICLO = int(
+    os.getenv(
+        "MAX_JOGOS_ODDS_POR_CICLO",
+        "25"
+    )
+)
+
+
+# ============================================================
+# LOG
+# ============================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
+
+# ============================================================
+# LOCK
+# ============================================================
+
+lock = threading.Lock()
 
 
 # ============================================================
 # ESTRUTURAS PADRÃO
 # ============================================================
 
-stats = {
+stats_padrao = {
     "total_sinais": 0,
     "resolvidos": 0,
     "wins": 0,
     "losses": 0,
     "assertividade": 0.0,
     "lucro_teorico": 0.0,
+
     "por_banca": {},
-    "por_gale": {},
-    "por_mercado": {},
+
+    "por_gale": {
+        "0": {
+            "entradas": 0,
+            "wins": 0,
+            "losses": 0
+        },
+        "1": {
+            "entradas": 0,
+            "wins": 0,
+            "losses": 0
+        },
+        "2": {
+            "entradas": 0,
+            "wins": 0,
+            "losses": 0
+        }
+    },
+
+    "por_mercado": {
+        "combinado": {
+            "entradas": 0,
+            "wins": 0,
+            "losses": 0
+        }
+    },
+
     "ultima_atualizacao": None
 }
 
-sinais = {}
 
-bancas = {}
-
-cache = {
+cache_padrao = {
     "fixtures": [],
     "ultima_consulta": None
 }
 
 
 # ============================================================
-# UTILITÁRIOS DE ARQUIVOS
+# JSON
 # ============================================================
 
-def carregar_json(caminho, padrao):
-    if not os.path.exists(caminho):
-        return padrao
+def carregar_json(arquivo, padrao):
+
+    if not os.path.exists(arquivo):
+        return padrao.copy()
 
     try:
-        with open(caminho, "r", encoding="utf-8") as arquivo:
-            return json.load(arquivo)
-    except Exception as erro:
-        logging.error("Erro ao carregar %s: %s", caminho, erro)
-        return padrao
+
+        with open(
+            arquivo,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            dados = json.load(f)
+
+            return dados
+
+    except Exception as e:
+
+        logging.error(
+            "Erro carregando %s: %s",
+            arquivo,
+            e
+        )
+
+        return padrao.copy()
 
 
-def salvar_json(caminho, dados):
+def salvar_json(arquivo, dados):
+
     try:
-        temporario = caminho + ".tmp"
+
+        temporario = arquivo + ".tmp"
 
         with open(
             temporario,
             "w",
             encoding="utf-8"
-        ) as arquivo:
+        ) as f:
+
             json.dump(
                 dados,
-                arquivo,
+                f,
                 ensure_ascii=False,
                 indent=2
             )
 
-        os.replace(temporario, caminho)
+        os.replace(
+            temporario,
+            arquivo
+        )
 
-    except Exception as erro:
-        logging.error("Erro ao salvar %s: %s", caminho, erro)
+        return True
+
+    except Exception as e:
+
+        logging.error(
+            "Erro salvando %s: %s",
+            arquivo,
+            e
+        )
+
+        return False
 
 
-def carregar_dados():
-    global stats, sinais, bancas, cache
+# ============================================================
+# CARREGAMENTO
+# ============================================================
 
-    stats = carregar_json(ARQUIVO_STATS, stats)
-    sinais = carregar_json(ARQUIVO_SINAIS, {})
-    cache = carregar_json(ARQUIVO_CACHE, cache)
+stats = carregar_json(
+    ARQUIVO_STATS,
+    stats_padrao
+)
 
-    for numero in range(1, TOTAL_BANCAS + 1):
-        chave = str(numero)
+sinais = carregar_json(
+    ARQUIVO_SINAIS,
+    {}
+)
 
-        if chave not in stats.get("por_banca", {}):
+cache = carregar_json(
+    ARQUIVO_CACHE,
+    cache_padrao
+)
+
+
+# ============================================================
+# GARANTIR ESTRUTURAS
+# ============================================================
+
+def garantir_estrutura_stats():
+
+    global stats
+
+    if not isinstance(stats, dict):
+        stats = stats_padrao.copy()
+
+    stats.setdefault(
+        "total_sinais",
+        0
+    )
+
+    stats.setdefault(
+        "resolvidos",
+        0
+    )
+
+    stats.setdefault(
+        "wins",
+        0
+    )
+
+    stats.setdefault(
+        "losses",
+        0
+    )
+
+    stats.setdefault(
+        "assertividade",
+        0.0
+    )
+
+    stats.setdefault(
+        "lucro_teorico",
+        0.0
+    )
+
+    stats.setdefault(
+        "por_banca",
+        {}
+    )
+
+    stats.setdefault(
+        "por_gale",
+        {}
+    )
+
+    for gale in range(MAX_GALES + 1):
+
+        stats["por_gale"].setdefault(
+            str(gale),
+            {
+                "entradas": 0,
+                "wins": 0,
+                "losses": 0
+            }
+        )
+
+    stats.setdefault(
+        "por_mercado",
+        {}
+    )
+
+    stats["por_mercado"].setdefault(
+        "combinado",
+        {
+            "entradas": 0,
+            "wins": 0,
+            "losses": 0
+        }
+    )
+
+
+garantir_estrutura_stats()
+
+
+# ============================================================
+# BANCAS
+# ============================================================
+
+def inicializar_bancas():
+
+    alterou = False
+
+    for i in range(1, TOTAL_BANCAS + 1):
+
+        chave = str(i)
+
+        if chave not in stats["por_banca"]:
+
             stats["por_banca"][chave] = {
-                "sinais": 0,
-                "resolvidos": 0,
+                "status": "livre",
+                "gale": 0,
+                "entrada_atual": ENTRADA_INICIAL,
+                "total_entradas": 0,
                 "wins": 0,
                 "losses": 0,
-                "assertividade": 0.0,
-                "gale_atual": 0,
-                "saldo_teorico": 0.0
+                "lucro": 0.0,
+                "sinal_atual": None
             }
 
-        if chave not in bancas:
-            bancas[chave] = {
-                "id": numero,
-                "status": "livre",
-                "gale_atual": 0,
-                "sinal_id": None,
-                "ultima_resolucao": None
-            }
+            alterou = True
+
+    if alterou:
+
+        salvar_json(
+            ARQUIVO_STATS,
+            stats
+        )
 
 
-def salvar_dados():
-    salvar_json(ARQUIVO_STATS, stats)
-    salvar_json(ARQUIVO_SINAIS, sinais)
-    salvar_json(ARQUIVO_CACHE, cache)
+inicializar_bancas()
+
+
+# ============================================================
+# API
+# ============================================================
+
+def api_headers():
+
+    headers = {
+        "Accept": "application/json"
+    }
+
+    if FIVE_DOLLAR_API_KEY:
+
+        headers["Authorization"] = (
+            f"Bearer {FIVE_DOLLAR_API_KEY}"
+        )
+
+    return headers
+
+
+def api_get(endpoint, params=None):
+
+    url = f"{BASE_API}/{endpoint.lstrip('/')}"
+
+    try:
+
+        logging.info(
+            "API GET %s | params=%s",
+            url,
+            params
+        )
+
+        resposta = requests.get(
+            url,
+            headers=api_headers(),
+            params=params,
+            timeout=30
+        )
+
+        if resposta.status_code != 200:
+
+            logging.error(
+                "API retornou status %s: %s",
+                resposta.status_code,
+                resposta.text[:3000]
+            )
+
+            return None
+
+        try:
+
+            return resposta.json()
+
+        except Exception:
+
+            logging.error(
+                "API não retornou JSON: %s",
+                resposta.text[:1000]
+            )
+
+            return None
+
+    except requests.RequestException as e:
+
+        logging.error(
+            "Erro requisitando API: %s",
+            e
+        )
+
+        return None
+
+
+# ============================================================
+# EXTRAIR LISTA
+# ============================================================
+
+def extrair_lista(dados):
+
+    if dados is None:
+        return []
+
+    if isinstance(dados, list):
+        return dados
+
+    if not isinstance(dados, dict):
+        return []
+
+    for chave in [
+        "fixtures",
+        "data",
+        "results",
+        "matches",
+        "items"
+    ]:
+
+        valor = dados.get(chave)
+
+        if isinstance(valor, list):
+            return valor
+
+    return []
+
+
+# ============================================================
+# FIXTURES PRÓXIMAS 24H
+# ============================================================
+
+def obter_fixtures_proximas_24h():
+
+    agora = datetime.now(timezone.utc)
+
+    fim = agora + timedelta(
+        hours=JANELA_HORAS
+    )
+
+    # ========================================================
+    # CORREÇÃO PRINCIPAL:
+    # A API EXIGE UNIX TIMESTAMP EM SEGUNDOS UTC.
+    # ========================================================
+
+    start_timestamp = int(
+        agora.timestamp()
+    )
+
+    end_timestamp = int(
+        fim.timestamp()
+    )
+
+    params = {
+        "start_time": start_timestamp,
+        "end_time": end_timestamp,
+        "status": "scheduled",
+        "per_page": 100,
+        "include": "odds"
+    }
+
+    logging.info(
+        "Buscando fixtures: %s -> %s",
+        start_timestamp,
+        end_timestamp
+    )
+
+    logging.info(
+        "Janela UTC: %s -> %s",
+        agora.isoformat(),
+        fim.isoformat()
+    )
+
+    dados = api_get(
+        "fixtures",
+        params=params
+    )
+
+    if dados is None:
+
+        logging.error(
+            "Não foi possível obter fixtures."
+        )
+
+        return []
+
+    jogos = extrair_lista(
+        dados
+    )
+
+    cache["fixtures"] = jogos
+
+    cache["ultima_consulta"] = (
+        datetime.now(
+            timezone.utc
+        ).isoformat()
+    )
+
+    salvar_json(
+        ARQUIVO_CACHE,
+        cache
+    )
+
+    logging.info(
+        "Fixtures encontrados nas próximas %s horas: %s",
+        JANELA_HORAS,
+        len(jogos)
+    )
+
+    return jogos
+
+
+# ============================================================
+# ID DO JOGO
+# ============================================================
+
+def obter_id_fixture(jogo):
+
+    if not isinstance(jogo, dict):
+        return None
+
+    for campo in [
+        "id",
+        "fixture_id",
+        "match_id"
+    ]:
+
+        if jogo.get(campo) is not None:
+
+            return str(
+                jogo.get(campo)
+            )
+
+    fixture = jogo.get("fixture")
+
+    if isinstance(fixture, dict):
+
+        for campo in [
+            "id",
+            "fixture_id"
+        ]:
+
+            if fixture.get(campo) is not None:
+
+                return str(
+                    fixture.get(campo)
+                )
+
+    return None
+
+
+# ============================================================
+# NOME DOS TIMES
+# ============================================================
+
+def obter_nome_times(jogo):
+
+    casa = "Casa"
+    fora = "Fora"
+
+    if not isinstance(jogo, dict):
+        return casa, fora
+
+    teams = jogo.get("teams")
+
+    if isinstance(teams, dict):
+
+        home = teams.get("home")
+        away = teams.get("away")
+
+        if isinstance(home, dict):
+
+            casa = (
+                home.get("name")
+                or home.get("team_name")
+                or casa
+            )
+
+        elif isinstance(home, str):
+
+            casa = home
+
+        if isinstance(away, dict):
+
+            fora = (
+                away.get("name")
+                or away.get("team_name")
+                or fora
+            )
+
+        elif isinstance(away, str):
+
+            fora = away
+
+    casa = (
+        jogo.get("home_team")
+        or jogo.get("home_name")
+        or casa
+    )
+
+    fora = (
+        jogo.get("away_team")
+        or jogo.get("away_name")
+        or fora
+    )
+
+    return casa, fora
+
+
+# ============================================================
+# DATA DO JOGO
+# ============================================================
+
+def obter_data_jogo(jogo):
+
+    if not isinstance(jogo, dict):
+        return None
+
+    for campo in [
+        "start_time",
+        "kickoff",
+        "scheduled",
+        "date",
+        "start_at"
+    ]:
+
+        valor = jogo.get(campo)
+
+        if valor is not None:
+
+            return valor
+
+    fixture = jogo.get("fixture")
+
+    if isinstance(fixture, dict):
+
+        for campo in [
+            "start_time",
+            "date",
+            "scheduled"
+        ]:
+
+            valor = fixture.get(campo)
+
+            if valor is not None:
+
+                return valor
+
+    return None
+
+
+# ============================================================
+# PARSER GENÉRICO DE ODDS
+# ============================================================
+
+def procurar_valores_recursivamente(
+    obj,
+    resultados=None,
+    caminho=""
+):
+
+    if resultados is None:
+        resultados = []
+
+    if isinstance(obj, dict):
+
+        for chave, valor in obj.items():
+
+            novo_caminho = (
+                f"{caminho}.{chave}"
+                if caminho
+                else str(chave)
+            )
+
+            resultados.append(
+                (
+                    str(chave).lower(),
+                    valor,
+                    novo_caminho
+                )
+            )
+
+            procurar_valores_recursivamente(
+                valor,
+                resultados,
+                novo_caminho
+            )
+
+    elif isinstance(obj, list):
+
+        for indice, item in enumerate(obj):
+
+            novo_caminho = (
+                f"{caminho}[{indice}]"
+            )
+
+            procurar_valores_recursivamente(
+                item,
+                resultados,
+                novo_caminho
+            )
+
+    return resultados
+
+
+# ============================================================
+# CONVERSÃO PARA FLOAT
+# ============================================================
+
+def para_float(valor):
+
+    try:
+
+        if valor is None:
+            return None
+
+        if isinstance(
+            valor,
+            bool
+        ):
+            return None
+
+        if isinstance(
+            valor,
+            (int, float)
+        ):
+
+            return float(valor)
+
+        texto = str(valor).strip()
+
+        texto = texto.replace(
+            ",",
+            "."
+        )
+
+        return float(texto)
+
+    except Exception:
+
+        return None
+
+
+# ============================================================
+# EXTRAIR ODD DE ESTRUTURA
+# ============================================================
+
+def extrair_odd_de_objeto(obj):
+
+    if isinstance(obj, dict):
+
+        for campo in [
+            "price",
+            "odds",
+            "odd",
+            "value",
+            "decimal",
+            "coefficient"
+        ]:
+
+            if campo in obj:
+
+                valor = para_float(
+                    obj.get(campo)
+                )
+
+                if (
+                    valor is not None
+                    and valor > 1.0
+                ):
+
+                    return valor
+
+        for chave in [
+            "closing",
+            "opening",
+            "pre_match",
+            "prematch",
+            "before",
+            "inplay"
+        ]:
+
+            sub = obj.get(chave)
+
+            if isinstance(
+                sub,
+                dict
+            ):
+
+                valor = extrair_odd_de_objeto(
+                    sub
+                )
+
+                if valor is not None:
+                    return valor
+
+    valor = para_float(obj)
+
+    if (
+        valor is not None
+        and valor > 1.0
+    ):
+
+        return valor
+
+    return None
+
+
+# ============================================================
+# IDENTIFICAR MERCADO
+# ============================================================
+
+def texto_contem_mercado(
+    chave,
+    mercado
+):
+
+    chave = str(
+        chave
+    ).lower()
+
+    mercado = mercado.lower()
+
+    if mercado == "over_8.5":
+
+        termos = [
+            "over",
+            "8.5",
+            "corner",
+            "corners"
+        ]
+
+        return (
+            "over" in chave
+            and "8.5" in chave
+            and (
+                "corner" in chave
+                or "corners" in chave
+            )
+        )
+
+    if mercado == "under_4.5":
+
+        termos = [
+            "under",
+            "4.5",
+            "goal",
+            "goals",
+            "total"
+        ]
+
+        return (
+            "under" in chave
+            and "4.5" in chave
+            and (
+                "goal" in chave
+                or "goals" in chave
+                or "goal_line" in chave
+                or "goalline" in chave
+                or "total" in chave
+            )
+        )
+
+    return mercado in chave
+
+
+# ============================================================
+# BUSCAR ODD
+# ============================================================
+
+def encontrar_odd(
+    dados,
+    mercado
+):
+
+    encontrados = []
+
+    itens = procurar_valores_recursivamente(
+        dados
+    )
+
+    # --------------------------------------------------------
+    # PRIMEIRA TENTATIVA:
+    # encontrar chave explicitamente compatível
+    # --------------------------------------------------------
+
+    for chave, valor, caminho in itens:
+
+        if texto_contem_mercado(
+            chave,
+            mercado
+        ):
+
+            odd = extrair_odd_de_objeto(
+                valor
+            )
+
+            if odd is not None:
+
+                encontrados.append(
+                    (
+                        odd,
+                        caminho
+                    )
+                )
+
+    if encontrados:
+
+        encontrados.sort(
+            key=lambda x: abs(
+                x[0] - ODD_ALVO
+            )
+        )
+
+        odd, caminho = encontrados[0]
+
+        logging.info(
+            "Odd encontrada para %s: %.2f | %s",
+            mercado,
+            odd,
+            caminho
+        )
+
+        return odd
+
+    # --------------------------------------------------------
+    # SEGUNDA TENTATIVA:
+    # procurar objetos que tenham linha + over/under
+    # --------------------------------------------------------
+
+    def procurar_linha(obj, mercado):
+
+        if isinstance(obj, dict):
+
+            texto = json.dumps(
+                obj,
+                ensure_ascii=False
+            ).lower()
+
+            if mercado == "over_8.5":
+
+                if (
+                    "8.5" in texto
+                    and "over" in texto
+                    and (
+                        "corner" in texto
+                        or "corners" in texto
+                    )
+                ):
+
+                    # Tenta encontrar "over"
+                    for chave in [
+                        "over",
+                        "over_8.5",
+                        "price",
+                        "odds"
+                    ]:
+
+                        if chave in obj:
+
+                            valor = (
+                                extrair_odd_de_objeto(
+                                    obj[chave]
+                                )
+                            )
+
+                            if valor:
+                                return valor
+
+            if mercado == "under_4.5":
+
+                if (
+                    "4.5" in texto
+                    and "under" in texto
+                    and (
+                        "goal" in texto
+                        or "goals" in texto
+                        or "goal_line" in texto
+                        or "goalline" in texto
+                    )
+                ):
+
+                    for chave in [
+                        "under",
+                        "under_4.5",
+                        "price",
+                        "odds"
+                    ]:
+
+                        if chave in obj:
+
+                            valor = (
+                                extrair_odd_de_objeto(
+                                    obj[chave]
+                                )
+                            )
+
+                            if valor:
+                                return valor
+
+            for valor in obj.values():
+
+                resultado = procurar_linha(
+                    valor,
+                    mercado
+                )
+
+                if resultado:
+                    return resultado
+
+        elif isinstance(obj, list):
+
+            for item in obj:
+
+                resultado = procurar_linha(
+                    item,
+                    mercado
+                )
+
+                if resultado:
+                    return resultado
+
+        return None
+
+    resultado = procurar_linha(
+        dados,
+        mercado
+    )
+
+    if resultado:
+
+        logging.info(
+            "Odd encontrada por fallback para %s: %.2f",
+            mercado,
+            resultado
+        )
+
+        return resultado
+
+    logging.warning(
+        "Não encontrei odd para mercado %s",
+        mercado
+    )
+
+    return None
+
+
+# ============================================================
+# OBTER ODDS DO JOGO
+# ============================================================
+
+def obter_odds_fixture(
+    fixture_id
+):
+
+    dados = api_get(
+        f"fixtures/{fixture_id}/odds"
+    )
+
+    if dados is None:
+        return None
+
+    odd_escanteios = encontrar_odd(
+        dados,
+        MERCADO_ESCANTEIOS
+    )
+
+    odd_gols = encontrar_odd(
+        dados,
+        MERCADO_GOLS
+    )
+
+    if (
+        odd_escanteios is None
+        or odd_gols is None
+    ):
+
+        logging.warning(
+            "Mercados não encontrados no fixture %s | escanteios=%s | gols=%s",
+            fixture_id,
+            odd_escanteios,
+            odd_gols
+        )
+
+        # Log controlado para diagnóstico
+        try:
+
+            logging.info(
+                "Estrutura odds fixture %s: %s",
+                fixture_id,
+                json.dumps(
+                    dados,
+                    ensure_ascii=False
+                )[:5000]
+            )
+
+        except Exception:
+            pass
+
+        return None
+
+    odd_combinada = (
+        odd_escanteios
+        * odd_gols
+    )
+
+    return {
+        "escanteios": round(
+            odd_escanteios,
+            3
+        ),
+        "gols": round(
+            odd_gols,
+            3
+        ),
+        "combinada": round(
+            odd_combinada,
+            3
+        )
+    }
+
+
+# ============================================================
+# HISTÓRICO
+# ============================================================
+
+def extrair_historico(jogo):
+
+    if not isinstance(jogo, dict):
+        return []
+
+    for campo in [
+        "history",
+        "recent_matches",
+        "last_matches",
+        "form",
+        "historical_matches",
+        "previous_matches"
+    ]:
+
+        valor = jogo.get(campo)
+
+        if isinstance(
+            valor,
+            list
+        ):
+
+            return valor
+
+    return []
+
+
+# ============================================================
+# EXTRAIR ESTATÍSTICAS HISTÓRICAS
+# ============================================================
+
+def estatisticas_historicas(
+    historico
+):
+
+    if not historico:
+        return None
+
+    jogos_validos = []
+
+    for jogo in historico:
+
+        if not isinstance(
+            jogo,
+            dict
+        ):
+            continue
+
+        gols = None
+        escanteios = None
+
+        # ----------------------------------------------------
+        # GOLS
+        # ----------------------------------------------------
+
+        goals = jogo.get(
+            "goals"
+        )
+
+        if isinstance(
+            goals,
+            dict
+        ):
+
+            home = para_float(
+                goals.get("home")
+            )
+
+            away = para_float(
+                goals.get("away")
+            )
+
+            if (
+                home is not None
+                and away is not None
+            ):
+
+                gols = (
+                    home + away
+                )
+
+        # Formatos alternativos
+
+        if gols is None:
+
+            total_goals = (
+                jogo.get(
+                    "total_goals"
+                )
+                or jogo.get(
+                    "goals_total"
+                )
+            )
+
+            if total_goals is not None:
+
+                gols = para_float(
+                    total_goals
+                )
+
+        # ----------------------------------------------------
+        # ESCANTEIOS
+        # ----------------------------------------------------
+
+        corners = jogo.get(
+            "corners"
+        )
+
+        if isinstance(
+            corners,
+            dict
+        ):
+
+            home = para_float(
+                corners.get("home")
+            )
+
+            away = para_float(
+                corners.get("away")
+            )
+
+            if (
+                home is not None
+                and away is not None
+            ):
+
+                escanteios = (
+                    home + away
+                )
+
+        if escanteios is None:
+
+            total_corners = (
+                jogo.get(
+                    "total_corners"
+                )
+                or jogo.get(
+                    "corners_total"
+                )
+            )
+
+            if total_corners is not None:
+
+                escanteios = para_float(
+                    total_corners
+                )
+
+        if (
+            gols is not None
+            and escanteios is not None
+        ):
+
+            jogos_validos.append(
+                {
+                    "gols": gols,
+                    "escanteios": escanteios
+                }
+            )
+
+    if len(jogos_validos) < MIN_JOGOS_HISTORICO:
+
+        return None
+
+    total = len(
+        jogos_validos
+    )
+
+    media_gols = (
+        sum(
+            x["gols"]
+            for x in jogos_validos
+        )
+        / total
+    )
+
+    media_escanteios = (
+        sum(
+            x["escanteios"]
+            for x in jogos_validos
+        )
+        / total
+    )
+
+    over_corners = sum(
+        1
+        for x in jogos_validos
+        if x["escanteios"] > 8.5
+    )
+
+    under_goals = sum(
+        1
+        for x in jogos_validos
+        if x["gols"] < 4.5
+    )
+
+    combinado = sum(
+        1
+        for x in jogos_validos
+        if (
+            x["escanteios"] > 8.5
+            and x["gols"] < 4.5
+        )
+    )
+
+    prob_over_corners = (
+        over_corners / total
+    )
+
+    prob_under_goals = (
+        under_goals / total
+    )
+
+    prob_combinada = (
+        combinado / total
+    )
+
+    return {
+        "jogos": total,
+        "media_gols": round(
+            media_gols,
+            3
+        ),
+        "media_escanteios": round(
+            media_escanteios,
+            3
+        ),
+        "over_corners": round(
+            prob_over_corners,
+            4
+        ),
+        "under_goals": round(
+            prob_under_goals,
+            4
+        ),
+        "combinada": round(
+            prob_combinada,
+            4
+        )
+    }
+
+
+# ============================================================
+# ANALISAR JOGO
+# ============================================================
+
+def analisar_jogo(
+    jogo,
+    odds
+):
+
+    historico = extrair_historico(
+        jogo
+    )
+
+    estatisticas = (
+        estatisticas_historicas(
+            historico
+        )
+    )
+
+    if estatisticas is None:
+
+        logging.info(
+            "Jogo sem histórico suficiente."
+        )
+
+        return None
+
+    if (
+        estatisticas["media_escanteios"]
+        < MIN_MEDIA_ESCANTEIOS
+    ):
+
+        return None
+
+    if (
+        estatisticas["media_gols"]
+        > MAX_MEDIA_GOLS
+    ):
+
+        return None
+
+    if (
+        estatisticas["combinada"]
+        < MIN_PROBABILIDADE_HISTORICA
+    ):
+
+        return None
+
+    odd_combinada = (
+        odds["combinada"]
+    )
+
+    if (
+        odd_combinada < ODD_MINIMA
+        or odd_combinada > ODD_MAXIMA
+    ):
+
+        return None
+
+    # Score apenas para ordenar candidatos.
+    # Não é uma garantia de acerto.
+
+    proximidade_odd = 1 - min(
+        abs(
+            odd_combinada - ODD_ALVO
+        ) / ODD_ALVO,
+        1
+    )
+
+    score = (
+        estatisticas["combinada"]
+        * 0.65
+        +
+        proximidade_odd
+        * 0.35
+    )
+
+    return {
+        "score": round(
+            score,
+            4
+        ),
+        "probabilidade_historica": round(
+            estatisticas["combinada"]
+            * 100,
+            2
+        ),
+        "estatisticas": estatisticas
+    }
+
+
+# ============================================================
+# BANCA LIVRE
+# ============================================================
+
+def encontrar_banca_livre():
+
+    for i in range(
+        1,
+        TOTAL_BANCAS + 1
+    ):
+
+        banca = stats[
+            "por_banca"
+        ].get(
+            str(i)
+        )
+
+        if not banca:
+            continue
+
+        if banca.get(
+            "status"
+        ) == "livre":
+
+            return i
+
+    return None
+
+
+# ============================================================
+# EVITAR DUPLICAÇÃO
+# ============================================================
+
+def fixture_ja_tem_sinal(
+    fixture_id
+):
+
+    for sinal in sinais.values():
+
+        if sinal.get(
+            "fixture_id"
+        ) == str(
+            fixture_id
+        ):
+
+            if sinal.get(
+                "status"
+            ) == "ativo":
+
+                return True
+
+    return False
 
 
 # ============================================================
 # TELEGRAM
 # ============================================================
 
-def enviar_telegram(mensagem):
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        logging.warning(
-            "TELEGRAM_TOKEN ou CHAT_ID não configurado."
+def enviar_telegram(
+    mensagem
+):
+
+    if not TELEGRAM_TOKEN:
+        logging.error(
+            "TELEGRAM_TOKEN não configurado."
+        )
+        return False
+
+    if not CHAT_ID:
+        logging.error(
+            "CHAT_ID não configurado."
         )
         return False
 
     url = (
-        f"https://api.telegram.org/bot"
-        f"{TELEGRAM_TOKEN}/sendMessage"
+        "https://api.telegram.org/"
+        f"bot{TELEGRAM_TOKEN}/sendMessage"
     )
 
     payload = {
@@ -228,6 +1613,7 @@ def enviar_telegram(mensagem):
     }
 
     try:
+
         resposta = requests.post(
             url,
             json=payload,
@@ -235,1137 +1621,1065 @@ def enviar_telegram(mensagem):
         )
 
         if resposta.status_code != 200:
+
             logging.error(
-                "Erro Telegram %s: %s",
+                "Telegram erro %s: %s",
                 resposta.status_code,
                 resposta.text
             )
+
             return False
 
         return True
 
-    except Exception as erro:
-        logging.error("Falha Telegram: %s", erro)
+    except Exception as e:
+
+        logging.error(
+            "Erro Telegram: %s",
+            e
+        )
+
         return False
 
 
 # ============================================================
-# API
+# FORMATAR SINAL
 # ============================================================
 
-def headers_api():
-    return {
-        "Authorization": f"Bearer {API_KEY}",
-        "Accept": "application/json",
-        "User-Agent": "RoboCombinado/1.0"
-    }
+def formatar_sinal(
+    sinal
+):
+
+    return f"""
+<b>🚨 NOVO SINAL COMBINADO</b>
+
+⚽ <b>{sinal['casa']} x {sinal['fora']}</b>
+
+🕐 {sinal['data_jogo']}
+
+🎯 <b>Mercados</b>
+
+⚽ Over 8.5 escanteios
+⚽ Odd: {sinal['odd_escanteios']:.2f}
+
+⚽ Under 4.5 gols
+⚽ Odd: {sinal['odd_gols']:.2f}
+
+🔥 <b>Odd combinada: {sinal['odd_combinada']:.2f}</b>
+
+📊 Assertividade histórica:
+<b>{sinal['probabilidade_historica']:.2f}%</b>
+
+📚 Jogos históricos:
+{sinal['jogos_historico']}
+
+🏦 <b>Banca {sinal['banca']}</b>
+
+💰 Entrada:
+<b>R$ {sinal['entrada']:.2f}</b>
+
+🔁 Gale:
+<b>{sinal['gale']}</b>
+
+📌 Status:
+<b>AGUARDANDO RESULTADO</b>
+"""
 
 
-def api_get(endpoint, params=None):
-    if not API_KEY:
-        logging.error(
-            "FIVE_DOLLAR_API_KEY não configurada."
-        )
-        return None
+# ============================================================
+# CRIAR SINAL
+# ============================================================
 
-    url = f"{BASE_API}/{endpoint.lstrip('/')}"
+def criar_sinal(
+    jogo,
+    odds,
+    analise,
+    banca_num
+):
 
-    try:
-        resposta = requests.get(
-            url,
-            headers=headers_api(),
-            params=params or {},
-            timeout=30
-        )
+    fixture_id = obter_id_fixture(
+        jogo
+    )
 
-        if resposta.status_code != 200:
-            logging.error(
-                "API retornou status %s: %s",
-                resposta.status_code,
-                resposta.text[:1000]
-            )
-            return None
+    casa, fora = obter_nome_times(
+        jogo
+    )
 
-        dados = resposta.json()
+    data_jogo = obter_data_jogo(
+        jogo
+    )
 
-        if isinstance(dados, dict):
-            if dados.get("success") == 0:
-                logging.error(
-                    "Erro da API: %s",
-                    dados
-                )
-                return None
-
-        return dados
-
-    except requests.RequestException as erro:
-        logging.error("Erro de conexão com API: %s", erro)
-        return None
-
-    except ValueError as erro:
-        logging.error("Resposta não é JSON válido: %s", erro)
-        return None
-
-
-def extrair_lista(dados, chaves=None):
-    if not dados:
-        return []
-
-    if isinstance(dados, list):
-        return dados
-
-    if not isinstance(dados, dict):
-        return []
-
-    chaves = chaves or [
-        "data",
-        "fixtures",
-        "matches",
-        "games",
-        "events",
-        "results"
+    banca = stats[
+        "por_banca"
+    ][
+        str(banca_num)
     ]
 
-    for chave in chaves:
-        valor = dados.get(chave)
-
-        if isinstance(valor, list):
-            return valor
-
-        if isinstance(valor, dict):
-            lista = extrair_lista(valor, chaves)
-            if lista:
-                return lista
-
-    return []
-
-
-def obter_fixtures_proximas_24h():
-    agora = datetime.now(timezone.utc)
-    fim = agora + timedelta(hours=JANELA_HORAS)
-
-    params = {
-        "start_time": agora.isoformat(),
-        "end_time": fim.isoformat(),
-        "status": "scheduled",
-        "per_page": 100,
-        "include": "odds"
-    }
-
-    dados = api_get("fixtures", params)
-
-    if dados is None:
-        return []
-
-    jogos = extrair_lista(dados)
-
-    cache["fixtures"] = jogos
-    cache["ultima_consulta"] = datetime.now(
-        timezone.utc
-    ).isoformat()
-
-    salvar_json(ARQUIVO_CACHE, cache)
-
-    logging.info(
-        "Fixtures encontrados na janela: %s",
-        len(jogos)
-    )
-
-    return jogos
-
-
-def obter_odds_fixture(fixture_id):
-    if not fixture_id:
-        return {}
-
-    dados = api_get(
-        f"fixtures/{fixture_id}/odds",
-        params={
-            "market": "corner,goalline"
-        }
-    )
-
-    if dados is None:
-        return {}
-
-    return dados
-
-
-# ============================================================
-# PARSER DE DADOS
-# ============================================================
-
-def primeiro_valor(objeto, caminhos):
-    for caminho in caminhos:
-        atual = objeto
-
-        try:
-            for parte in caminho.split("."):
-                if isinstance(atual, dict):
-                    atual = atual.get(parte)
-                else:
-                    atual = None
-                    break
-
-            if atual is not None:
-                return atual
-
-        except Exception:
-            continue
-
-    return None
-
-
-def numero(valor):
-    if valor is None:
-        return None
-
-    if isinstance(valor, bool):
-        return None
-
-    if isinstance(valor, (int, float)):
-        return float(valor)
-
-    if isinstance(valor, str):
-        valor = valor.strip()
-        valor = valor.replace(",", ".")
-
-        try:
-            return float(valor)
-        except ValueError:
-            return None
-
-    return None
-
-
-def nome_time(fixture, casa=True):
-    if casa:
-        caminhos = [
-            "home.name",
-            "home_team.name",
-            "teams.home.name",
-            "participants.home.name",
-            "localteam.name"
-        ]
-    else:
-        caminhos = [
-            "away.name",
-            "away_team.name",
-            "teams.away.name",
-            "participants.away.name",
-            "visitorteam.name"
-        ]
-
-    valor = primeiro_valor(fixture, caminhos)
-
-    return str(valor) if valor else "Time desconhecido"
-
-
-def obter_fixture_id(fixture):
-    valor = primeiro_valor(
-        fixture,
-        [
-            "id",
-            "fixture_id",
-            "match_id",
-            "game_id",
-            "event_id"
-        ]
-    )
-
-    return str(valor) if valor is not None else None
-
-
-def extrair_odd(valor):
-    if valor is None:
-        return None
-
-    if isinstance(valor, (int, float)):
-        return float(valor)
-
-    if isinstance(valor, str):
-        return numero(valor)
-
-    if isinstance(valor, dict):
-        for chave in [
-            "odd",
-            "price",
-            "value",
-            "decimal",
-            "odds"
-        ]:
-            if chave in valor:
-                resultado = extrair_odd(valor[chave])
-
-                if resultado is not None:
-                    return resultado
-
-    return None
-
-
-def encontrar_odd_mercado(objeto, mercado):
-    """
-    Tenta localizar odds em vários formatos possíveis.
-    Não presume um único formato da API.
-    """
-
-    if not objeto:
-        return None
-
-    mercado_lower = mercado.lower()
-
-    if isinstance(objeto, dict):
-        # Busca direta por nomes comuns
-        for chave, valor in objeto.items():
-            chave_lower = str(chave).lower()
-
-            if mercado_lower in chave_lower:
-                odd = extrair_odd(valor)
-
-                if odd:
-                    return odd
-
-            # Mercado de escanteios
-            if "corner" in mercado_lower:
-                if (
-                    "corner" in chave_lower
-                    or "corners" in chave_lower
-                ):
-                    texto = json.dumps(
-                        valor,
-                        ensure_ascii=False
-                    ).lower()
-
-                    if mercado_lower in texto:
-                        odd = extrair_odd(valor)
-
-                        if odd:
-                            return odd
-
-            # Mercado de gols
-            if "under" in mercado_lower or "over" in mercado_lower:
-                if (
-                    "goal" in chave_lower
-                    or "goalline" in chave_lower
-                    or "total" in chave_lower
-                ):
-                    texto = json.dumps(
-                        valor,
-                        ensure_ascii=False
-                    ).lower()
-
-                    if mercado_lower in texto:
-                        odd = extrair_odd(valor)
-
-                        if odd:
-                            return odd
-
-        for valor in objeto.values():
-            resultado = encontrar_odd_mercado(
-                valor,
-                mercado
-            )
-
-            if resultado is not None:
-                return resultado
-
-    elif isinstance(objeto, list):
-        for item in objeto:
-            resultado = encontrar_odd_mercado(
-                item,
-                mercado
-            )
-
-            if resultado is not None:
-                return resultado
-
-    return None
-
-
-def extrair_odds(fixture):
-    """
-    Primeiro procura odds já incluídas no fixture.
-    Depois o ciclo principal consulta /odds.
-    """
-
-    odds = primeiro_valor(
-        fixture,
-        [
-            "odds",
-            "markets",
-            "bookmakers",
-            "betting"
-        ]
-    )
-
-    if odds is None:
-        odds = fixture
-
-    odd_escanteios = encontrar_odd_mercado(
-        odds,
-        MERCADO_ESCANTEIOS
-    )
-
-    odd_gols = encontrar_odd_mercado(
-        odds,
-        MERCADO_GOLS
-    )
-
-    return {
-        "odd_escanteios": odd_escanteios,
-        "odd_gols": odd_gols
-    }
-
-
-def calcular_odd_combinada(odd_escanteios, odd_gols):
-    if odd_escanteios is None or odd_gols is None:
-        return None
-
-    if odd_escanteios <= 1 or odd_gols <= 1:
-        return None
-
-    return round(
-        odd_escanteios * odd_gols,
-        2
-    )
-
-
-# ============================================================
-# HISTÓRICO E FILTROS
-# ============================================================
-
-def extrair_numero_escanteios(fixture):
-    valor = primeiro_valor(
-        fixture,
-        [
-            "corners.total",
-            "corners.total_count",
-            "statistics.corners.total",
-            "stats.corners.total",
-            "corner_total"
-        ]
-    )
-
-    if valor is not None:
-        return numero(valor)
-
-    casa = numero(
-        primeiro_valor(
-            fixture,
-            [
-                "corners.home",
-                "corner.home",
-                "stats.corners.home"
-            ]
+    gale = int(
+        banca.get(
+            "gale",
+            0
         )
     )
 
-    fora = numero(
-        primeiro_valor(
-            fixture,
-            [
-                "corners.away",
-                "corner.away",
-                "stats.corners.away"
-            ]
+    entrada = float(
+        banca.get(
+            "entrada_atual",
+            ENTRADA_INICIAL
         )
     )
-
-    if casa is not None and fora is not None:
-        return casa + fora
-
-    return None
-
-
-def extrair_numero_gols(fixture):
-    casa = numero(
-        primeiro_valor(
-            fixture,
-            [
-                "goals.home",
-                "score.home",
-                "scores.home",
-                "home_score"
-            ]
-        )
-    )
-
-    fora = numero(
-        primeiro_valor(
-            fixture,
-            [
-                "goals.away",
-                "score.away",
-                "scores.away",
-                "away_score"
-            ]
-        )
-    )
-
-    if casa is not None and fora is not None:
-        return casa + fora
-
-    total = numero(
-        primeiro_valor(
-            fixture,
-            [
-                "goals.total",
-                "score.total",
-                "total_goals"
-            ]
-        )
-    )
-
-    return total
-
-
-def calcular_historico_simples(historico):
-    jogos_validos = []
-
-    for jogo in historico:
-        escanteios = extrair_numero_escanteios(jogo)
-        gols = extrair_numero_gols(jogo)
-
-        if escanteios is None or gols is None:
-            continue
-
-        jogos_validos.append({
-            "escanteios": escanteios,
-            "gols": gols
-        })
-
-    if len(jogos_validos) < MIN_JOGOS_HISTORICO:
-        return None
-
-    over_cantos = sum(
-        1
-        for jogo in jogos_validos
-        if jogo["escanteios"] > 8.5
-    )
-
-    under_gols = sum(
-        1
-        for jogo in jogos_validos
-        if jogo["gols"] < 4.5
-    )
-
-    combinados = sum(
-        1
-        for jogo in jogos_validos
-        if (
-            jogo["escanteios"] > 8.5
-            and jogo["gols"] < 4.5
-        )
-    )
-
-    total = len(jogos_validos)
-
-    media_escanteios = sum(
-        jogo["escanteios"]
-        for jogo in jogos_validos
-    ) / total
-
-    media_gols = sum(
-        jogo["gols"]
-        for jogo in jogos_validos
-    ) / total
-
-    probabilidade_combinada = combinados / total
-
-    return {
-        "jogos": total,
-        "over_escanteios": over_cantos / total,
-        "under_gols": under_gols / total,
-        "combinada": probabilidade_combinada,
-        "media_escanteios": round(
-            media_escanteios,
-            2
-        ),
-        "media_gols": round(
-            media_gols,
-            2
-        )
-    }
-
-
-def obter_historico_fixture(fixture):
-    """
-    Usa histórico que eventualmente já venha no fixture.
-    Caso a API entregue outro endpoint específico de histórico,
-    ele poderá ser conectado aqui sem alterar o restante do robô.
-    """
-
-    historico = primeiro_valor(
-        fixture,
-        [
-            "history",
-            "historical",
-            "recent_matches",
-            "last_matches",
-            "team_history"
-        ]
-    )
-
-    if isinstance(historico, list):
-        return historico
-
-    return []
-
-
-def fixture_elegivel(fixture, odds):
-    odd_escanteios = odds.get("odd_escanteios")
-    odd_gols = odds.get("odd_gols")
-
-    odd_combinada = calcular_odd_combinada(
-        odd_escanteios,
-        odd_gols
-    )
-
-    if odd_combinada is None:
-        return False, "Odds não encontradas", None
-
-    if odd_combinada < ODD_MINIMA:
-        return False, "Odd abaixo do mínimo", odd_combinada
-
-    if odd_combinada > ODD_MAXIMA:
-        return False, "Odd acima do máximo", odd_combinada
-
-    historico = obter_historico_fixture(fixture)
-    analise = calcular_historico_simples(historico)
-
-    # Se não houver histórico suficiente, não inventa assertividade.
-    if analise is None:
-        return (
-            False,
-            "Histórico insuficiente",
-            odd_combinada
-        )
-
-    if analise["media_escanteios"] < MIN_MEDIA_ESCANTEIOS:
-        return (
-            False,
-            "Média de escanteios insuficiente",
-            odd_combinada
-        )
-
-    if analise["media_gols"] > MAX_MEDIA_GOLS:
-        return (
-            False,
-            "Média de gols acima do limite",
-            odd_combinada
-        )
-
-    if (
-        analise["combinada"]
-        < MIN_PROBABILIDADE_HISTORICA
-    ):
-        return (
-            False,
-            "Assertividade histórica abaixo do filtro",
-            odd_combinada
-        )
-
-    return True, "Elegível", odd_combinada
-
-
-# ============================================================
-# ESCOLHA DA MELHOR COMBINADA
-# ============================================================
-
-def pontuar_fixture(fixture, odd_combinada):
-    distancia_odd = abs(
-        odd_combinada - ODD_ALVO
-    )
-
-    historico = calcular_historico_simples(
-        obter_historico_fixture(fixture)
-    )
-
-    probabilidade = 0
-
-    if historico:
-        probabilidade = historico["combinada"]
-
-    return (
-        probabilidade * 100
-        - distancia_odd * 10
-    )
-
-
-def montar_sinal(fixture, odds, odd_combinada, banca):
-    fixture_id = obter_fixture_id(fixture)
-
-    casa = nome_time(fixture, True)
-    fora = nome_time(fixture, False)
-
-    agora = datetime.now(timezone.utc)
 
     sinal_id = (
         f"{fixture_id}_"
-        f"{banca}_"
-        f"{int(agora.timestamp())}"
+        f"{int(time.time())}_"
+        f"{banca_num}"
     )
 
-    gale_atual = bancas[str(banca)]["gale_atual"]
-
-    valor_entrada = (
-        ENTRADA_INICIAL
-        * (MULTIPLICADOR_GALE ** gale_atual)
-    )
-
-    historico = calcular_historico_simples(
-        obter_historico_fixture(fixture)
+    estatisticas = (
+        analise["estatisticas"]
     )
 
     sinal = {
         "id": sinal_id,
-        "fixture_id": fixture_id,
-        "banca": banca,
-        "gale": gale_atual,
-        "entrada": round(valor_entrada, 2),
-        "status": "pendente",
-        "criado_em": agora.isoformat(),
-        "resolvido_em": None,
-        "resultado": None,
+
+        "fixture_id": str(
+            fixture_id
+        ),
+
         "casa": casa,
         "fora": fora,
-        "mercado_escanteios": MERCADO_ESCANTEIOS,
-        "mercado_gols": MERCADO_GOLS,
-        "odd_escanteios": odds.get("odd_escanteios"),
-        "odd_gols": odds.get("odd_gols"),
-        "odd_combinada": odd_combinada,
-        "historico": historico
+
+        "data_jogo": data_jogo,
+
+        "mercado_escanteios":
+            MERCADO_ESCANTEIOS,
+
+        "mercado_gols":
+            MERCADO_GOLS,
+
+        "odd_escanteios":
+            odds["escanteios"],
+
+        "odd_gols":
+            odds["gols"],
+
+        "odd_combinada":
+            odds["combinada"],
+
+        "probabilidade_historica":
+            analise[
+                "probabilidade_historica"
+            ],
+
+        "jogos_historico":
+            estatisticas["jogos"],
+
+        "media_escanteios":
+            estatisticas[
+                "media_escanteios"
+            ],
+
+        "media_gols":
+            estatisticas[
+                "media_gols"
+            ],
+
+        "prob_over_corners":
+            estatisticas[
+                "over_corners"
+            ],
+
+        "prob_under_goals":
+            estatisticas[
+                "under_goals"
+            ],
+
+        "prob_combinada":
+            estatisticas[
+                "combinada"
+            ],
+
+        "score":
+            analise["score"],
+
+        "banca":
+            banca_num,
+
+        "gale":
+            gale,
+
+        "entrada":
+            entrada,
+
+        "status":
+            "ativo",
+
+        "resultado":
+            None,
+
+        "data_criacao":
+            datetime.now(
+                timezone.utc
+            ).isoformat(),
+
+        "data_resolucao":
+            None
     }
+
+    sinais[sinal_id] = sinal
+
+    # --------------------------------------------------------
+    # Atualizar banca
+    # --------------------------------------------------------
+
+    banca["status"] = "ocupada"
+
+    banca["sinal_atual"] = sinal_id
+
+    banca["total_entradas"] = (
+        banca.get(
+            "total_entradas",
+            0
+        )
+        + 1
+    )
+
+    # --------------------------------------------------------
+    # Estatísticas
+    # --------------------------------------------------------
+
+    stats[
+        "total_sinais"
+    ] += 1
+
+    stats[
+        "por_gale"
+    ][
+        str(gale)
+    ][
+        "entradas"
+    ] += 1
+
+    stats[
+        "por_mercado"
+    ][
+        "combinado"
+    ][
+        "entradas"
+    ] += 1
+
+    stats[
+        "ultima_atualizacao"
+    ] = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    salvar_json(
+        ARQUIVO_SINAIS,
+        sinais
+    )
+
+    salvar_json(
+        ARQUIVO_STATS,
+        stats
+    )
+
+    mensagem = formatar_sinal(
+        sinal
+    )
+
+    enviado = enviar_telegram(
+        mensagem
+    )
+
+    if enviado:
+
+        logging.info(
+            "Sinal enviado: %s",
+            sinal_id
+        )
+
+    else:
+
+        logging.error(
+            "Sinal criado mas não enviado ao Telegram: %s",
+            sinal_id
+        )
 
     return sinal
 
 
-def bancas_livres():
-    livres = []
-
-    for banca_id, banca in bancas.items():
-        if banca["status"] == "livre":
-            livres.append(int(banca_id))
-
-    return livres
-
-
 # ============================================================
-# ENVIO DOS SINAIS
+# GERAR NOVOS SINAIS
 # ============================================================
 
-def formatar_sinal(sinal):
-    historico = sinal.get("historico") or {}
+def gerar_sinais():
 
-    probabilidade = historico.get(
-        "combinada"
-    )
+    banca_livre = encontrar_banca_livre()
 
-    if probabilidade is None:
-        prob_texto = "Não calculada"
-    else:
-        prob_texto = f"{probabilidade * 100:.2f}%"
+    if banca_livre is None:
 
-    return (
-        "🎯 <b>SINAL PRÉ-JOGO COMBINADO</b>\n\n"
-        f"🏟️ <b>{sinal['casa']}</b> x "
-        f"<b>{sinal['fora']}</b>\n\n"
-        f"🏦 Banca: <b>{sinal['banca']}</b>\n"
-        f"🔁 Gale: <b>{sinal['gale']}</b>\n"
-        f"💰 Entrada: <b>R$ {sinal['entrada']:.2f}</b>\n\n"
-        f"📌 Escanteios: <b>{sinal['mercado_escanteios']}</b>\n"
-        f"📌 Gols: <b>{sinal['mercado_gols']}</b>\n\n"
-        f"📈 Odd escanteios: <b>{sinal['odd_escanteios']}</b>\n"
-        f"📉 Odd gols: <b>{sinal['odd_gols']}</b>\n"
-        f"🔥 Odd combinada: <b>{sinal['odd_combinada']}</b>\n"
-        f"📊 Histórico combinado: <b>{prob_texto}</b>\n\n"
-        "⚠️ Entrada pré-jogo. "
-        "A combinada só vence se os dois mercados vencerem."
-    )
-
-
-def enviar_sinal(sinal):
-    mensagem = formatar_sinal(sinal)
-
-    enviado = enviar_telegram(mensagem)
-
-    if not enviado:
-        return False
-
-    sinais[sinal["id"]] = sinal
-
-    banca_id = str(sinal["banca"])
-
-    bancas[banca_id]["status"] = "ocupada"
-    bancas[banca_id]["sinal_id"] = sinal["id"]
-
-    stats["total_sinais"] += 1
-    stats["ultima_atualizacao"] = datetime.now(
-        timezone.utc
-    ).isoformat()
-
-    stats["por_banca"][banca_id]["sinais"] += 1
-    stats["por_banca"][banca_id]["gale_atual"] = (
-        sinal["gale"]
-    )
-
-    salvar_dados()
-
-    logging.info(
-        "Sinal enviado: %s | Banca %s",
-        sinal["id"],
-        banca_id
-    )
-
-    return True
-
-
-# ============================================================
-# RESOLUÇÃO DOS SINAIS
-# ============================================================
-
-def obter_resultado_fixture(fixture_id):
-    dados = api_get(
-        f"fixtures/{fixture_id}"
-    )
-
-    if not dados:
-        return None
-
-    if isinstance(dados, dict):
-        fixture = dados.get("data", dados)
-    else:
-        fixture = dados
-
-    gols = extrair_numero_gols(fixture)
-    escanteios = extrair_numero_escanteios(fixture)
-
-    if gols is None or escanteios is None:
-        return None
-
-    return {
-        "gols": gols,
-        "escanteios": escanteios
-    }
-
-
-def resolver_sinal(sinal):
-    resultado = obter_resultado_fixture(
-        sinal["fixture_id"]
-    )
-
-    if resultado is None:
-        return False
-
-    venceu_escanteios = (
-        resultado["escanteios"] > 8.5
-    )
-
-    venceu_gols = (
-        resultado["gols"] < 4.5
-    )
-
-    venceu = (
-        venceu_escanteios
-        and venceu_gols
-    )
-
-    sinal["resultado"] = (
-        "WIN" if venceu else "LOSS"
-    )
-
-    sinal["status"] = "resolvido"
-
-    sinal["resolvido_em"] = datetime.now(
-        timezone.utc
-    ).isoformat()
-
-    sinal["resultado_real"] = resultado
-
-    banca_id = str(sinal["banca"])
-    gale = str(sinal["gale"])
-    entrada = float(sinal["entrada"])
-    odd = float(sinal["odd_combinada"])
-
-    if banca_id not in stats["por_banca"]:
-        stats["por_banca"][banca_id] = {
-            "sinais": 0,
-            "resolvidos": 0,
-            "wins": 0,
-            "losses": 0,
-            "assertividade": 0.0,
-            "gale_atual": 0,
-            "saldo_teorico": 0.0
-        }
-
-    banca_stats = stats["por_banca"][banca_id]
-
-    banca_stats["resolvidos"] += 1
-    stats["resolvidos"] += 1
-
-    if venceu:
-        stats["wins"] += 1
-        banca_stats["wins"] += 1
-
-        lucro = (
-            entrada * odd
-        ) - entrada
-
-        banca_stats["saldo_teorico"] += lucro
-        stats["lucro_teorico"] += lucro
-
-        # Após WIN, volta ao valor inicial
-        bancas[banca_id]["gale_atual"] = 0
-
-    else:
-        stats["losses"] += 1
-        banca_stats["losses"] += 1
-
-        prejuizo = entrada
-        banca_stats["saldo_teorico"] -= prejuizo
-        stats["lucro_teorico"] -= prejuizo
-
-        gale_atual = int(sinal["gale"])
-
-        if gale_atual < MAX_GALES:
-            bancas[banca_id]["gale_atual"] = (
-                gale_atual + 1
-            )
-        else:
-            # Perdeu o ciclo completo
-            bancas[banca_id]["gale_atual"] = 0
-
-    total_resolvidos = stats["resolvidos"]
-
-    if total_resolvidos > 0:
-        stats["assertividade"] = round(
-            (
-                stats["wins"]
-                / total_resolvidos
-            ) * 100,
-            2
-        )
-
-    total_banca_resolvidos = banca_stats[
-        "resolvidos"
-    ]
-
-    if total_banca_resolvidos > 0:
-        banca_stats["assertividade"] = round(
-            (
-                banca_stats["wins"]
-                / total_banca_resolvidos
-            ) * 100,
-            2
-        )
-
-    if gale not in stats["por_gale"]:
-        stats["por_gale"][gale] = {
-            "resolvidos": 0,
-            "wins": 0,
-            "losses": 0,
-            "assertividade": 0.0
-        }
-
-    gale_stats = stats["por_gale"][gale]
-
-    gale_stats["resolvidos"] += 1
-
-    if venceu:
-        gale_stats["wins"] += 1
-    else:
-        gale_stats["losses"] += 1
-
-    gale_stats["assertividade"] = round(
-        (
-            gale_stats["wins"]
-            / gale_stats["resolvidos"]
-        ) * 100,
-        2
-    )
-
-    bancas[banca_id]["status"] = "livre"
-    bancas[banca_id]["sinal_id"] = None
-    bancas[banca_id]["ultima_resolucao"] = (
-        sinal["resolvido_em"]
-    )
-
-    mensagem = (
-        "📊 <b>RESOLUÇÃO DO SINAL</b>\n\n"
-        f"🏟️ {sinal['casa']} x {sinal['fora']}\n"
-        f"🏦 Banca: {banca_id}\n"
-        f"🔁 Gale: {sinal['gale']}\n"
-        f"🎯 Resultado: <b>{sinal['resultado']}</b>\n\n"
-        f"⚽ Gols totais: {resultado['gols']}\n"
-        f"🚩 Escanteios totais: "
-        f"{resultado['escanteios']}\n\n"
-        f"📈 Assertividade geral: "
-        f"<b>{stats['assertividade']:.2f}%</b>\n"
-        f"💰 Saldo teórico: "
-        f"<b>R$ {stats['lucro_teorico']:.2f}</b>"
-    )
-
-    enviar_telegram(mensagem)
-
-    salvar_dados()
-
-    logging.info(
-        "Sinal resolvido: %s | %s",
-        sinal["id"],
-        sinal["resultado"]
-    )
-
-    return True
-
-
-def resolver_sinais_pendentes():
-    for sinal_id, sinal in list(
-        sinais.items()
-    ):
-        if sinal.get("status") != "pendente":
-            continue
-
-        try:
-            resolver_sinal(sinal)
-        except Exception as erro:
-            logging.error(
-                "Erro resolvendo %s: %s",
-                sinal_id,
-                erro
-            )
-
-
-# ============================================================
-# CICLO PRINCIPAL
-# ============================================================
-
-def analisar_e_enviar():
-    logging.info(
-        "Iniciando análise pré-jogo das próximas %s horas.",
-        JANELA_HORAS
-    )
-
-    resolver_sinais_pendentes()
-
-    vagas = bancas_livres()
-
-    if not vagas:
         logging.info(
-            "Todas as bancas estão ocupadas."
+            "Todas as %s bancas estão ocupadas.",
+            TOTAL_BANCAS
         )
+
         return
 
-    fixtures = obter_fixtures_proximas_24h()
+    fixtures = (
+        obter_fixtures_proximas_24h()
+    )
 
     if not fixtures:
+
         logging.info(
             "Nenhum fixture encontrado."
         )
+
         return
 
     candidatos = []
 
-    consultas = 0
+    jogos_analisados = 0
 
-    for fixture in fixtures:
-        if consultas >= MAX_JOGOS_ODDS_POR_CICLO:
+    for jogo in fixtures:
+
+        if (
+            jogos_analisados
+            >= MAX_JOGOS_ODDS_POR_CICLO
+        ):
+
             break
 
-        fixture_id = obter_fixture_id(fixture)
+        fixture_id = (
+            obter_id_fixture(
+                jogo
+            )
+        )
 
         if not fixture_id:
             continue
 
-        odds = extrair_odds(fixture)
-
-        if (
-            odds["odd_escanteios"] is None
-            or odds["odd_gols"] is None
+        if fixture_ja_tem_sinal(
+            fixture_id
         ):
-            odds_externas = obter_odds_fixture(
-                fixture_id
-            )
 
-            odds_externas_extraidas = extrair_odds(
-                odds_externas
-            )
-
-            if odds["odd_escanteios"] is None:
-                odds["odd_escanteios"] = (
-                    odds_externas_extraidas[
-                        "odd_escanteios"
-                    ]
-                )
-
-            if odds["odd_gols"] is None:
-                odds["odd_gols"] = (
-                    odds_externas_extraidas[
-                        "odd_gols"
-                    ]
-                )
-
-        consultas += 1
-
-        elegivel, motivo, odd_combinada = (
-            fixture_elegivel(
-                fixture,
-                odds
-            )
-        )
-
-        if not elegivel:
-            logging.info(
-                "Fixture %s rejeitado: %s",
-                fixture_id,
-                motivo
-            )
             continue
 
-        pontuacao = pontuar_fixture(
-            fixture,
-            odd_combinada
+        # ----------------------------------------------------
+        # Evitar jogos que já começaram
+        # ----------------------------------------------------
+
+        status = str(
+            jogo.get(
+                "status",
+                ""
+            )
+        ).lower()
+
+        if status:
+
+            if status not in [
+                "scheduled",
+                "not_started",
+                "upcoming",
+                "pending"
+            ]:
+
+                logging.info(
+                    "Fixture %s ignorado por status: %s",
+                    fixture_id,
+                    status
+                )
+
+                continue
+
+        # ----------------------------------------------------
+        # Buscar odds
+        # ----------------------------------------------------
+
+        odds = obter_odds_fixture(
+            fixture_id
         )
 
-        candidatos.append({
-            "fixture": fixture,
-            "odds": odds,
-            "odd_combinada": odd_combinada,
-            "pontuacao": pontuacao
-        })
+        jogos_analisados += 1
+
+        if not odds:
+            continue
+
+        # ----------------------------------------------------
+        # Análise
+        # ----------------------------------------------------
+
+        analise = analisar_jogo(
+            jogo,
+            odds
+        )
+
+        if analise is None:
+            continue
+
+        candidatos.append(
+            (
+                jogo,
+                odds,
+                analise
+            )
+        )
+
+    if not candidatos:
+
+        logging.info(
+            "Nenhum candidato aprovado pelos filtros."
+        )
+
+        return
 
     candidatos.sort(
-        key=lambda item: item["pontuacao"],
+        key=lambda x: x[2]["score"],
         reverse=True
     )
 
-    for candidato, banca_id in zip(
-        candidatos,
-        vagas
-    ):
-        sinal = montar_sinal(
-            candidato["fixture"],
-            candidato["odds"],
-            candidato["odd_combinada"],
-            banca_id
+    # --------------------------------------------------------
+    # Preencher somente UMA banca por ciclo.
+    # O próximo ciclo preencherá a próxima banca livre.
+    # --------------------------------------------------------
+
+    banca_livre = encontrar_banca_livre()
+
+    if banca_livre is None:
+        return
+
+    for jogo, odds, analise in candidatos:
+
+        fixture_id = obter_id_fixture(
+            jogo
         )
 
-        enviar_sinal(sinal)
+        if fixture_ja_tem_sinal(
+            fixture_id
+        ):
+
+            continue
+
+        criar_sinal(
+            jogo,
+            odds,
+            analise,
+            banca_livre
+        )
+
+        break
 
 
-def loop_principal():
+# ============================================================
+# RESULTADO DO JOGO
+# ============================================================
+
+def extrair_resultado(
+    jogo
+):
+
+    if not isinstance(
+        jogo,
+        dict
+    ):
+
+        return None
+
+    gols_total = None
+    corners_total = None
+
+    # --------------------------------------------------------
+    # GOLS
+    # --------------------------------------------------------
+
+    goals = jogo.get(
+        "goals"
+    )
+
+    if isinstance(
+        goals,
+        dict
+    ):
+
+        home = para_float(
+            goals.get("home")
+        )
+
+        away = para_float(
+            goals.get("away")
+        )
+
+        if (
+            home is not None
+            and away is not None
+        ):
+
+            gols_total = (
+                home + away
+            )
+
+    # --------------------------------------------------------
+    # ESCANTEIOS
+    # --------------------------------------------------------
+
+    corners = jogo.get(
+        "corners"
+    )
+
+    if isinstance(
+        corners,
+        dict
+    ):
+
+        home = para_float(
+            corners.get("home")
+        )
+
+        away = para_float(
+            corners.get("away")
+        )
+
+        if (
+            home is not None
+            and away is not None
+        ):
+
+            corners_total = (
+                home + away
+            )
+
+    if (
+        gols_total is None
+        or corners_total is None
+    ):
+
+        return None
+
+    return {
+        "gols": gols_total,
+        "escanteios": corners_total
+    }
+
+
+# ============================================================
+# RESOLVER SINAL
+# ============================================================
+
+def resolver_sinal(
+    sinal,
+    resultado
+):
+
+    if sinal.get(
+        "status"
+    ) != "ativo":
+
+        return False
+
+    gols = resultado[
+        "gols"
+    ]
+
+    escanteios = resultado[
+        "escanteios"
+    ]
+
+    ganhou_escanteios = (
+        escanteios > 8.5
+    )
+
+    ganhou_gols = (
+        gols < 4.5
+    )
+
+    ganhou = (
+        ganhou_escanteios
+        and ganhou_gols
+    )
+
+    banca_num = int(
+        sinal["banca"]
+    )
+
+    gale = int(
+        sinal["gale"]
+    )
+
+    entrada = float(
+        sinal["entrada"]
+    )
+
+    banca = stats[
+        "por_banca"
+    ][
+        str(banca_num)
+    ]
+
+    # ========================================================
+    # WIN
+    # ========================================================
+
+    if ganhou:
+
+        sinal["status"] = "resolvido"
+
+        sinal["resultado"] = "WIN"
+
+        sinal["data_resolucao"] = (
+            datetime.now(
+                timezone.utc
+            ).isoformat()
+        )
+
+        lucro = (
+            entrada
+            * (
+                sinal["odd_combinada"]
+                - 1
+            )
+        )
+
+        stats[
+            "resolvidos"
+        ] += 1
+
+        stats[
+            "wins"
+        ] += 1
+
+        stats[
+            "lucro_teorico"
+        ] += lucro
+
+        banca["wins"] += 1
+
+        banca["lucro"] += lucro
+
+        stats[
+            "por_gale"
+        ][
+            str(gale)
+        ][
+            "wins"
+        ] += 1
+
+        stats[
+            "por_mercado"
+        ][
+            "combinado"
+        ][
+            "wins"
+        ] += 1
+
+        # ----------------------------------------------------
+        # RESET DA BANCA
+        # ----------------------------------------------------
+
+        banca["status"] = "livre"
+
+        banca["gale"] = 0
+
+        banca[
+            "entrada_atual"
+        ] = ENTRADA_INICIAL
+
+        banca[
+            "sinal_atual"
+        ] = None
+
+        mensagem = f"""
+<b>✅ SINAL RESOLVIDO — WIN</b>
+
+⚽ <b>{sinal['casa']} x {sinal['fora']}</b>
+
+🎯 Over 8.5 escanteios:
+<b>{escanteios:.0f}</b>
+
+🎯 Under 4.5 gols:
+<b>{gols:.0f}</b>
+
+🔥 Odd:
+<b>{sinal['odd_combinada']:.2f}</b>
+
+💰 Entrada:
+<b>R$ {entrada:.2f}</b>
+
+💵 Resultado teórico:
+<b>+ R$ {lucro:.2f}</b>
+
+🏦 Banca:
+<b>{banca_num}</b>
+
+🔄 Banca resetada para:
+<b>R$ {ENTRADA_INICIAL:.2f}</b>
+"""
+
+        enviar_telegram(
+            mensagem
+        )
+
+    # ========================================================
+    # LOSS
+    # ========================================================
+
+    else:
+
+        sinal["status"] = "resolvido"
+
+        sinal["resultado"] = "LOSS"
+
+        sinal["data_resolucao"] = (
+            datetime.now(
+                timezone.utc
+            ).isoformat()
+        )
+
+        stats[
+            "resolvidos"
+        ] += 1
+
+        stats[
+            "losses"
+        ] += 1
+
+        stats[
+            "lucro_teorico"
+        ] -= entrada
+
+        banca["losses"] += 1
+
+        banca["lucro"] -= entrada
+
+        stats[
+            "por_gale"
+        ][
+            str(gale)
+        ][
+            "losses"
+        ] += 1
+
+        stats[
+            "por_mercado"
+        ][
+            "combinado"
+        ][
+            "losses"
+        ] += 1
+
+        # ----------------------------------------------------
+        # AINDA TEM GALE
+        # ----------------------------------------------------
+
+        if gale < MAX_GALES:
+
+            novo_gale = (
+                gale + 1
+            )
+
+            nova_entrada = (
+                entrada
+                * MULTIPLICADOR_GALE
+            )
+
+            banca["status"] = "livre"
+
+            banca["gale"] = novo_gale
+
+            banca[
+                "entrada_atual"
+            ] = nova_entrada
+
+            banca[
+                "sinal_atual"
+            ] = None
+
+            mensagem = f"""
+<b>❌ SINAL RESOLVIDO — LOSS</b>
+
+⚽ <b>{sinal['casa']} x {sinal['fora']}</b>
+
+🎯 Escanteios:
+<b>{escanteios:.0f}</b>
+
+🎯 Gols:
+<b>{gols:.0f}</b>
+
+💰 Entrada perdida:
+<b>R$ {entrada:.2f}</b>
+
+🏦 Banca:
+<b>{banca_num}</b>
+
+🔁 Próximo Gale:
+<b>{novo_gale}</b>
+
+💵 Próxima entrada:
+<b>R$ {nova_entrada:.2f}</b>
+
+📌 A banca está liberada para procurar outro jogo.
+"""
+
+            enviar_telegram(
+                mensagem
+            )
+
+        # ----------------------------------------------------
+        # FIM DOS GALES
+        # ----------------------------------------------------
+
+        else:
+
+            banca["status"] = "livre"
+
+            banca["gale"] = 0
+
+            banca[
+                "entrada_atual"
+            ] = ENTRADA_INICIAL
+
+            banca[
+                "sinal_atual"
+            ] = None
+
+            mensagem = f"""
+<b>❌ LOSS FINAL DA SEQUÊNCIA</b>
+
+⚽ <b>{sinal['casa']} x {sinal['fora']}</b>
+
+🎯 Escanteios:
+<b>{escanteios:.0f}</b>
+
+🎯 Gols:
+<b>{gols:.0f}</b>
+
+🏦 Banca:
+<b>{banca_num}</b>
+
+🔁 Foram utilizados os {MAX_GALES} Gales.
+
+🔄 Sequência resetada.
+
+💰 Próxima entrada:
+<b>R$ {ENTRADA_INICIAL:.2f}</b>
+"""
+
+            enviar_telegram(
+                mensagem
+            )
+
+    # ========================================================
+    # ASSERTIVIDADE
+    # ========================================================
+
+    resolvidos = stats[
+        "resolvidos"
+    ]
+
+    if resolvidos > 0:
+
+        stats[
+            "assertividade"
+        ] = round(
+            (
+                stats["wins"]
+                / resolvidos
+            )
+            * 100,
+            2
+        )
+
+    stats[
+        "ultima_atualizacao"
+    ] = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    salvar_json(
+        ARQUIVO_SINAIS,
+        sinais
+    )
+
+    salvar_json(
+        ARQUIVO_STATS,
+        stats
+    )
+
+    return True
+
+
+# ============================================================
+# VERIFICAR RESULTADOS
+# ============================================================
+
+def verificar_resultados():
+
+    ativos = [
+        sinal
+        for sinal in sinais.values()
+        if sinal.get(
+            "status"
+        ) == "ativo"
+    ]
+
+    if not ativos:
+        return
+
+    logging.info(
+        "Verificando %s sinais ativos.",
+        len(ativos)
+    )
+
+    for sinal in ativos:
+
+        fixture_id = sinal.get(
+            "fixture_id"
+        )
+
+        if not fixture_id:
+            continue
+
+        dados = api_get(
+            f"fixtures/{fixture_id}"
+        )
+
+        if dados is None:
+            continue
+
+        # ----------------------------------------------------
+        # Às vezes a API devolve fixture diretamente,
+        # às vezes dentro de data/fixture.
+        # ----------------------------------------------------
+
+        jogo = dados
+
+        if isinstance(
+            dados,
+            dict
+        ):
+
+            if isinstance(
+                dados.get("data"),
+                dict
+            ):
+
+                jogo = dados["data"]
+
+            elif isinstance(
+                dados.get("fixture"),
+                dict
+            ):
+
+                jogo = dados["fixture"]
+
+        resultado = (
+            extrair_resultado(
+                jogo
+            )
+        )
+
+        if resultado is None:
+
+            logging.info(
+                "Resultado ainda não disponível para fixture %s.",
+                fixture_id
+            )
+
+            continue
+
+        # ----------------------------------------------------
+        # Verificar se o jogo realmente terminou
+        # ----------------------------------------------------
+
+        status = str(
+            jogo.get(
+                "status",
+                ""
+            )
+        ).lower()
+
+        status_final = any(
+            palavra in status
+            for palavra in [
+                "finished",
+                "final",
+                "ended",
+                "closed",
+                "ft"
+            ]
+        )
+
+        if not status_final:
+
+            # Se houver placar final preenchido,
+            # ainda permitimos somente quando a API
+            # indicar explicitamente valores válidos.
+
+            logging.info(
+                "Fixture %s possui resultado parcial/status=%s.",
+                fixture_id,
+                status
+            )
+
+            continue
+
+        resolver_sinal(
+            sinal,
+            resultado
+        )
+
+
+# ============================================================
+# LOOP DO ROBÔ
+# ============================================================
+
+def loop_robo():
+
     logging.info(
         "Robô iniciado."
     )
 
-    while True:
-        try:
-            with LOCK:
-                analisar_e_enviar()
+    logging.info(
+        "Janela: próximas %s horas",
+        JANELA_HORAS
+    )
 
-        except Exception as erro:
+    logging.info(
+        "Mercados: %s + %s",
+        MERCADO_ESCANTEIOS,
+        MERCADO_GOLS
+    )
+
+    logging.info(
+        "Odd: %.2f até %.2f | alvo %.2f",
+        ODD_MINIMA,
+        ODD_MAXIMA,
+        ODD_ALVO
+    )
+
+    logging.info(
+        "Bancas: %s",
+        TOTAL_BANCAS
+    )
+
+    while True:
+
+        try:
+
+            with lock:
+
+                # Primeiro resolve sinais existentes
+                verificar_resultados()
+
+                # Depois procura novos sinais
+                gerar_sinais()
+
+        except Exception as e:
+
             logging.exception(
-                "Erro no ciclo principal: %s",
-                erro
+                "Erro no loop principal: %s",
+                e
             )
 
         time.sleep(
@@ -1374,84 +2688,173 @@ def loop_principal():
 
 
 # ============================================================
-# ROTAS FLASK
+# THREAD
+# ============================================================
+
+thread_robo = threading.Thread(
+    target=loop_robo,
+    daemon=True
+)
+
+thread_robo.start()
+
+
+# ============================================================
+# FLASK
 # ============================================================
 
 @app.route("/")
 def home():
+
     return jsonify({
         "status": "online",
-        "robo": "combinado_escanteios_gols",
-        "modo": "pre_jogo",
+        "bot": "robo combinado gols + escanteios",
         "janela_horas": JANELA_HORAS,
-        "bancas": TOTAL_BANCAS,
-        "odd_minima": ODD_MINIMA,
-        "odd_maxima": ODD_MAXIMA,
-        "odd_alvo": ODD_ALVO,
-        "mercado_escanteios": MERCADO_ESCANTEIOS,
-        "mercado_gols": MERCADO_GOLS,
-        "ultima_atualizacao": stats.get(
-            "ultima_atualizacao"
-        )
+        "mercado_escanteios":
+            MERCADO_ESCANTEIOS,
+        "mercado_gols":
+            MERCADO_GOLS,
+        "odd_minima":
+            ODD_MINIMA,
+        "odd_maxima":
+            ODD_MAXIMA,
+        "bancas":
+            TOTAL_BANCAS,
+        "timestamp":
+            datetime.now(
+                timezone.utc
+            ).isoformat()
     })
 
+
+# ============================================================
+# STATUS
+# ============================================================
 
 @app.route("/status")
 def status():
+
+    bancas = {}
+
+    for numero, banca in (
+        stats[
+            "por_banca"
+        ].items()
+    ):
+
+        bancas[numero] = {
+            "status":
+                banca.get(
+                    "status"
+                ),
+
+            "gale":
+                banca.get(
+                    "gale"
+                ),
+
+            "entrada_atual":
+                banca.get(
+                    "entrada_atual"
+                ),
+
+            "sinal_atual":
+                banca.get(
+                    "sinal_atual"
+                )
+        }
+
     return jsonify({
-        "stats": stats,
+        "online": True,
         "bancas": bancas,
-        "sinais_pendentes": [
-            sinal
-            for sinal in sinais.values()
-            if sinal.get("status") == "pendente"
-        ]
+        "total_sinais":
+            stats["total_sinais"],
+        "resolvidos":
+            stats["resolvidos"],
+        "wins":
+            stats["wins"],
+        "losses":
+            stats["losses"],
+        "assertividade":
+            stats["assertividade"],
+        "lucro_teorico":
+            round(
+                stats[
+                    "lucro_teorico"
+                ],
+                2
+            )
     })
 
+
+# ============================================================
+# STATS
+# ============================================================
 
 @app.route("/stats")
 def rota_stats():
-    return jsonify(stats)
 
+    return jsonify(
+        stats
+    )
+
+
+# ============================================================
+# BANCAS
+# ============================================================
 
 @app.route("/bancas")
 def rota_bancas():
-    return jsonify(bancas)
 
+    return jsonify(
+        stats[
+            "por_banca"
+        ]
+    )
+
+
+# ============================================================
+# SINAIS
+# ============================================================
 
 @app.route("/sinais")
 def rota_sinais():
-    return jsonify(sinais)
 
+    return jsonify(
+        sinais
+    )
+
+
+# ============================================================
+# HEALTH
+# ============================================================
 
 @app.route("/health")
 def health():
+
     return jsonify({
-        "ok": True,
-        "timestamp": datetime.now(
-            timezone.utc
-        ).isoformat()
+        "status": "ok",
+        "timestamp":
+            datetime.now(
+                timezone.utc
+            ).isoformat()
     })
 
 
 # ============================================================
-# INICIALIZAÇÃO
+# EXECUÇÃO LOCAL
 # ============================================================
 
-carregar_dados()
-
-threading.Thread(
-    target=loop_principal,
-    daemon=True
-).start()
-
-
 if __name__ == "__main__":
+
     porta = int(
-        os.getenv("PORT", "10000")
+        os.getenv(
+            "PORT",
+            "10000"
+        )
     )
 
     app.run(
         host="0.0.0.0",
         port=porta
-        )
+    )

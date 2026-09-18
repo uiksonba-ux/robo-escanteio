@@ -2,7 +2,6 @@ import os
 import json
 import time
 import html
-import math
 import logging
 import threading
 from collections import deque
@@ -13,25 +12,22 @@ from flask import Flask, jsonify
 
 
 # ============================================================
-# ROBÔ DE ESCANTEIOS V19
+# ROBÔ V20
 #
-# 1 SINAL = 2 JOGOS = 4 MERCADOS
+# 1 JOGO = 1 SINAL = 3 MERCADOS
 #
-# JOGO 1:
-#   Under cantos HT
-#   Over cantos FT
+# 1) UNDER ESCANTEIOS HT
+# 2) OVER ESCANTEIOS FT
+# 3) UNDER GOLS FT
 #
-# JOGO 2:
-#   Under cantos HT
-#   Over cantos FT
-#
-# LINHAS DINÂMICAS:
-#   Under HT = média HT + margem
-#   Over FT  = média FT - margem
-#
-# Cada mercado precisa atingir a taxa mínima individual.
-#
-# Combinação histórica de cada jogo é INFORMATIVA.
+# REGRAS:
+# - Linha vem da API Bet365
+# - Histórico testa exatamente a linha recebida
+# - Cada mercado precisa atingir a taxa mínima
+# - Ocorrência conjunta é apenas informativa
+# - 3 bancas independentes
+# - Gale 0 / Gale 1 / Gale 2
+# - Resolução automática
 # ============================================================
 
 
@@ -47,11 +43,11 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
-logger = logging.getLogger("robo-v19")
+logger = logging.getLogger("robo-v20")
 
 
 # ============================================================
-# CONFIGURAÇÃO API
+# CONFIGURAÇÃO
 # ============================================================
 
 BASE_API = os.getenv(
@@ -71,35 +67,6 @@ PORT = int(os.getenv("PORT", "10000"))
 
 
 # ============================================================
-# ESTRATÉGIA
-# ============================================================
-
-MARGEM_HT = float(
-    os.getenv("MARGEM_HT", "2.0")
-)
-
-MARGEM_FT = float(
-    os.getenv("MARGEM_FT", "2.0")
-)
-
-MIN_LINHA_UNDER_HT = float(
-    os.getenv("MIN_LINHA_UNDER_HT", "3.0")
-)
-
-MAX_LINHA_UNDER_HT = float(
-    os.getenv("MAX_LINHA_UNDER_HT", "8.0")
-)
-
-MIN_LINHA_OVER_FT = float(
-    os.getenv("MIN_LINHA_OVER_FT", "2.0")
-)
-
-MAX_LINHA_OVER_FT = float(
-    os.getenv("MAX_LINHA_OVER_FT", "12.0")
-)
-
-
-# ============================================================
 # FILTROS
 # ============================================================
 
@@ -109,6 +76,10 @@ MIN_TAXA_UNDER_HT = float(
 
 MIN_TAXA_OVER_FT = float(
     os.getenv("MIN_TAXA_OVER_FT", "0.70")
+)
+
+MIN_TAXA_UNDER_GOLS = float(
+    os.getenv("MIN_TAXA_UNDER_GOLS", "0.70")
 )
 
 QTD_HISTORICO_TIME = int(
@@ -121,7 +92,7 @@ MIN_JOGOS_HISTORICO = int(
 
 
 # ============================================================
-# JANELA DE ANÁLISE
+# JANELA
 # ============================================================
 
 JANELA_HORAS = int(
@@ -196,11 +167,10 @@ CACHE_MERCADO_TTL = int(
 # ARQUIVOS
 # ============================================================
 
-ARQUIVO_STATS = "stats_v19.json"
-ARQUIVO_SINAIS = "sinais_v19.json"
-ARQUIVO_FILA = "fila_v19.json"
-ARQUIVO_BANCAS = "bancas_v19.json"
-ARQUIVO_CACHE = "cache_v19.json"
+ARQUIVO_STATS = "stats_v20.json"
+ARQUIVO_SINAIS = "sinais_v20.json"
+ARQUIVO_BANCAS = "bancas_v20.json"
+ARQUIVO_CACHE = "cache_v20.json"
 
 
 # ============================================================
@@ -213,13 +183,9 @@ if API_KEY:
     session.headers.update({
         "Authorization": f"Bearer {API_KEY}",
         "Accept": "application/json",
-        "User-Agent": "robo-cantos-v19/1.0"
+        "User-Agent": "robo-v20/1.0"
     })
 
-
-# ============================================================
-# LOCKS
-# ============================================================
 
 lock_dados = threading.RLock()
 lock_api = threading.Lock()
@@ -229,6 +195,13 @@ stop_event = threading.Event()
 historico_requisicoes = deque()
 
 ultima_requisicao = 0.0
+
+cache_fixtures = {
+    "timestamp": 0,
+    "dados": []
+}
+
+cursor_fixture = 0
 
 
 # ============================================================
@@ -241,15 +214,17 @@ def carregar_json(caminho, padrao):
         return padrao
 
     try:
-        with open(caminho, "r", encoding="utf-8") as arquivo:
-            return json.load(arquivo)
+        with open(caminho, "r", encoding="utf-8") as f:
+            return json.load(f)
 
     except Exception as erro:
+
         logger.error(
             "Erro lendo %s: %s",
             caminho,
             erro
         )
+
         return padrao
 
 
@@ -258,15 +233,16 @@ def salvar_json(caminho, dados):
     temporario = caminho + ".tmp"
 
     try:
+
         with open(
             temporario,
             "w",
             encoding="utf-8"
-        ) as arquivo:
+        ) as f:
 
             json.dump(
                 dados,
-                arquivo,
+                f,
                 ensure_ascii=False,
                 indent=2
             )
@@ -277,6 +253,7 @@ def salvar_json(caminho, dados):
         )
 
     except Exception as erro:
+
         logger.error(
             "Erro salvando %s: %s",
             caminho,
@@ -311,12 +288,6 @@ sinais = carregar_json(
 )
 
 
-fila_aprovados = carregar_json(
-    ARQUIVO_FILA,
-    []
-)
-
-
 cache_persistente = carregar_json(
     ARQUIVO_CACHE,
     {
@@ -336,15 +307,6 @@ cache_persistente.setdefault(
 )
 
 
-cache_fixtures = {
-    "timestamp": 0,
-    "dados": []
-}
-
-
-cursor_fixture = 0
-
-
 # ============================================================
 # UTILIDADES
 # ============================================================
@@ -352,6 +314,7 @@ cursor_fixture = 0
 def numero(valor):
 
     try:
+
         if valor is None:
             return None
 
@@ -361,6 +324,11 @@ def numero(valor):
         return None
 
 
+def pct(valor):
+
+    return f"{valor * 100:.1f}%"
+
+
 def agora_iso():
 
     return datetime.now(
@@ -368,74 +336,13 @@ def agora_iso():
     ).isoformat()
 
 
-def taxa(parte, total):
+def taxa(wins, total):
 
     if total <= 0:
         return 0.0
 
-    return parte / total
+    return wins / total
 
-
-def pct(valor):
-
-    return f"{valor * 100:.1f}%"
-
-
-def limitar(
-    valor,
-    minimo,
-    maximo
-):
-
-    return max(
-        minimo,
-        min(valor, maximo)
-    )
-
-
-def arredondar_cima_meio(valor):
-
-    return math.ceil(
-        valor * 2
-    ) / 2
-
-
-def arredondar_baixo_meio(valor):
-
-    return math.floor(
-        valor * 2
-    ) / 2
-
-
-def criar_linha_under(media):
-
-    linha = arredondar_cima_meio(
-        media + MARGEM_HT
-    )
-
-    return limitar(
-        linha,
-        MIN_LINHA_UNDER_HT,
-        MAX_LINHA_UNDER_HT
-    )
-
-
-def criar_linha_over(media):
-
-    linha = arredondar_baixo_meio(
-        media - MARGEM_FT
-    )
-
-    return limitar(
-        linha,
-        MIN_LINHA_OVER_FT,
-        MAX_LINHA_OVER_FT
-    )
-
-
-# ============================================================
-# EXTRAIR LISTA API
-# ============================================================
 
 def extrair_lista(dados):
 
@@ -488,8 +395,7 @@ def aguardar_rate_limit():
 
         while (
             historico_requisicoes
-            and
-            agora - historico_requisicoes[0] >= 60
+            and agora - historico_requisicoes[0] >= 60
         ):
             historico_requisicoes.popleft()
 
@@ -540,7 +446,7 @@ def aguardar_rate_limit():
 
 
 # ============================================================
-# API GET
+# API
 # ============================================================
 
 def api_get(
@@ -552,7 +458,7 @@ def api_get(
     if not API_KEY:
 
         logger.error(
-            "FIVE_DOLLAR_API_KEY ausente"
+            "FIVE_DOLLAR_API_KEY não configurada"
         )
 
         return None
@@ -579,7 +485,8 @@ def api_get(
             if resposta.status_code == 429:
 
                 logger.warning(
-                    "429. Aguardando %ss",
+                    "429 recebido. "
+                    "Aguardando %ss",
                     API_BACKOFF_429
                 )
 
@@ -624,7 +531,7 @@ def api_get(
         except ValueError:
 
             logger.error(
-                "JSON inválido: %s",
+                "JSON inválido em %s",
                 endpoint
             )
 
@@ -639,10 +546,7 @@ def api_get(
 
 def telegram(mensagem):
 
-    if (
-        not TELEGRAM_TOKEN
-        or not CHAT_ID
-    ):
+    if not TELEGRAM_TOKEN or not CHAT_ID:
 
         logger.warning(
             "Telegram não configurado"
@@ -713,11 +617,11 @@ bancas = carregar_json(
 )
 
 
-# Garante novas bancas caso TOTAL_BANCAS aumente.
 ids_existentes = {
     b.get("id")
     for b in bancas
 }
+
 
 for i in range(
     1,
@@ -768,7 +672,7 @@ def valor_entrada(gale):
 
 
 # ============================================================
-# ASSERTIVIDADE DO GRUPO
+# ESTATÍSTICAS
 # ============================================================
 
 def estatisticas_grupo():
@@ -785,9 +689,11 @@ def estatisticas_grupo():
         stats.get("pushes", 0)
     )
 
-    decisoes = wins + losses
+    decisoes = (
+        wins + losses
+    )
 
-    geral = (
+    assertividade = (
         wins / decisoes
         if decisoes
         else 0.0
@@ -817,16 +723,18 @@ def estatisticas_grupo():
             dados.get("pushes", 0)
         )
 
-        total = w + l
+        decisoes_gale = (
+            w + l
+        )
 
         por_gale[str(gale)] = {
             "wins": w,
             "losses": l,
             "pushes": p,
             "taxa": (
-                w / total
-                if total
-                else 0
+                w / decisoes_gale
+                if decisoes_gale
+                else 0.0
             )
         }
 
@@ -834,7 +742,7 @@ def estatisticas_grupo():
         "wins": wins,
         "losses": losses,
         "pushes": pushes,
-        "assertividade": geral,
+        "assertividade": assertividade,
         "resolvidos":
             wins + losses + pushes,
         "por_gale": por_gale
@@ -845,20 +753,22 @@ def texto_assertividade():
 
     dados = estatisticas_grupo()
 
-    if (
+    decisoes = (
         dados["wins"]
         + dados["losses"]
-        == 0
-    ):
-        geral = "Aguardando resultados"
-    else:
-        geral = pct(
+    )
+
+    geral = (
+        pct(
             dados["assertividade"]
         )
+        if decisoes
+        else "Aguardando resultados"
+    )
 
     linhas = [
         "━━━━━━━━━━━━━━━━━━",
-        "📊 <b>ASSERTIVIDADE V19</b>",
+        "📊 <b>ASSERTIVIDADE V20</b>",
         "",
         f"🎯 Geral: <b>{geral}</b>",
         (
@@ -877,14 +787,14 @@ def texto_assertividade():
             "por_gale"
         ][str(gale)]
 
-        decisoes = (
+        total = (
             g["wins"]
             + g["losses"]
         )
 
         valor = (
             pct(g["taxa"])
-            if decisoes
+            if total
             else "—"
         )
 
@@ -922,6 +832,7 @@ def extrair_times(fixture):
         fixture,
         dict
     ):
+
         return (
             None,
             None,
@@ -997,7 +908,7 @@ def extrair_times(fixture):
 
 
 # ============================================================
-# FIXTURES FUTUROS
+# FIXTURES
 # ============================================================
 
 def buscar_fixtures():
@@ -1045,7 +956,7 @@ def buscar_fixtures():
         dados
     )
 
-    def ordenar(jogo):
+    def chave(jogo):
 
         if not isinstance(
             jogo,
@@ -1060,7 +971,7 @@ def buscar_fixtures():
         )
 
     jogos.sort(
-        key=ordenar
+        key=chave
     )
 
     cache_fixtures[
@@ -1072,7 +983,7 @@ def buscar_fixtures():
     ] = jogos
 
     logger.info(
-        "%s jogos encontrados",
+        "%s fixtures encontrados",
         len(jogos)
     )
 
@@ -1142,6 +1053,8 @@ def extrair_linha_mercado(
     ):
         return None
 
+    # Pré-jogo:
+    # closing > opening > inplay
     for fase in (
         "closing",
         "opening",
@@ -1170,20 +1083,27 @@ def extrair_linha_mercado(
             item.get("under")
         )
 
-        if (
-            linha is not None
-            and over is not None
-            and under is not None
-            and over > 1
-            and under > 1
-        ):
+        if linha is None:
+            continue
 
-            return {
-                "fase": fase,
-                "linha": linha,
-                "over": over,
-                "under": under
-            }
+        if over is None:
+            continue
+
+        if under is None:
+            continue
+
+        if over <= 1:
+            continue
+
+        if under <= 1:
+            continue
+
+        return {
+            "fase": fase,
+            "linha": linha,
+            "over": over,
+            "under": under
+        }
 
     return None
 
@@ -1197,10 +1117,8 @@ def consultar_mercado_bet365(
     resposta = api_get(
         f"/fixtures/{fixture_id}/odds",
         params={
-            "bookmakers":
-                "bet365",
-            "market":
-                market
+            "bookmakers": "bet365",
+            "market": market
         }
     )
 
@@ -1230,6 +1148,10 @@ def consultar_mercado_bet365(
     )
 
 
+# ============================================================
+# 3 MERCADOS DA V20
+# ============================================================
+
 def verificar_mercados_bet365(
     fixture_id
 ):
@@ -1256,48 +1178,78 @@ def verificar_mercados_bet365(
             )
         )
 
-        if (
-            idade
-            < CACHE_MERCADO_TTL
-        ):
+        if idade < CACHE_MERCADO_TTL:
 
             return item.get(
                 "dados",
                 {}
             )
 
-    # Primeiro FT
-    ft = consultar_mercado_bet365(
+    # ========================================================
+    # 1 - ESCANTEIOS HT
+    # ========================================================
+
+    cantos_ht = consultar_mercado_bet365(
         fixture_id,
-        "corner",
-        "corner_line"
+        "corner_half",
+        "corner_line_half"
     )
 
-    if not ft:
+    if not cantos_ht:
 
         resultado = {
-            "ft": False,
-            "ht": False,
-            "ft_detalhes": None,
-            "ht_detalhes": None
+            "cantos_ht": None,
+            "cantos_ft": None,
+            "gols_ft": None
         }
 
     else:
 
-        # Só gasta chamada HT
-        # se FT existir.
-        ht = consultar_mercado_bet365(
+        # ====================================================
+        # 2 - ESCANTEIOS FT
+        # ====================================================
+
+        cantos_ft = consultar_mercado_bet365(
             fixture_id,
-            "corner_half",
-            "corner_line_half"
+            "corner",
+            "corner_line"
         )
 
-        resultado = {
-            "ft": True,
-            "ht": ht is not None,
-            "ft_detalhes": ft,
-            "ht_detalhes": ht
-        }
+        if not cantos_ft:
+
+            resultado = {
+                "cantos_ht":
+                    cantos_ht,
+
+                "cantos_ft":
+                    None,
+
+                "gols_ft":
+                    None
+            }
+
+        else:
+
+            # ================================================
+            # 3 - GOLS FT
+            # ================================================
+
+            gols_ft = consultar_mercado_bet365(
+                fixture_id,
+                "goalline",
+                "goal_line"
+            )
+
+            resultado = {
+                "cantos_ht":
+                    cantos_ht,
+
+                "cantos_ft":
+                    cantos_ft,
+
+                "gols_ft":
+                    gols_ft
+            }
 
     cache_persistente[
         "mercados"
@@ -1344,10 +1296,7 @@ def buscar_historico_time(
             )
         )
 
-        if (
-            idade
-            < CACHE_HISTORICO_TTL
-        ):
+        if idade < CACHE_HISTORICO_TTL:
 
             return item.get(
                 "dados",
@@ -1357,8 +1306,12 @@ def buscar_historico_time(
     dados = api_get(
         f"/teams/{team_id}/fixtures",
         params={
-            "status": "finished",
-            "order": "desc",
+            "status":
+                "finished",
+
+            "order":
+                "desc",
+
             "per_page":
                 QTD_HISTORICO_TIME
         }
@@ -1401,6 +1354,7 @@ def obter_id_jogo(jogo):
     )
 
     if fixture_id is not None:
+
         return str(
             fixture_id
         )
@@ -1419,6 +1373,7 @@ def obter_id_jogo(jogo):
         )
 
         if fixture_id is not None:
+
             return str(
                 fixture_id
             )
@@ -1460,7 +1415,7 @@ def combinar_historicos(
 
 
 # ============================================================
-# CANTOS
+# EXTRAÇÃO DE ESCANTEIOS
 # ============================================================
 
 def extrair_cantos(jogo):
@@ -1515,7 +1470,161 @@ def extrair_cantos(jogo):
 
 
 # ============================================================
-# RESULTADO DE MERCADO
+# EXTRAÇÃO DE GOLS
+# ============================================================
+
+def extrair_gols(jogo):
+
+    if not isinstance(
+        jogo,
+        dict
+    ):
+        return None
+
+    # --------------------------------------------------------
+    # FORMATO 1:
+    # goals = {"home": 2, "away": 1}
+    # --------------------------------------------------------
+
+    goals = jogo.get(
+        "goals"
+    )
+
+    if isinstance(
+        goals,
+        dict
+    ):
+
+        home = numero(
+            goals.get("home")
+        )
+
+        away = numero(
+            goals.get("away")
+        )
+
+        if (
+            home is not None
+            and away is not None
+        ):
+
+            return home + away
+
+    # --------------------------------------------------------
+    # FORMATO 2:
+    # score.fulltime.home / away
+    # --------------------------------------------------------
+
+    score = jogo.get(
+        "score"
+    )
+
+    if isinstance(
+        score,
+        dict
+    ):
+
+        fulltime = score.get(
+            "fulltime"
+        )
+
+        if isinstance(
+            fulltime,
+            dict
+        ):
+
+            home = numero(
+                fulltime.get("home")
+            )
+
+            away = numero(
+                fulltime.get("away")
+            )
+
+            if (
+                home is not None
+                and away is not None
+            ):
+
+                return home + away
+
+    # --------------------------------------------------------
+    # FORMATO 3:
+    # scores.fulltime
+    # --------------------------------------------------------
+
+    scores = jogo.get(
+        "scores"
+    )
+
+    if isinstance(
+        scores,
+        dict
+    ):
+
+        fulltime = scores.get(
+            "fulltime"
+        )
+
+        if isinstance(
+            fulltime,
+            dict
+        ):
+
+            home = numero(
+                fulltime.get("home")
+            )
+
+            away = numero(
+                fulltime.get("away")
+            )
+
+            if (
+                home is not None
+                and away is not None
+            ):
+
+                return home + away
+
+    return None
+
+
+# ============================================================
+# EXTRAIR REGISTRO COMPLETO
+# ============================================================
+
+def extrair_registro(
+    jogo
+):
+
+    cantos = extrair_cantos(
+        jogo
+    )
+
+    gols = extrair_gols(
+        jogo
+    )
+
+    if not cantos:
+        return None
+
+    if gols is None:
+        return None
+
+    return {
+        "cantos_ht":
+            cantos["ht"],
+
+        "cantos_ft":
+            cantos["ft"],
+
+        "gols_ft":
+            gols
+    }
+
+
+# ============================================================
+# RESULTADOS INDIVIDUAIS
 # ============================================================
 
 def resultado_under(
@@ -1547,24 +1656,28 @@ def resultado_over(
 
 
 # ============================================================
-# ANÁLISE HISTÓRICA
+# ANÁLISE HISTÓRICA V20
 # ============================================================
 
 def analisar_historico(
-    jogos
+    jogos,
+    linha_cantos_ht,
+    linha_cantos_ft,
+    linha_gols_ft
 ):
 
     registros = []
 
     for jogo in jogos:
 
-        cantos = extrair_cantos(
+        registro = extrair_registro(
             jogo
         )
 
-        if cantos:
+        if registro:
+
             registros.append(
-                cantos
+                registro
             )
 
     total = len(
@@ -1574,168 +1687,233 @@ def analisar_historico(
     if total == 0:
         return None
 
-    media_ht = (
+
+    # ========================================================
+    # MÉDIAS
+    # ========================================================
+
+    media_cantos_ht = (
         sum(
-            r["ht"]
+            r["cantos_ht"]
             for r in registros
         )
         / total
     )
 
-    media_ft = (
+    media_cantos_ft = (
         sum(
-            r["ft"]
+            r["cantos_ft"]
             for r in registros
         )
         / total
     )
 
-    linha_under = criar_linha_under(
-        media_ht
+    media_gols_ft = (
+        sum(
+            r["gols_ft"]
+            for r in registros
+        )
+        / total
     )
 
-    linha_over = criar_linha_over(
-        media_ft
-    )
 
-    under_wins = 0
-    under_voids = 0
-    under_losses = 0
+    # ========================================================
+    # CONTADORES
+    # ========================================================
 
-    over_wins = 0
-    over_voids = 0
-    over_losses = 0
+    under_ht_wins = 0
+    under_ht_voids = 0
+    under_ht_losses = 0
 
-    comb_wins = 0
-    comb_voids = 0
-    comb_losses = 0
+    over_ft_wins = 0
+    over_ft_voids = 0
+    over_ft_losses = 0
+
+    under_gols_wins = 0
+    under_gols_voids = 0
+    under_gols_losses = 0
+
+    conjunta_wins = 0
+    conjunta_voids = 0
+    conjunta_losses = 0
+
+
+    # ========================================================
+    # BACKTEST
+    # ========================================================
 
     for registro in registros:
 
-        under = resultado_under(
-            registro["ht"],
-            linha_under
+        r_under_ht = resultado_under(
+            registro["cantos_ht"],
+            linha_cantos_ht
         )
 
-        over = resultado_over(
-            registro["ft"],
-            linha_over
+        r_over_ft = resultado_over(
+            registro["cantos_ft"],
+            linha_cantos_ft
         )
 
-        if under == "WIN":
-            under_wins += 1
-
-        elif under == "VOID":
-            under_voids += 1
-
-        else:
-            under_losses += 1
+        r_under_gols = resultado_under(
+            registro["gols_ft"],
+            linha_gols_ft
+        )
 
 
-        if over == "WIN":
-            over_wins += 1
+        # UNDER CANTOS HT
 
-        elif over == "VOID":
-            over_voids += 1
+        if r_under_ht == "WIN":
+            under_ht_wins += 1
+
+        elif r_under_ht == "VOID":
+            under_ht_voids += 1
 
         else:
-            over_losses += 1
+            under_ht_losses += 1
 
 
-        if (
-            under == "LOSS"
-            or over == "LOSS"
-        ):
+        # OVER CANTOS FT
 
-            comb_losses += 1
+        if r_over_ft == "WIN":
+            over_ft_wins += 1
 
-        elif (
-            under == "VOID"
-            or over == "VOID"
-        ):
+        elif r_over_ft == "VOID":
+            over_ft_voids += 1
 
-            comb_voids += 1
+        else:
+            over_ft_losses += 1
+
+
+        # UNDER GOLS FT
+
+        if r_under_gols == "WIN":
+            under_gols_wins += 1
+
+        elif r_under_gols == "VOID":
+            under_gols_voids += 1
+
+        else:
+            under_gols_losses += 1
+
+
+        # ====================================================
+        # CONJUNTA
+        # ====================================================
+
+        resultados = [
+            r_under_ht,
+            r_over_ft,
+            r_under_gols
+        ]
+
+        if "LOSS" in resultados:
+
+            conjunta_losses += 1
+
+        elif "VOID" in resultados:
+
+            conjunta_voids += 1
 
         else:
 
-            comb_wins += 1
-
-
-    taxa_under = taxa(
-        under_wins,
-        total
-    )
-
-    taxa_over = taxa(
-        over_wins,
-        total
-    )
-
-    taxa_combinada = taxa(
-        comb_wins,
-        total
-    )
+            conjunta_wins += 1
 
 
     return {
 
-        "total": total,
+        "total":
+            total,
 
-        "media_ht":
-            media_ht,
+        "linha_cantos_ht":
+            linha_cantos_ht,
 
-        "media_ft":
-            media_ft,
+        "linha_cantos_ft":
+            linha_cantos_ft,
 
-        "linha_under":
-            linha_under,
+        "linha_gols_ft":
+            linha_gols_ft,
 
-        "linha_over":
-            linha_over,
 
-        "margem_ht":
-            linha_under
-            - media_ht,
+        "media_cantos_ht":
+            media_cantos_ht,
 
-        "margem_ft":
-            media_ft
-            - linha_over,
+        "media_cantos_ft":
+            media_cantos_ft,
 
-        "under_wins":
-            under_wins,
+        "media_gols_ft":
+            media_gols_ft,
 
-        "under_voids":
-            under_voids,
 
-        "under_losses":
-            under_losses,
+        # UNDER HT
 
-        "taxa_under":
-            taxa_under,
+        "under_ht_wins":
+            under_ht_wins,
 
-        "over_wins":
-            over_wins,
+        "under_ht_voids":
+            under_ht_voids,
 
-        "over_voids":
-            over_voids,
+        "under_ht_losses":
+            under_ht_losses,
 
-        "over_losses":
-            over_losses,
+        "taxa_under_ht":
+            taxa(
+                under_ht_wins,
+                total
+            ),
 
-        "taxa_over":
-            taxa_over,
 
-        "comb_wins":
-            comb_wins,
+        # OVER FT
 
-        "comb_voids":
-            comb_voids,
+        "over_ft_wins":
+            over_ft_wins,
 
-        "comb_losses":
-            comb_losses,
+        "over_ft_voids":
+            over_ft_voids,
 
-        "taxa_combinada":
-            taxa_combinada
+        "over_ft_losses":
+            over_ft_losses,
+
+        "taxa_over_ft":
+            taxa(
+                over_ft_wins,
+                total
+            ),
+
+
+        # UNDER GOLS
+
+        "under_gols_wins":
+            under_gols_wins,
+
+        "under_gols_voids":
+            under_gols_voids,
+
+        "under_gols_losses":
+            under_gols_losses,
+
+        "taxa_under_gols":
+            taxa(
+                under_gols_wins,
+                total
+            ),
+
+
+        # CONJUNTA
+
+        "conjunta_wins":
+            conjunta_wins,
+
+        "conjunta_voids":
+            conjunta_voids,
+
+        "conjunta_losses":
+            conjunta_losses,
+
+        "taxa_conjunta":
+            taxa(
+                conjunta_wins,
+                total
+            )
     }
 
 
@@ -1757,14 +1935,20 @@ def passou_filtros(
         return False
 
     if (
-        analise["taxa_under"]
+        analise["taxa_under_ht"]
         < MIN_TAXA_UNDER_HT
     ):
         return False
 
     if (
-        analise["taxa_over"]
+        analise["taxa_over_ft"]
         < MIN_TAXA_OVER_FT
+    ):
+        return False
+
+    if (
+        analise["taxa_under_gols"]
+        < MIN_TAXA_UNDER_GOLS
     ):
         return False
 
@@ -1772,7 +1956,7 @@ def passou_filtros(
 
 
 # ============================================================
-# JOGO JÁ USADO
+# JÁ UTILIZADO
 # ============================================================
 
 def fixture_ja_usado(
@@ -1785,62 +1969,44 @@ def fixture_ja_usado(
 
     for sinal in sinais:
 
-        for jogo in sinal.get(
-            "jogos",
-            []
-        ):
-
-            if (
-                str(
-                    jogo.get(
-                        "fixture_id"
-                    )
+        if (
+            str(
+                sinal.get(
+                    "fixture_id"
                 )
-                == fixture_id
-            ):
-                return True
+            )
+            == fixture_id
+        ):
+            return True
 
     return False
 
 
-def fixture_na_fila(
-    fixture_id
-):
-
-    fixture_id = str(
-        fixture_id
-    )
-
-    return any(
-        str(
-            item.get(
-                "fixture_id"
-            )
-        )
-        == fixture_id
-        for item
-        in fila_aprovados
-    )
-
-
 # ============================================================
-# COLOCAR JOGO APROVADO NA FILA
+# CRIAR SINAL
 # ============================================================
 
-def adicionar_fila(
+def criar_sinal(
     fixture,
     analise,
     mercados
 ):
 
+    banca = obter_banca_livre()
+
+    if not banca:
+
+        logger.info(
+            "Sem banca livre"
+        )
+
+        return False
+
+
     fixture_id = str(
         fixture.get("id")
     )
 
-    if fixture_na_fila(
-        fixture_id
-    ):
-        return
 
     (
         home_id,
@@ -1851,7 +2017,39 @@ def adicionar_fila(
         fixture
     )
 
-    item = {
+
+    gale = int(
+        banca.get(
+            "gale",
+            0
+        )
+    )
+
+
+    entrada = valor_entrada(
+        gale
+    )
+
+
+    sinal_id = (
+        f"{int(time.time())}-"
+        f"{fixture_id}"
+    )
+
+
+    sinal = {
+
+        "id":
+            sinal_id,
+
+        "versao":
+            "V20",
+
+        "status":
+            "PENDENTE",
+
+        "resultado":
+            None,
 
         "fixture_id":
             fixture_id,
@@ -1868,159 +2066,185 @@ def adicionar_fila(
         "away":
             away,
 
-        "linha_under_ht":
-            analise["linha_under"],
 
-        "linha_over_ft":
-            analise["linha_over"],
+        # ====================================================
+        # LINHAS
+        # ====================================================
 
-        "media_ht":
-            analise["media_ht"],
+        "linha_cantos_ht":
+            analise[
+                "linha_cantos_ht"
+            ],
 
-        "media_ft":
-            analise["media_ft"],
+        "linha_cantos_ft":
+            analise[
+                "linha_cantos_ft"
+            ],
 
-        "taxa_under":
-            analise["taxa_under"],
+        "linha_gols_ft":
+            analise[
+                "linha_gols_ft"
+            ],
 
-        "taxa_over":
-            analise["taxa_over"],
 
-        "taxa_combinada":
-            analise["taxa_combinada"],
+        # ====================================================
+        # MÉDIAS
+        # ====================================================
 
-        "under_wins":
-            analise["under_wins"],
+        "media_cantos_ht":
+            analise[
+                "media_cantos_ht"
+            ],
 
-        "under_voids":
-            analise["under_voids"],
+        "media_cantos_ft":
+            analise[
+                "media_cantos_ft"
+            ],
 
-        "under_losses":
-            analise["under_losses"],
+        "media_gols_ft":
+            analise[
+                "media_gols_ft"
+            ],
 
-        "over_wins":
-            analise["over_wins"],
 
-        "over_voids":
-            analise["over_voids"],
+        # ====================================================
+        # TAXAS
+        # ====================================================
 
-        "over_losses":
-            analise["over_losses"],
+        "taxa_under_ht":
+            analise[
+                "taxa_under_ht"
+            ],
 
-        "comb_wins":
-            analise["comb_wins"],
+        "taxa_over_ft":
+            analise[
+                "taxa_over_ft"
+            ],
 
-        "comb_voids":
-            analise["comb_voids"],
+        "taxa_under_gols":
+            analise[
+                "taxa_under_gols"
+            ],
 
-        "comb_losses":
-            analise["comb_losses"],
+        "taxa_conjunta":
+            analise[
+                "taxa_conjunta"
+            ],
+
+
+        # ====================================================
+        # CONTAGENS
+        # ====================================================
+
+        "under_ht_wins":
+            analise[
+                "under_ht_wins"
+            ],
+
+        "under_ht_voids":
+            analise[
+                "under_ht_voids"
+            ],
+
+        "under_ht_losses":
+            analise[
+                "under_ht_losses"
+            ],
+
+
+        "over_ft_wins":
+            analise[
+                "over_ft_wins"
+            ],
+
+        "over_ft_voids":
+            analise[
+                "over_ft_voids"
+            ],
+
+        "over_ft_losses":
+            analise[
+                "over_ft_losses"
+            ],
+
+
+        "under_gols_wins":
+            analise[
+                "under_gols_wins"
+            ],
+
+        "under_gols_voids":
+            analise[
+                "under_gols_voids"
+            ],
+
+        "under_gols_losses":
+            analise[
+                "under_gols_losses"
+            ],
+
+
+        "conjunta_wins":
+            analise[
+                "conjunta_wins"
+            ],
+
+        "conjunta_voids":
+            analise[
+                "conjunta_voids"
+            ],
+
+        "conjunta_losses":
+            analise[
+                "conjunta_losses"
+            ],
+
 
         "amostra":
-            analise["total"],
+            analise[
+                "total"
+            ],
 
-        "bet365_ht":
-            mercados.get(
-                "ht_detalhes"
-            ),
 
-        "bet365_ft":
-            mercados.get(
-                "ft_detalhes"
-            ),
+        # ====================================================
+        # MERCADOS BET365
+        # ====================================================
 
-        "aprovado_em":
+        "bet365_cantos_ht":
+            mercados[
+                "cantos_ht"
+            ],
+
+        "bet365_cantos_ft":
+            mercados[
+                "cantos_ft"
+            ],
+
+        "bet365_gols_ft":
+            mercados[
+                "gols_ft"
+            ],
+
+
+        # ====================================================
+        # GESTÃO
+        # ====================================================
+
+        "banca":
+            banca["id"],
+
+        "gale":
+            gale,
+
+        "entrada":
+            entrada,
+
+        "criado_em":
             agora_iso()
     }
 
-    with lock_dados:
-
-        fila_aprovados.append(
-            item
-        )
-
-        salvar_json(
-            ARQUIVO_FILA,
-            fila_aprovados
-        )
-
-    logger.info(
-        "APROVADO PARA FILA V19 | "
-        "%s x %s",
-        home,
-        away
-    )
-
-
-# ============================================================
-# CRIAR SINAL COM DOIS JOGOS
-# ============================================================
-
-def tentar_criar_sinal():
 
     with lock_dados:
-
-        banca = obter_banca_livre()
-
-        if not banca:
-            return False
-
-        if len(
-            fila_aprovados
-        ) < 2:
-            return False
-
-        jogo1 = fila_aprovados.pop(0)
-        jogo2 = fila_aprovados.pop(0)
-
-        sinal_id = (
-            f"{int(time.time())}-"
-            f"{jogo1['fixture_id']}-"
-            f"{jogo2['fixture_id']}"
-        )
-
-        gale = int(
-            banca.get(
-                "gale",
-                0
-            )
-        )
-
-        entrada = valor_entrada(
-            gale
-        )
-
-        sinal = {
-
-            "id":
-                sinal_id,
-
-            "versao":
-                "V19",
-
-            "status":
-                "PENDENTE",
-
-            "resultado":
-                None,
-
-            "banca":
-                banca["id"],
-
-            "gale":
-                gale,
-
-            "entrada":
-                entrada,
-
-            "criado_em":
-                agora_iso(),
-
-            "jogos": [
-                jogo1,
-                jogo2
-            ]
-        }
 
         sinais.append(
             sinal
@@ -2039,15 +2263,10 @@ def tentar_criar_sinal():
             sinais
         )
 
-        salvar_json(
-            ARQUIVO_FILA,
-            fila_aprovados
-        )
-
         salvar_bancas()
 
 
-    enviar_mensagem_sinal(
+    enviar_sinal(
         sinal
     )
 
@@ -2055,134 +2274,136 @@ def tentar_criar_sinal():
 
 
 # ============================================================
-# TEXTO DE UM JOGO
+# TELEGRAM - SINAL
 # ============================================================
 
-def texto_jogo(
-    numero_jogo,
-    jogo
-):
-
-    ht_api = (
-        jogo.get("bet365_ht")
-        or {}
-    )
-
-    ft_api = (
-        jogo.get("bet365_ft")
-        or {}
-    )
-
-    return (
-
-        f"⚽ <b>JOGO {numero_jogo}</b>\n"
-
-        f"<b>{html.escape(jogo['home'])}"
-        f" x "
-        f"{html.escape(jogo['away'])}</b>\n\n"
-
-
-        f"{1 if numero_jogo == 1 else 3}️⃣ "
-        "<b>UNDER HT</b>\n"
-
-        f"🎯 Under "
-        f"<b>{jogo['linha_under_ht']:.1f}</b>\n"
-
-        f"📊 Média HT: "
-        f"{jogo['media_ht']:.1f}\n"
-
-        f"📈 Histórico: "
-        f"<b>{pct(jogo['taxa_under'])}</b>\n"
-
-        f"✅ {jogo['under_wins']} WIN | "
-        f"⚪ {jogo['under_voids']} VOID | "
-        f"❌ {jogo['under_losses']} LOSS\n\n"
-
-
-        f"{2 if numero_jogo == 1 else 4}️⃣ "
-        "<b>OVER FT</b>\n"
-
-        f"🎯 Over "
-        f"<b>{jogo['linha_over_ft']:.1f}</b>\n"
-
-        f"📊 Média FT: "
-        f"{jogo['media_ft']:.1f}\n"
-
-        f"📈 Histórico: "
-        f"<b>{pct(jogo['taxa_over'])}</b>\n"
-
-        f"✅ {jogo['over_wins']} WIN | "
-        f"⚪ {jogo['over_voids']} VOID | "
-        f"❌ {jogo['over_losses']} LOSS\n\n"
-
-
-        f"📊 Ocorrência conjunta do jogo: "
-        f"<b>{pct(jogo['taxa_combinada'])}</b>\n"
-
-        "ℹ️ Apenas informativa\n\n"
-
-
-        "🎰 Bet365 API\n"
-
-        f"↳ Linha principal HT: "
-        f"{ht_api.get('linha', '-')}\n"
-
-        f"↳ Linha principal FT: "
-        f"{ft_api.get('linha', '-')}\n"
-    )
-
-
-# ============================================================
-# TELEGRAM SINAL
-# ============================================================
-
-def enviar_mensagem_sinal(
+def enviar_sinal(
     sinal
 ):
 
-    jogo1 = sinal[
-        "jogos"
-    ][0]
+    ht = (
+        sinal.get(
+            "bet365_cantos_ht"
+        )
+        or {}
+    )
 
-    jogo2 = sinal[
-        "jogos"
-    ][1]
+    ft = (
+        sinal.get(
+            "bet365_cantos_ft"
+        )
+        or {}
+    )
+
+    gols = (
+        sinal.get(
+            "bet365_gols_ft"
+        )
+        or {}
+    )
+
 
     mensagem = (
 
-        "🚨 <b>SINAL V19 — 2 JOGOS / 4 MERCADOS</b>\n\n"
+        "🚨 <b>SINAL V20 — "
+        "1 JOGO / 3 MERCADOS</b>\n\n"
 
-        + texto_jogo(
-            1,
-            jogo1
-        )
 
-        + "\n━━━━━━━━━━━━━━━━━━\n\n"
+        f"⚽ <b>"
+        f"{html.escape(sinal['home'])}"
+        f" x "
+        f"{html.escape(sinal['away'])}"
+        f"</b>\n\n"
 
-        + texto_jogo(
-            2,
-            jogo2
-        )
 
-        + "\n━━━━━━━━━━━━━━━━━━\n"
+        "1️⃣ <b>ESCANTEIOS HT</b>\n"
 
-        "\n🔥 <b>COMBINAÇÃO — 4 MERCADOS</b>\n\n"
+        f"🎯 Under "
+        f"<b>{sinal['linha_cantos_ht']:.1f}</b>\n"
 
-        f"1️⃣ {html.escape(jogo1['home'])}"
-        f" x {html.escape(jogo1['away'])}"
-        f" — Under {jogo1['linha_under_ht']:.1f} HT\n"
+        "🎰 Linha API Bet365\n"
 
-        f"2️⃣ {html.escape(jogo1['home'])}"
-        f" x {html.escape(jogo1['away'])}"
-        f" — Over {jogo1['linha_over_ft']:.1f} FT\n"
+        f"💵 Odd Under: "
+        f"{ht.get('under', '-')}\n"
 
-        f"3️⃣ {html.escape(jogo2['home'])}"
-        f" x {html.escape(jogo2['away'])}"
-        f" — Under {jogo2['linha_under_ht']:.1f} HT\n"
+        f"📊 Média histórica: "
+        f"{sinal['media_cantos_ht']:.2f}\n"
 
-        f"4️⃣ {html.escape(jogo2['home'])}"
-        f" x {html.escape(jogo2['away'])}"
-        f" — Over {jogo2['linha_over_ft']:.1f} FT\n\n"
+        f"📈 Assertividade: "
+        f"<b>{pct(sinal['taxa_under_ht'])}</b>\n"
+
+        f"✅ {sinal['under_ht_wins']} WIN | "
+        f"⚪ {sinal['under_ht_voids']} VOID | "
+        f"❌ {sinal['under_ht_losses']} LOSS\n\n"
+
+
+        "2️⃣ <b>ESCANTEIOS FT</b>\n"
+
+        f"🎯 Over "
+        f"<b>{sinal['linha_cantos_ft']:.1f}</b>\n"
+
+        "🎰 Linha API Bet365\n"
+
+        f"💵 Odd Over: "
+        f"{ft.get('over', '-')}\n"
+
+        f"📊 Média histórica: "
+        f"{sinal['media_cantos_ft']:.2f}\n"
+
+        f"📈 Assertividade: "
+        f"<b>{pct(sinal['taxa_over_ft'])}</b>\n"
+
+        f"✅ {sinal['over_ft_wins']} WIN | "
+        f"⚪ {sinal['over_ft_voids']} VOID | "
+        f"❌ {sinal['over_ft_losses']} LOSS\n\n"
+
+
+        "3️⃣ <b>GOLS FT</b>\n"
+
+        f"🎯 Under "
+        f"<b>{sinal['linha_gols_ft']:.1f}</b>\n"
+
+        "🎰 Linha API Bet365\n"
+
+        f"💵 Odd Under: "
+        f"{gols.get('under', '-')}\n"
+
+        f"📊 Média histórica: "
+        f"{sinal['media_gols_ft']:.2f}\n"
+
+        f"📈 Assertividade: "
+        f"<b>{pct(sinal['taxa_under_gols'])}</b>\n"
+
+        f"✅ {sinal['under_gols_wins']} WIN | "
+        f"⚪ {sinal['under_gols_voids']} VOID | "
+        f"❌ {sinal['under_gols_losses']} LOSS\n\n"
+
+
+        "━━━━━━━━━━━━━━━━━━\n"
+
+        "🔥 <b>COMBINAÇÃO</b>\n\n"
+
+        f"Under "
+        f"{sinal['linha_cantos_ht']:.1f} "
+        f"escanteios HT\n"
+
+        f"+ Over "
+        f"{sinal['linha_cantos_ft']:.1f} "
+        f"escanteios FT\n"
+
+        f"+ Under "
+        f"{sinal['linha_gols_ft']:.1f} "
+        f"gols FT\n\n"
+
+
+        f"📊 Ocorrência conjunta histórica: "
+        f"<b>{pct(sinal['taxa_conjunta'])}</b>\n"
+
+        f"📚 Amostra: "
+        f"{sinal['amostra']} jogos\n"
+
+        "ℹ️ Conjunta apenas informativa\n\n"
+
 
         "💰 <b>GESTÃO</b>\n"
 
@@ -2195,8 +2416,10 @@ def enviar_mensagem_sinal(
         f"💵 Entrada: "
         f"R$ {sinal['entrada']:.2f}\n\n"
 
+
         + texto_assertividade()
     )
+
 
     telegram(
         mensagem
@@ -2218,15 +2441,12 @@ def analisar_fixture(
     if fixture_id is None:
         return
 
+
     if fixture_ja_usado(
         fixture_id
     ):
         return
 
-    if fixture_na_fila(
-        fixture_id
-    ):
-        return
 
     (
         home_id,
@@ -2237,49 +2457,135 @@ def analisar_fixture(
         fixture
     )
 
+
     if (
         not home_id
         or not away_id
     ):
+
+        logger.info(
+            "REPROVADO %s x %s | "
+            "times sem ID",
+            home,
+            away
+        )
+
         return
 
+
     logger.info(
-        "V19 analisando %s x %s",
+        "V20 analisando %s x %s",
         home,
         away
     )
 
+
     # ========================================================
-    # MERCADOS BET365
+    # 1 - CONSULTA OS 3 MERCADOS
     # ========================================================
 
     mercados = verificar_mercados_bet365(
         fixture_id
     )
 
-    if not mercados.get(
-        "ft"
-    ):
+
+    cantos_ht = mercados.get(
+        "cantos_ht"
+    )
+
+    cantos_ft = mercados.get(
+        "cantos_ft"
+    )
+
+    gols_ft = mercados.get(
+        "gols_ft"
+    )
+
+
+    if not cantos_ht:
 
         logger.info(
-            "Reprovado: sem FT Bet365"
+            "REPROVADO %s x %s | "
+            "sem mercado escanteios HT",
+            home,
+            away
         )
 
         return
 
-    if not mercados.get(
-        "ht"
-    ):
+
+    if not cantos_ft:
 
         logger.info(
-            "Reprovado: sem HT Bet365"
+            "REPROVADO %s x %s | "
+            "sem mercado escanteios FT",
+            home,
+            away
+        )
+
+        return
+
+
+    if not gols_ft:
+
+        logger.info(
+            "REPROVADO %s x %s | "
+            "sem mercado gols FT",
+            home,
+            away
         )
 
         return
 
 
     # ========================================================
-    # HISTÓRICO
+    # 2 - LINHAS DA API BET365
+    # ========================================================
+
+    linha_cantos_ht = numero(
+        cantos_ht.get("linha")
+    )
+
+    linha_cantos_ft = numero(
+        cantos_ft.get("linha")
+    )
+
+    linha_gols_ft = numero(
+        gols_ft.get("linha")
+    )
+
+
+    if (
+        linha_cantos_ht is None
+        or linha_cantos_ft is None
+        or linha_gols_ft is None
+    ):
+
+        logger.info(
+            "REPROVADO %s x %s | "
+            "linha inválida",
+            home,
+            away
+        )
+
+        return
+
+
+    logger.info(
+        "LINHAS API | %s x %s | "
+        "Cantos HT %.1f | "
+        "Cantos FT %.1f | "
+        "Gols FT %.1f",
+        home,
+        away,
+        linha_cantos_ht,
+        linha_cantos_ft,
+        linha_gols_ft
+    )
+
+
+    # ========================================================
+    # 3 - HISTÓRICO
     # ========================================================
 
     historico_home = buscar_historico_time(
@@ -2290,42 +2596,30 @@ def analisar_fixture(
         away_id
     )
 
+
     historico = combinar_historicos(
         historico_home,
         historico_away
     )
 
+
+    # ========================================================
+    # 4 - TESTA AS 3 LINHAS
+    # ========================================================
+
     analise = analisar_historico(
-        historico
+        historico,
+        linha_cantos_ht,
+        linha_cantos_ft,
+        linha_gols_ft
     )
+
 
     if not analise:
-        return
-
-
-    logger.info(
-        "%s x %s | "
-        "N=%s | "
-        "Under %.1f %.1f%% | "
-        "Over %.1f %.1f%% | "
-        "Conj %.1f%%",
-        home,
-        away,
-        analise["total"],
-        analise["linha_under"],
-        analise["taxa_under"] * 100,
-        analise["linha_over"],
-        analise["taxa_over"] * 100,
-        analise["taxa_combinada"] * 100
-    )
-
-
-    if not passou_filtros(
-        analise
-    ):
 
         logger.info(
-            "REPROVADO V19 | %s x %s",
+            "REPROVADO %s x %s | "
+            "sem histórico válido",
             home,
             away
         )
@@ -2333,13 +2627,63 @@ def analisar_fixture(
         return
 
 
-    adicionar_fila(
+    logger.info(
+        "%s x %s | "
+        "N=%s | "
+        "Under cantos HT %.1f%% | "
+        "Over cantos FT %.1f%% | "
+        "Under gols %.1f%% | "
+        "Conjunta %.1f%%",
+        home,
+        away,
+        analise["total"],
+        analise["taxa_under_ht"] * 100,
+        analise["taxa_over_ft"] * 100,
+        analise["taxa_under_gols"] * 100,
+        analise["taxa_conjunta"] * 100
+    )
+
+
+    # ========================================================
+    # 5 - FILTRO 70% INDIVIDUAL
+    # ========================================================
+
+    if not passou_filtros(
+        analise
+    ):
+
+        logger.info(
+            "REPROVADO V20 | "
+            "%s x %s | "
+            "HT %.1f%% | "
+            "FT %.1f%% | "
+            "Gols %.1f%%",
+            home,
+            away,
+            analise["taxa_under_ht"] * 100,
+            analise["taxa_over_ft"] * 100,
+            analise["taxa_under_gols"] * 100
+        )
+
+        return
+
+
+    # ========================================================
+    # 6 - CRIA SINAL
+    # ========================================================
+
+    logger.info(
+        "APROVADO V20 | %s x %s",
+        home,
+        away
+    )
+
+
+    criar_sinal(
         fixture,
         analise,
         mercados
     )
-
-    tentar_criar_sinal()
 
 
 # ============================================================
@@ -2360,6 +2704,7 @@ def buscar_fixture(
     ):
         return None
 
+
     data = dados.get(
         "data"
     )
@@ -2370,21 +2715,24 @@ def buscar_fixture(
     ):
         return data
 
+
     response = dados.get(
         "response"
     )
 
     if (
-        isinstance(
-            response,
-            list
-        )
+        isinstance(response, list)
         and response
     ):
         return response[0]
 
+
     return dados
 
+
+# ============================================================
+# FINALIZADO
+# ============================================================
 
 def fixture_finalizado(
     fixture
@@ -2396,12 +2744,14 @@ def fixture_finalizado(
     ):
         return False
 
+
     status = str(
         fixture.get(
             "status",
             ""
         )
     ).lower()
+
 
     return status in (
         "finished",
@@ -2412,81 +2762,128 @@ def fixture_finalizado(
 
 
 # ============================================================
-# RESOLVER JOGO
+# RESOLVER SINAL
 # ============================================================
 
-def resolver_jogo(
-    jogo,
+def resolver_sinal(
+    sinal,
     fixture
 ):
 
-    cantos = extrair_cantos(
+    registro = extrair_registro(
         fixture
     )
 
-    if not cantos:
+    if not registro:
         return None
 
-    under = resultado_under(
-        cantos["ht"],
+
+    r1 = resultado_under(
+        registro["cantos_ht"],
         float(
-            jogo[
-                "linha_under_ht"
+            sinal[
+                "linha_cantos_ht"
             ]
         )
     )
 
-    over = resultado_over(
-        cantos["ft"],
+
+    r2 = resultado_over(
+        registro["cantos_ft"],
         float(
-            jogo[
-                "linha_over_ft"
+            sinal[
+                "linha_cantos_ft"
             ]
         )
     )
 
-    return {
-        "under":
-            under,
 
-        "over":
-            over,
-
-        "cantos_ht":
-            cantos["ht"],
-
-        "cantos_ft":
-            cantos["ft"]
-    }
-
-
-# ============================================================
-# RESULTADO FINAL DAS 4 PERNAS
-# ============================================================
-
-def calcular_resultado_sinal(
-    resultados
-):
-
-    pernas = []
-
-    for resultado in resultados:
-
-        pernas.append(
-            resultado["under"]
+    r3 = resultado_under(
+        registro["gols_ft"],
+        float(
+            sinal[
+                "linha_gols_ft"
+            ]
         )
+    )
 
-        pernas.append(
-            resultado["over"]
-        )
+
+    pernas = [
+        r1,
+        r2,
+        r3
+    ]
+
+
+    # ========================================================
+    # LIQUIDAÇÃO
+    #
+    # LOSS em qualquer perna = LOSS
+    #
+    # VOID:
+    # - a perna é anulada
+    # - se as demais forem WIN, o sinal é WIN
+    #
+    # se TODAS forem VOID = PUSH
+    # ========================================================
 
     if "LOSS" in pernas:
-        return "LOSS"
 
-    if "VOID" in pernas:
-        return "PUSH"
+        resultado_final = "LOSS"
 
-    return "WIN"
+    else:
+
+        ativas = [
+            r
+            for r in pernas
+            if r != "VOID"
+        ]
+
+        if not ativas:
+
+            resultado_final = "PUSH"
+
+        elif all(
+            r == "WIN"
+            for r in ativas
+        ):
+
+            resultado_final = "WIN"
+
+        else:
+
+            resultado_final = "LOSS"
+
+
+    return {
+
+        "resultado":
+            resultado_final,
+
+        "under_cantos_ht":
+            r1,
+
+        "over_cantos_ft":
+            r2,
+
+        "under_gols_ft":
+            r3,
+
+        "cantos_ht":
+            registro[
+                "cantos_ht"
+            ],
+
+        "cantos_ft":
+            registro[
+                "cantos_ft"
+            ],
+
+        "gols_ft":
+            registro[
+                "gols_ft"
+            ]
+    }
 
 
 # ============================================================
@@ -2502,6 +2899,7 @@ def liberar_banca(
 
         banca["gale"] = 0
 
+
     elif resultado == "LOSS":
 
         gale_atual = int(
@@ -2511,10 +2909,7 @@ def liberar_banca(
             )
         )
 
-        if (
-            gale_atual
-            < MAX_GALES
-        ):
+        if gale_atual < MAX_GALES:
 
             banca["gale"] = (
                 gale_atual + 1
@@ -2524,8 +2919,8 @@ def liberar_banca(
 
             banca["gale"] = 0
 
-    # PUSH:
-    # mantém o nível atual.
+
+    # PUSH mantém Gale
 
     banca["ocupada"] = False
     banca["sinal_id"] = None
@@ -2534,7 +2929,7 @@ def liberar_banca(
 
 
 # ============================================================
-# ATUALIZAR ESTATÍSTICAS
+# REGISTRAR STATS
 # ============================================================
 
 def registrar_resultado_stats(
@@ -2554,6 +2949,7 @@ def registrar_resultado_stats(
             + 1
         )
 
+
     elif resultado == "LOSS":
 
         stats["losses"] = (
@@ -2565,6 +2961,7 @@ def registrar_resultado_stats(
             )
             + 1
         )
+
 
     else:
 
@@ -2578,6 +2975,7 @@ def registrar_resultado_stats(
             + 1
         )
 
+
     stats[
         "total_resolvidos"
     ] = (
@@ -2590,12 +2988,14 @@ def registrar_resultado_stats(
         + 1
     )
 
+
     gale = str(
         sinal.get(
             "gale",
             0
         )
     )
+
 
     stats[
         "por_gale"
@@ -2608,19 +3008,27 @@ def registrar_resultado_stats(
         }
     )
 
-    chave = (
-        "wins"
-        if resultado == "WIN"
-        else
-        "losses"
-        if resultado == "LOSS"
-        else
-        "pushes"
-    )
 
-    stats[
-        "por_gale"
-    ][gale][chave] += 1
+    if resultado == "WIN":
+
+        stats[
+            "por_gale"
+        ][gale]["wins"] += 1
+
+
+    elif resultado == "LOSS":
+
+        stats[
+            "por_gale"
+        ][gale]["losses"] += 1
+
+
+    else:
+
+        stats[
+            "por_gale"
+        ][gale]["pushes"] += 1
+
 
     salvar_json(
         ARQUIVO_STATS,
@@ -2629,86 +3037,97 @@ def registrar_resultado_stats(
 
 
 # ============================================================
-# MENSAGEM DE RESULTADO
+# RESULTADO TELEGRAM
 # ============================================================
 
 def enviar_resultado(
     sinal,
-    resultados,
-    resultado_final
+    resultado
 ):
 
-    jogo1 = sinal[
-        "jogos"
-    ][0]
+    final = resultado[
+        "resultado"
+    ]
 
-    jogo2 = sinal[
-        "jogos"
-    ][1]
-
-    r1 = resultados[0]
-    r2 = resultados[1]
 
     emoji = {
         "WIN": "✅",
         "LOSS": "❌",
         "PUSH": "⚪"
     }.get(
-        resultado_final,
+        final,
         "ℹ️"
     )
 
+
     mensagem = (
 
-        f"{emoji} <b>RESULTADO V19 — "
-        f"{resultado_final}</b>\n\n"
+        f"{emoji} <b>RESULTADO V20 — "
+        f"{final}</b>\n\n"
 
 
-        "⚽ <b>JOGO 1</b>\n"
-
-        f"{html.escape(jogo1['home'])}"
+        f"⚽ <b>"
+        f"{html.escape(sinal['home'])}"
         f" x "
-        f"{html.escape(jogo1['away'])}\n"
-
-        f"1️⃣ Under "
-        f"{jogo1['linha_under_ht']:.1f} HT: "
-        f"<b>{r1['under']}</b> "
-        f"({r1['cantos_ht']:.0f} cantos)\n"
-
-        f"2️⃣ Over "
-        f"{jogo1['linha_over_ft']:.1f} FT: "
-        f"<b>{r1['over']}</b> "
-        f"({r1['cantos_ft']:.0f} cantos)\n\n"
+        f"{html.escape(sinal['away'])}"
+        f"</b>\n\n"
 
 
-        "⚽ <b>JOGO 2</b>\n"
+        "1️⃣ <b>ESCANTEIOS HT</b>\n"
 
-        f"{html.escape(jogo2['home'])}"
-        f" x "
-        f"{html.escape(jogo2['away'])}\n"
+        f"🎯 Under "
+        f"{sinal['linha_cantos_ht']:.1f}\n"
 
-        f"3️⃣ Under "
-        f"{jogo2['linha_under_ht']:.1f} HT: "
-        f"<b>{r2['under']}</b> "
-        f"({r2['cantos_ht']:.0f} cantos)\n"
+        f"🚩 Resultado: "
+        f"{resultado['cantos_ht']:.0f} cantos\n"
 
-        f"4️⃣ Over "
-        f"{jogo2['linha_over_ft']:.1f} FT: "
-        f"<b>{r2['over']}</b> "
-        f"({r2['cantos_ft']:.0f} cantos)\n\n"
+        f"📌 <b>"
+        f"{resultado['under_cantos_ht']}"
+        f"</b>\n\n"
 
 
-        f"🔥 Resultado da combinação: "
-        f"<b>{resultado_final}</b>\n\n"
+        "2️⃣ <b>ESCANTEIOS FT</b>\n"
+
+        f"🎯 Over "
+        f"{sinal['linha_cantos_ft']:.1f}\n"
+
+        f"🚩 Resultado: "
+        f"{resultado['cantos_ft']:.0f} cantos\n"
+
+        f"📌 <b>"
+        f"{resultado['over_cantos_ft']}"
+        f"</b>\n\n"
+
+
+        "3️⃣ <b>GOLS FT</b>\n"
+
+        f"🎯 Under "
+        f"{sinal['linha_gols_ft']:.1f}\n"
+
+        f"⚽ Resultado: "
+        f"{resultado['gols_ft']:.0f} gols\n"
+
+        f"📌 <b>"
+        f"{resultado['under_gols_ft']}"
+        f"</b>\n\n"
+
+
+        "━━━━━━━━━━━━━━━━━━\n"
+
+        f"🔥 Resultado do sinal: "
+        f"<b>{final}</b>\n\n"
+
 
         f"🏦 Banca: "
         f"{sinal['banca']}\n"
 
-        f"🔄 Gale utilizado: "
+        f"🔄 Gale usado: "
         f"{sinal['gale']}\n\n"
+
 
         + texto_assertividade()
     )
+
 
     telegram(
         mensagem
@@ -2729,79 +3148,63 @@ def verificar_resultados():
         ) == "PENDENTE"
     ]
 
+
     for sinal in pendentes:
 
-        jogos = sinal.get(
-            "jogos",
-            []
+        fixture = buscar_fixture(
+            sinal[
+                "fixture_id"
+            ]
         )
 
-        if len(jogos) != 2:
+
+        if not fixture:
             continue
 
-        resultados = []
 
-        todos_finalizados = True
+        if not fixture_finalizado(
+            fixture
+        ):
+            continue
 
-        for jogo in jogos:
 
-            fixture = buscar_fixture(
-                jogo[
+        resultado = resolver_sinal(
+            sinal,
+            fixture
+        )
+
+
+        if not resultado:
+
+            logger.info(
+                "Fixture %s finalizado "
+                "mas sem dados suficientes",
+                sinal[
                     "fixture_id"
                 ]
             )
 
-            if not fixture:
-
-                todos_finalizados = False
-                break
-
-            if not fixture_finalizado(
-                fixture
-            ):
-
-                todos_finalizados = False
-                break
-
-            resultado = resolver_jogo(
-                jogo,
-                fixture
-            )
-
-            if not resultado:
-
-                todos_finalizados = False
-                break
-
-            resultados.append(
-                resultado
-            )
-
-
-        if not todos_finalizados:
             continue
 
 
-        resultado_final = (
-            calcular_resultado_sinal(
-                resultados
-            )
-        )
+        final = resultado[
+            "resultado"
+        ]
 
 
         with lock_dados:
 
-            sinal[
-                "status"
-            ] = "RESOLVIDO"
+            sinal["status"] = (
+                "RESOLVIDO"
+            )
+
+            sinal["resultado"] = (
+                final
+            )
 
             sinal[
-                "resultado"
-            ] = resultado_final
-
-            sinal[
-                "resultados_jogos"
-            ] = resultados
+                "detalhes_resultado"
+            ] = resultado
 
             sinal[
                 "resolvido_em"
@@ -2810,7 +3213,7 @@ def verificar_resultados():
 
             registrar_resultado_stats(
                 sinal,
-                resultado_final
+                final
             )
 
 
@@ -2824,11 +3227,12 @@ def verificar_resultados():
                 None
             )
 
+
             if banca:
 
                 liberar_banca(
                     banca,
-                    resultado_final
+                    final
                 )
 
 
@@ -2840,75 +3244,7 @@ def verificar_resultados():
 
         enviar_resultado(
             sinal,
-            resultados,
-            resultado_final
-        )
-
-
-# ============================================================
-# LIMPAR FILA
-#
-# Remove jogos que já começaram ou desapareceram da janela
-# depois de algumas horas.
-# ============================================================
-
-def limpar_fila():
-
-    agora = datetime.now(
-        timezone.utc
-    )
-
-    nova_fila = []
-
-    for item in fila_aprovados:
-
-        aprovado_em = item.get(
-            "aprovado_em"
-        )
-
-        manter = True
-
-        if aprovado_em:
-
-            try:
-
-                data = datetime.fromisoformat(
-                    aprovado_em
-                )
-
-                idade = (
-                    agora - data
-                ).total_seconds()
-
-                # Evita deixar candidato velho
-                # eternamente na fila.
-                if idade > (
-                    JANELA_HORAS
-                    * 3600
-                ):
-                    manter = False
-
-            except Exception:
-                pass
-
-        if manter:
-            nova_fila.append(
-                item
-            )
-
-
-    if (
-        len(nova_fila)
-        != len(fila_aprovados)
-    ):
-
-        fila_aprovados[:] = (
-            nova_fila
-        )
-
-        salvar_json(
-            ARQUIVO_FILA,
-            fila_aprovados
+            resultado
         )
 
 
@@ -2920,15 +3256,13 @@ def ciclo():
 
     global cursor_fixture
 
+
     logger.info(
-        "================================"
+        "======================================"
     )
 
     logger.info(
-        "CICLO V19 | "
-        "Fila=%s | "
-        "Bancas livres=%s",
-        len(fila_aprovados),
+        "CICLO V20 | Bancas livres=%s",
         sum(
             1
             for b in bancas
@@ -2939,33 +3273,21 @@ def ciclo():
         )
     )
 
+
     try:
 
-        # Primeiro resolve sinais.
+        # ====================================================
+        # PRIMEIRO RESOLVE SINAIS
+        # ====================================================
+
         verificar_resultados()
 
-        limpar_fila()
 
-        # Se já houver pares na fila,
-        # cria sinais antes de gastar API.
-        while (
-            len(fila_aprovados) >= 2
-            and
-            obter_banca_livre()
-            is not None
-        ):
+        # ====================================================
+        # SEM BANCA = NÃO CRIA NOVOS SINAIS
+        # ====================================================
 
-            if not tentar_criar_sinal():
-                break
-
-
-        # Sem banca livre:
-        # não precisamos procurar
-        # novos sinais.
-        if (
-            obter_banca_livre()
-            is None
-        ):
+        if obter_banca_livre() is None:
 
             logger.info(
                 "Todas as bancas ocupadas"
@@ -2974,12 +3296,17 @@ def ciclo():
             return
 
 
+        # ====================================================
+        # BUSCA PARTIDAS
+        # ====================================================
+
         fixtures = buscar_fixtures()
+
 
         if not fixtures:
 
             logger.info(
-                "Nenhum fixture"
+                "Nenhum fixture agendado"
             )
 
             return
@@ -2989,27 +3316,33 @@ def ciclo():
             fixtures
         )
 
+
         quantidade = min(
             MAX_JOGOS_ANALISADOS_CICLO,
             total
         )
 
 
+        # ====================================================
+        # ANALISA
+        # ====================================================
+
         for _ in range(
             quantidade
         ):
 
-            # Permite continuar procurando
-            # candidatos enquanto houver
-            # possibilidade de formar sinais.
             if cursor_fixture >= total:
+
                 cursor_fixture = 0
+
 
             fixture = fixtures[
                 cursor_fixture
             ]
 
+
             cursor_fixture += 1
+
 
             try:
 
@@ -3024,19 +3357,15 @@ def ciclo():
                 )
 
 
-            # Caso tenha formado sinal e
-            # todas as bancas tenham ocupado.
-            if (
-                obter_banca_livre()
-                is None
-            ):
+            if obter_banca_livre() is None:
+
                 break
 
 
     except Exception:
 
         logger.exception(
-            "Erro geral ciclo V19"
+            "Erro no ciclo V20"
         )
 
 
@@ -3047,30 +3376,40 @@ def ciclo():
 def loop_robo():
 
     logger.info(
-        "ROBÔ V19 INICIADO"
+        "======================================"
     )
 
     logger.info(
-        "Estratégia: "
-        "2 jogos / 4 mercados"
+        "ROBÔ V20 INICIADO"
     )
 
     logger.info(
-        "Under HT = média + %.1f",
-        MARGEM_HT
+        "1 JOGO / 3 MERCADOS"
     )
 
     logger.info(
-        "Over FT = média - %.1f",
-        MARGEM_FT
+        "Under cantos HT >= %.1f%%",
+        MIN_TAXA_UNDER_HT * 100
     )
 
     logger.info(
-        "Filtros: Under >= %.1f%% | "
-        "Over >= %.1f%%",
-        MIN_TAXA_UNDER_HT * 100,
+        "Over cantos FT >= %.1f%%",
         MIN_TAXA_OVER_FT * 100
     )
+
+    logger.info(
+        "Under gols FT >= %.1f%%",
+        MIN_TAXA_UNDER_GOLS * 100
+    )
+
+    logger.info(
+        "Linhas = API Bet365"
+    )
+
+    logger.info(
+        "======================================"
+    )
+
 
     while not stop_event.is_set():
 
@@ -3096,39 +3435,34 @@ def home():
             "online",
 
         "versao":
-            "V19",
+            "V20",
 
         "estrategia":
-            "2 jogos / 4 mercados",
+            "1 jogo / 3 mercados",
 
-        "mercados_por_sinal":
-            4,
+        "mercados": [
+            "Under escanteios HT",
+            "Over escanteios FT",
+            "Under gols FT"
+        ],
 
-        "jogos_por_sinal":
-            2,
+        "fonte_linhas":
+            "Bet365 API",
 
-        "margem_ht":
-            MARGEM_HT,
-
-        "margem_ft":
-            MARGEM_FT,
-
-        "min_taxa_under_ht":
+        "taxa_min_under_cantos_ht":
             MIN_TAXA_UNDER_HT,
 
-        "min_taxa_over_ft":
+        "taxa_min_over_cantos_ft":
             MIN_TAXA_OVER_FT,
 
-        "fila_aprovados":
-            len(fila_aprovados),
+        "taxa_min_under_gols_ft":
+            MIN_TAXA_UNDER_GOLS,
 
-        "assertividade":
-            round(
-                grupo[
-                    "assertividade"
-                ] * 100,
-                2
-            ),
+        "historico_por_time":
+            QTD_HISTORICO_TIME,
+
+        "amostra_minima":
+            MIN_JOGOS_HISTORICO,
 
         "wins":
             grupo["wins"],
@@ -3138,6 +3472,14 @@ def home():
 
         "pushes":
             grupo["pushes"],
+
+        "assertividade":
+            round(
+                grupo[
+                    "assertividade"
+                ] * 100,
+                2
+            ),
 
         "bancas":
             bancas
@@ -3153,40 +3495,47 @@ def status():
             True,
 
         "versao":
-            "V19",
+            "V20",
 
-        "estrategia":
-            "2 jogos / 4 mercados",
+        "jogos_por_sinal":
+            1,
 
-        "under_ht":
-            "media HT + margem",
+        "mercados_por_sinal":
+            3,
 
-        "over_ft":
-            "media FT - margem",
+        "mercados": {
+            "1":
+                "Under escanteios HT",
 
-        "margem_ht":
-            MARGEM_HT,
+            "2":
+                "Over escanteios FT",
 
-        "margem_ft":
-            MARGEM_FT,
+            "3":
+                "Under gols FT"
+        },
 
-        "taxa_min_under":
-            MIN_TAXA_UNDER_HT,
+        "fonte_linhas":
+            "Bet365 API",
 
-        "taxa_min_over":
-            MIN_TAXA_OVER_FT,
+        "taxas_minimas": {
+            "under_cantos_ht":
+                MIN_TAXA_UNDER_HT,
+
+            "over_cantos_ft":
+                MIN_TAXA_OVER_FT,
+
+            "under_gols_ft":
+                MIN_TAXA_UNDER_GOLS
+        },
 
         "historico_por_time":
             QTD_HISTORICO_TIME,
 
-        "min_jogos":
+        "amostra_minima":
             MIN_JOGOS_HISTORICO,
 
-        "bancas":
-            TOTAL_BANCAS,
-
-        "max_gales":
-            MAX_GALES
+        "janela_horas":
+            JANELA_HORAS
     })
 
 
@@ -3206,14 +3555,6 @@ def rota_sinais():
     )
 
 
-@app.route("/fila")
-def rota_fila():
-
-    return jsonify(
-        fila_aprovados
-    )
-
-
 @app.route("/bancas")
 def rota_bancas():
 
@@ -3227,26 +3568,22 @@ def health():
 
     return jsonify({
         "status": "ok",
-        "version": "V19"
+        "version": "V20"
     })
 
 
 # ============================================================
-# THREAD
+# START
 # ============================================================
 
 thread_robo = threading.Thread(
     target=loop_robo,
     daemon=True,
-    name="robo-v19"
+    name="robo-v20"
 )
 
 thread_robo.start()
 
-
-# ============================================================
-# LOCAL
-# ============================================================
 
 if __name__ == "__main__":
 

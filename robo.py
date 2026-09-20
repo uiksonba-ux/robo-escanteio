@@ -10,22 +10,21 @@ from flask import Flask, jsonify
 
 
 # ============================================================
-# ROBÔ V20.1
+# ROBÔ V21 — 4 FAVORITOS
 #
-# 1 BILHETE = 2 JOGOS
+# 1 SINAL = 4 PARTIDAS
+# Mercado: Vitória simples / Resultado Final 1X2
 #
-# JOGO 1:
-#   Favorito forte
-#   Vitória simples
-#   Odd 1X2 Bet365 entre 1.20 e 1.70
-#
-# JOGO 2:
-#   Favorito de jogo mais equilibrado
-#   Odd 1X2 Bet365 entre 1.71 e 2.20
-#   Entrada: 1X ou X2
-#
-# Apenas 1 bilhete ativo por vez.
-# O próximo só é procurado após a resolução do vigente.
+# Regras padrão:
+# - Odd Bet365 do favorito: 1.20 até 1.70
+# - Últimos 20 jogos
+# - Favorito: mínimo 65% de vitórias
+# - Adversário: mínimo 40% de derrotas
+# - Escolhe os 4 melhores candidatos aprovados
+# - Calcula a odd combinada das 4 seleções
+# - Apenas 1 bilhete ativo por vez
+# - 4 WIN = WIN do bilhete
+# - Qualquer LOSS = LOSS do bilhete
 # ============================================================
 
 
@@ -35,11 +34,11 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
-logger = logging.getLogger("robo-v20")
+logger = logging.getLogger("robo-v21")
 
 
 # ============================================================
-# LEITURA SEGURA DAS VARIÁVEIS
+# VARIÁVEIS SEGURAS
 # ============================================================
 
 def limpar_env(valor):
@@ -69,13 +68,13 @@ def env_str(nome, padrao=""):
 
 
 def env_float(nome, padrao):
-    valor_original = os.getenv(nome)
+    original = os.getenv(nome)
 
-    if valor_original is None:
+    if original is None:
         return float(padrao)
 
     try:
-        valor = limpar_env(valor_original)
+        valor = limpar_env(original)
         valor = valor.replace(",", ".")
         return float(valor)
 
@@ -83,34 +82,34 @@ def env_float(nome, padrao):
         logger.warning(
             "Variável %s inválida: %r. Usando padrão %s.",
             nome,
-            valor_original,
+            original,
             padrao
         )
         return float(padrao)
 
 
 def env_int(nome, padrao):
-    valor_original = os.getenv(nome)
+    original = os.getenv(nome)
 
-    if valor_original is None:
+    if original is None:
         return int(padrao)
 
     try:
-        valor = limpar_env(valor_original)
+        valor = limpar_env(original)
         return int(float(valor))
 
     except (ValueError, TypeError):
         logger.warning(
             "Variável %s inválida: %r. Usando padrão %s.",
             nome,
-            valor_original,
+            original,
             padrao
         )
         return int(padrao)
 
 
 # ============================================================
-# CONFIGURAÇÕES
+# CONFIGURAÇÃO
 # ============================================================
 
 BASE_API = env_str(
@@ -126,7 +125,7 @@ PORT = env_int("PORT", 10000)
 
 
 # ============================================================
-# JOGO 1 - VITÓRIA SIMPLES
+# ESTRATÉGIA
 # ============================================================
 
 ODD_MIN_SIMPLES = env_float(
@@ -149,35 +148,10 @@ MIN_LOSS_ADVERSARIO = env_float(
     0.40
 )
 
-
-# ============================================================
-# JOGO 2 - DUPLA CHANCE
-# ============================================================
-
-ODD_MIN_DUPLA = env_float(
-    "ODD_MIN_DUPLA",
-    1.71
+QTD_JOGOS_BILHETE = env_int(
+    "QTD_JOGOS_BILHETE",
+    4
 )
-
-ODD_MAX_DUPLA = env_float(
-    "ODD_MAX_DUPLA",
-    2.20
-)
-
-MIN_NAO_PERDE_FAVORITO = env_float(
-    "MIN_NAO_PERDE_FAVORITO",
-    0.70
-)
-
-MIN_NAO_VENCE_ADVERSARIO = env_float(
-    "MIN_NAO_VENCE_ADVERSARIO",
-    0.60
-)
-
-
-# ============================================================
-# HISTÓRICO
-# ============================================================
 
 QTD_HISTORICO = env_int(
     "QTD_HISTORICO",
@@ -199,7 +173,6 @@ JANELA_HORAS = env_float(
     24
 )
 
-# API permite no máximo janela de 24h em /fixtures
 JANELA_HORAS = min(
     max(JANELA_HORAS, 1),
     24
@@ -217,7 +190,7 @@ INTERVALO_RESULTADOS = env_int(
 
 
 # ============================================================
-# RATE LIMIT
+# RATE LIMIT / CACHE
 # ============================================================
 
 API_MIN_INTERVAL_SECONDS = env_float(
@@ -230,33 +203,22 @@ API_BACKOFF_429 = env_int(
     65
 )
 
-ultimo_request = 0.0
-
-request_lock = threading.RLock()
-
-
-# ============================================================
-# CACHE
-# ============================================================
-
 CACHE_HISTORICO_TTL = env_int(
     "CACHE_HISTORICO_TTL",
     21600
 )
 
-
-# ============================================================
-# ARQUIVOS NOVOS DA V20
-# ============================================================
-
-ARQUIVO_SINAL = "sinal_v20.json"
-ARQUIVO_STATS = "stats_v20.json"
-ARQUIVO_CACHE = "cache_v20.json"
+ultimo_request = 0.0
+request_lock = threading.RLock()
 
 
 # ============================================================
-# LOCKS
+# ARQUIVOS
 # ============================================================
+
+ARQUIVO_SINAL = "sinal_v21.json"
+ARQUIVO_STATS = "stats_v21.json"
+ARQUIVO_CACHE = "cache_v21.json"
 
 lock_sinal = threading.RLock()
 lock_stats = threading.RLock()
@@ -268,43 +230,31 @@ lock_cache = threading.RLock()
 # ============================================================
 
 def carregar_json(arquivo, padrao):
-
     try:
-
         if not os.path.exists(arquivo):
             return padrao
 
-        with open(
-            arquivo,
-            "r",
-            encoding="utf-8"
-        ) as f:
-
+        with open(arquivo, "r", encoding="utf-8") as f:
             return json.load(f)
 
     except Exception as e:
-
         logger.error(
             "Erro lendo %s: %s",
             arquivo,
             e
         )
-
         return padrao
 
 
 def salvar_json(arquivo, dados):
-
     temporario = arquivo + ".tmp"
 
     try:
-
         with open(
             temporario,
             "w",
             encoding="utf-8"
         ) as f:
-
             json.dump(
                 dados,
                 f,
@@ -318,7 +268,6 @@ def salvar_json(arquivo, dados):
         )
 
     except Exception:
-
         logger.exception(
             "Erro salvando %s",
             arquivo
@@ -331,17 +280,11 @@ def salvar_json(arquivo, dados):
 
 STATS_PADRAO = {
     "total_sinais": 0,
-
     "bilhetes_win": 0,
     "bilhetes_loss": 0,
-
-    "simples_win": 0,
-    "simples_loss": 0,
-
-    "dupla_win": 0,
-    "dupla_loss": 0
+    "selecoes_win": 0,
+    "selecoes_loss": 0
 }
-
 
 stats = carregar_json(
     ARQUIVO_STATS,
@@ -353,7 +296,6 @@ for chave, valor in STATS_PADRAO.items():
 
 
 def calcular_taxa(wins, losses):
-
     total = wins + losses
 
     if total <= 0:
@@ -366,31 +308,21 @@ def calcular_taxa(wins, losses):
 
 
 def taxa_bilhetes():
-
     return calcular_taxa(
         stats["bilhetes_win"],
         stats["bilhetes_loss"]
     )
 
 
-def taxa_simples():
-
+def taxa_selecoes():
     return calcular_taxa(
-        stats["simples_win"],
-        stats["simples_loss"]
-    )
-
-
-def taxa_dupla():
-
-    return calcular_taxa(
-        stats["dupla_win"],
-        stats["dupla_loss"]
+        stats["selecoes_win"],
+        stats["selecoes_loss"]
     )
 
 
 # ============================================================
-# SINAL
+# SINAL ATUAL
 # ============================================================
 
 sinal_atual = carregar_json(
@@ -400,22 +332,10 @@ sinal_atual = carregar_json(
 
 
 def existe_sinal_pendente():
-
     return (
         isinstance(sinal_atual, dict)
-        and
-        sinal_atual.get("status") == "PENDENTE"
+        and sinal_atual.get("status") == "PENDENTE"
     )
-
-
-def salvar_sinal():
-
-    with lock_sinal:
-
-        salvar_json(
-            ARQUIVO_SINAL,
-            sinal_atual
-        )
 
 
 # ============================================================
@@ -437,9 +357,7 @@ cache.setdefault(
 
 
 def salvar_cache():
-
     with lock_cache:
-
         salvar_json(
             ARQUIVO_CACHE,
             cache
@@ -451,38 +369,27 @@ def salvar_cache():
 # ============================================================
 
 def headers_api():
-
     return {
         "Authorization": f"Bearer {API_KEY}",
         "Accept": "application/json",
-        "User-Agent": "robo-favoritos-v20.1"
+        "User-Agent": "robo-favoritos-v21"
     }
 
 
 def api_get(endpoint, params=None, tentativas=2):
-
     global ultimo_request
 
     if not API_KEY:
-
         logger.error(
             "FIVE_DOLLAR_KEY não configurada."
         )
-
         return None
 
-    for tentativa in range(
-        1,
-        tentativas + 1
-    ):
+    for tentativa in range(1, tentativas + 1):
 
         with request_lock:
-
             agora = time.monotonic()
-
-            decorrido = (
-                agora - ultimo_request
-            )
+            decorrido = agora - ultimo_request
 
             espera = (
                 API_MIN_INTERVAL_SECONDS
@@ -492,13 +399,9 @@ def api_get(endpoint, params=None, tentativas=2):
             if espera > 0:
                 time.sleep(espera)
 
-            url = (
-                BASE_API
-                + endpoint
-            )
+            url = BASE_API + endpoint
 
             try:
-
                 resposta = requests.get(
                     url,
                     headers=headers_api(),
@@ -506,14 +409,11 @@ def api_get(endpoint, params=None, tentativas=2):
                     timeout=30
                 )
 
-                ultimo_request = (
-                    time.monotonic()
-                )
+                ultimo_request = time.monotonic()
 
             except requests.RequestException as e:
-
                 logger.warning(
-                    "Erro de conexão API %s: %s",
+                    "Erro de conexão %s: %s",
                     endpoint,
                     e
                 )
@@ -525,57 +425,36 @@ def api_get(endpoint, params=None, tentativas=2):
                 return None
 
         if resposta.status_code == 429:
-
             logger.warning(
-                "API 429 - aguardando %ss.",
+                "API 429. Aguardando %ss.",
                 API_BACKOFF_429
             )
 
-            time.sleep(
-                API_BACKOFF_429
-            )
-
+            time.sleep(API_BACKOFF_429)
             continue
 
         if resposta.status_code != 200:
-
             logger.warning(
-                "API %s retornou HTTP %s: %s",
+                "API %s HTTP %s: %s",
                 endpoint,
                 resposta.status_code,
                 resposta.text[:300]
             )
-
             return None
 
         try:
-
             payload = resposta.json()
-
         except ValueError:
-
-            logger.warning(
-                "Resposta não JSON em %s.",
-                endpoint
-            )
-
             return None
 
-        if not isinstance(
-            payload,
-            dict
-        ):
-
+        if not isinstance(payload, dict):
             return None
 
         if payload.get("success") != 1:
-
             logger.warning(
-                "API success != 1 em %s: %s",
-                endpoint,
+                "API success != 1: %s",
                 payload
             )
-
             return None
 
         return payload.get("data")
@@ -588,17 +467,10 @@ def api_get(endpoint, params=None, tentativas=2):
 # ============================================================
 
 def enviar_telegram(texto):
-
-    if (
-        not TELEGRAM_TOKEN
-        or
-        not CHAT_ID
-    ):
-
+    if not TELEGRAM_TOKEN or not CHAT_ID:
         logger.warning(
             "Telegram não configurado."
         )
-
         return False
 
     url = (
@@ -608,7 +480,6 @@ def enviar_telegram(texto):
     )
 
     try:
-
         resposta = requests.post(
             url,
             data={
@@ -621,7 +492,6 @@ def enviar_telegram(texto):
         )
 
         if not resposta.ok:
-
             logger.warning(
                 "Telegram HTTP %s: %s",
                 resposta.status_code,
@@ -631,183 +501,86 @@ def enviar_telegram(texto):
         return resposta.ok
 
     except Exception:
-
         logger.exception(
-            "Erro enviando Telegram."
+            "Erro Telegram."
         )
-
         return False
 
 
 # ============================================================
-# EXTRAÇÃO DE DADOS
+# TIMES / GOLS
 # ============================================================
 
 def obter_times(fixture):
-
-    if not isinstance(
-        fixture,
-        dict
-    ):
+    if not isinstance(fixture, dict):
         return None
 
-    teams = fixture.get(
-        "teams"
-    )
+    teams = fixture.get("teams")
 
-    if not isinstance(
-        teams,
-        dict
-    ):
+    if not isinstance(teams, dict):
         return None
 
-    home = teams.get(
-        "home"
-    ) or {}
-
-    away = teams.get(
-        "away"
-    ) or {}
+    home = teams.get("home") or {}
+    away = teams.get("away") or {}
 
     return {
-        "home_id":
-            home.get("id"),
-
-        "home":
-            home.get(
-                "name",
-                "Mandante"
-            ),
-
-        "away_id":
-            away.get("id"),
-
-        "away":
-            away.get(
-                "name",
-                "Visitante"
-            )
+        "home_id": home.get("id"),
+        "home": home.get("name", "Mandante"),
+        "away_id": away.get("id"),
+        "away": away.get("name", "Visitante")
     }
 
 
 def extrair_gols(fixture):
-
-    if not isinstance(
-        fixture,
-        dict
-    ):
+    if not isinstance(fixture, dict):
         return None
 
-    goals = fixture.get(
-        "goals"
-    )
+    goals = fixture.get("goals")
 
-    if not isinstance(
-        goals,
-        dict
-    ):
+    if not isinstance(goals, dict):
         return None
 
-    home = goals.get(
-        "home"
-    )
+    home = goals.get("home")
+    away = goals.get("away")
 
-    away = goals.get(
-        "away"
-    )
-
-    if (
-        home is None
-        or
-        away is None
-    ):
+    if home is None or away is None:
         return None
 
     try:
-
-        return (
-            int(home),
-            int(away)
-        )
-
-    except (
-        ValueError,
-        TypeError
-    ):
-
+        return int(home), int(away)
+    except (ValueError, TypeError):
         return None
 
 
 # ============================================================
 # ODDS 1X2
-#
-# Formato oficial:
-#
-# odds:
-#   1x2:
-#     opening:
-#       home
-#       draw
-#       away
-#     closing:
-#       home
-#       draw
-#       away
 # ============================================================
 
 def extrair_1x2_de_mercado(mercado):
-
-    if not isinstance(
-        mercado,
-        dict
-    ):
+    if not isinstance(mercado, dict):
         return None
-
-    # Para jogo futuro, "closing" pode ainda não
-    # existir. Então usamos closing quando disponível
-    # e opening como fallback.
 
     fase = (
         mercado.get("closing")
-        or
-        mercado.get("opening")
+        or mercado.get("opening")
     )
 
-    if not isinstance(
-        fase,
-        dict
-    ):
+    if not isinstance(fase, dict):
         return None
 
     try:
-
-        home = float(
-            fase["home"]
-        )
-
-        draw = float(
-            fase["draw"]
-        )
-
-        away = float(
-            fase["away"]
-        )
+        home = float(fase["home"])
+        draw = float(fase["draw"])
+        away = float(fase["away"])
 
     except (
         KeyError,
         ValueError,
         TypeError
     ):
-
         return None
 
-    if (
-        home <= 1
-        or
-        draw <= 1
-        or
-        away <= 1
-    ):
+    if home <= 1 or draw <= 1 or away <= 1:
         return None
 
     return {
@@ -818,22 +591,12 @@ def extrair_1x2_de_mercado(mercado):
 
 
 def obter_odds_1x2(fixture):
+    # Primeiro tenta odds incluídas no fixture.
 
-    # Primeiro tenta as odds que já vieram
-    # no próprio fixture.
+    odds_inline = fixture.get("odds")
 
-    odds_inline = fixture.get(
-        "odds"
-    )
-
-    if isinstance(
-        odds_inline,
-        dict
-    ):
-
-        mercado = odds_inline.get(
-            "1x2"
-        )
+    if isinstance(odds_inline, dict):
+        mercado = odds_inline.get("1x2")
 
         odds = extrair_1x2_de_mercado(
             mercado
@@ -842,11 +605,9 @@ def obter_odds_1x2(fixture):
         if odds:
             return odds
 
-    # Fallback: endpoint específico de odds.
+    # Fallback para endpoint de odds.
 
-    fixture_id = fixture.get(
-        "id"
-    )
+    fixture_id = fixture.get("id")
 
     if not fixture_id:
         return None
@@ -855,56 +616,32 @@ def obter_odds_1x2(fixture):
         f"/fixtures/{fixture_id}/odds"
     )
 
-    if not isinstance(
-        dados,
-        dict
-    ):
+    if not isinstance(dados, dict):
         return None
 
-    bookmakers = dados.get(
-        "bookmakers"
-    )
+    bookmakers = dados.get("bookmakers")
 
-    if not isinstance(
-        bookmakers,
-        list
-    ):
+    if not isinstance(bookmakers, list):
         return None
 
     for bookmaker in bookmakers:
-
-        if not isinstance(
-            bookmaker,
-            dict
-        ):
+        if not isinstance(bookmaker, dict):
             continue
 
         slug = str(
-            bookmaker.get(
-                "slug",
-                ""
-            )
+            bookmaker.get("slug", "")
         ).lower()
 
         if slug != "bet365":
             continue
 
-        mercados = bookmaker.get(
-            "odds"
-        )
+        mercados = bookmaker.get("odds")
 
-        if not isinstance(
-            mercados,
-            dict
-        ):
+        if not isinstance(mercados, dict):
             continue
 
-        mercado = mercados.get(
-            "1x2"
-        )
-
         odds = extrair_1x2_de_mercado(
-            mercado
+            mercados.get("1x2")
         )
 
         if odds:
@@ -917,23 +654,13 @@ def obter_odds_1x2(fixture):
 # FAVORITO
 # ============================================================
 
-def identificar_favorito(
-    fixture,
-    odds
-):
-
-    times = obter_times(
-        fixture
-    )
+def identificar_favorito(fixture, odds):
+    times = obter_times(fixture)
 
     if not times:
         return None
 
-    if (
-        not times["home_id"]
-        or
-        not times["away_id"]
-    ):
+    if not times["home_id"] or not times["away_id"]:
         return None
 
     odd_home = odds["home"]
@@ -943,33 +670,22 @@ def identificar_favorito(
         return None
 
     if odd_home < odd_away:
-
         return {
             "lado": "home",
-            "team_id":
-                times["home_id"],
-            "nome":
-                times["home"],
-            "adversario_id":
-                times["away_id"],
-            "adversario":
-                times["away"],
-            "odd":
-                odd_home
+            "team_id": times["home_id"],
+            "nome": times["home"],
+            "adversario_id": times["away_id"],
+            "adversario": times["away"],
+            "odd": odd_home
         }
 
     return {
         "lado": "away",
-        "team_id":
-            times["away_id"],
-        "nome":
-            times["away"],
-        "adversario_id":
-            times["home_id"],
-        "adversario":
-            times["home"],
-        "odd":
-            odd_away
+        "team_id": times["away_id"],
+        "nome": times["away"],
+        "adversario_id": times["home_id"],
+        "adversario": times["home"],
+        "odd": odd_away
     }
 
 
@@ -977,48 +693,26 @@ def identificar_favorito(
 # HISTÓRICO
 # ============================================================
 
-def buscar_historico(
-    team_id
-):
+def buscar_historico(team_id):
+    chave = str(team_id)
 
-    chave = str(
-        team_id
-    )
+    entrada = cache[
+        "historicos"
+    ].get(chave)
 
-    entrada_cache = (
-        cache[
-            "historicos"
-        ].get(chave)
-    )
-
-    if isinstance(
-        entrada_cache,
-        dict
-    ):
-
-        timestamp = (
-            entrada_cache.get(
-                "timestamp",
-                0
-            )
+    if isinstance(entrada, dict):
+        timestamp = entrada.get(
+            "timestamp",
+            0
         )
 
         if (
-            time.time()
-            - timestamp
+            time.time() - timestamp
             < CACHE_HISTORICO_TTL
         ):
+            jogos = entrada.get("jogos")
 
-            jogos = (
-                entrada_cache.get(
-                    "jogos"
-                )
-            )
-
-            if isinstance(
-                jogos,
-                list
-            ):
+            if isinstance(jogos, list):
                 return jogos
 
     dados = api_get(
@@ -1026,33 +720,21 @@ def buscar_historico(
         params={
             "status": "finished",
             "order": "desc",
-            "per_page":
-                min(
-                    QTD_HISTORICO,
-                    100
-                )
+            "per_page": min(
+                QTD_HISTORICO,
+                100
+            )
         }
     )
 
-    if not isinstance(
-        dados,
-        list
-    ):
-
+    if not isinstance(dados, list):
         return []
 
-    jogos = dados[
-        :QTD_HISTORICO
-    ]
+    jogos = dados[:QTD_HISTORICO]
 
-    cache[
-        "historicos"
-    ][chave] = {
-        "timestamp":
-            time.time(),
-
-        "jogos":
-            jogos
+    cache["historicos"][chave] = {
+        "timestamp": time.time(),
+        "jogos": jogos
     }
 
     salvar_cache()
@@ -1060,14 +742,7 @@ def buscar_historico(
     return jogos
 
 
-# ============================================================
-# ANALISAR HISTÓRICO DO TIME
-# ============================================================
-
-def analisar_time(
-    team_id
-):
-
+def analisar_time(team_id):
     jogos = buscar_historico(
         team_id
     )
@@ -1075,46 +750,25 @@ def analisar_time(
     wins = 0
     draws = 0
     losses = 0
-
     validos = 0
 
     gols_pro = 0
     gols_contra = 0
 
     for jogo in jogos:
+        times = obter_times(jogo)
+        placar = extrair_gols(jogo)
 
-        times = obter_times(
-            jogo
-        )
-
-        placar = extrair_gols(
-            jogo
-        )
-
-        if (
-            not times
-            or
-            placar is None
-        ):
+        if not times or placar is None:
             continue
 
         gh, ga = placar
 
-        if (
-            str(team_id)
-            ==
-            str(times["home_id"])
-        ):
-
+        if str(team_id) == str(times["home_id"]):
             gp = gh
             gc = ga
 
-        elif (
-            str(team_id)
-            ==
-            str(times["away_id"])
-        ):
-
+        elif str(team_id) == str(times["away_id"]):
             gp = ga
             gc = gh
 
@@ -1122,16 +776,13 @@ def analisar_time(
             continue
 
         validos += 1
-
         gols_pro += gp
         gols_contra += gc
 
         if gp > gc:
             wins += 1
-
         elif gp == gc:
             draws += 1
-
         else:
             losses += 1
 
@@ -1140,7 +791,6 @@ def analisar_time(
 
     return {
         "jogos": validos,
-
         "wins": wins,
         "draws": draws,
         "losses": losses,
@@ -1148,23 +798,8 @@ def analisar_time(
         "taxa_win":
             wins / validos,
 
-        "taxa_draw":
-            draws / validos,
-
         "taxa_loss":
             losses / validos,
-
-        "taxa_nao_perde":
-            (
-                wins
-                + draws
-            ) / validos,
-
-        "taxa_nao_vence":
-            (
-                draws
-                + losses
-            ) / validos,
 
         "media_gols_pro":
             gols_pro / validos,
@@ -1175,17 +810,14 @@ def analisar_time(
 
 
 # ============================================================
-# CANDIDATO VITÓRIA SIMPLES
+# ANALISAR CANDIDATO
 # ============================================================
 
-def analisar_simples(
+def analisar_candidato(
     fixture,
     favorito
 ):
-
-    odd = favorito[
-        "odd"
-    ]
+    odd = favorito["odd"]
 
     if not (
         ODD_MIN_SIMPLES
@@ -1199,16 +831,10 @@ def analisar_simples(
     )
 
     hist_adv = analisar_time(
-        favorito[
-            "adversario_id"
-        ]
+        favorito["adversario_id"]
     )
 
-    if (
-        not hist_fav
-        or
-        not hist_adv
-    ):
+    if not hist_fav or not hist_adv:
         return None
 
     if (
@@ -1218,50 +844,52 @@ def analisar_simples(
         hist_adv["jogos"]
         < MIN_JOGOS_HISTORICO
     ):
+        logger.info(
+            "Reprovado %s: histórico insuficiente.",
+            favorito["nome"]
+        )
         return None
 
     if (
         hist_fav["taxa_win"]
         < MIN_WIN_FAVORITO
     ):
-
         logger.info(
-            "Reprovado simples %s: "
-            "vitórias %.1f%% < %.1f%%",
+            "Reprovado %s: vitórias %.1f%% < %.1f%%",
             favorito["nome"],
             hist_fav["taxa_win"] * 100,
             MIN_WIN_FAVORITO * 100
         )
-
         return None
 
     if (
         hist_adv["taxa_loss"]
         < MIN_LOSS_ADVERSARIO
     ):
-
         logger.info(
-            "Reprovado simples %s: "
-            "derrotas adversário %.1f%% < %.1f%%",
+            "Reprovado %s: derrotas adversário %.1f%% < %.1f%%",
             favorito["nome"],
             hist_adv["taxa_loss"] * 100,
             MIN_LOSS_ADVERSARIO * 100
         )
-
         return None
 
     times = obter_times(
         fixture
     )
 
+    # Score serve apenas para ordenar
+    # candidatos que já passaram nos filtros.
+    score = (
+        hist_fav["taxa_win"]
+        + hist_adv["taxa_loss"]
+    )
+
     return {
-        "fixture_id":
-            fixture["id"],
+        "fixture_id": fixture["id"],
 
         "kickoff":
-            fixture.get(
-                "kickoff_utc"
-            ),
+            fixture.get("kickoff_utc"),
 
         "home":
             times["home"],
@@ -1272,155 +900,17 @@ def analisar_simples(
         "favorito":
             favorito["nome"],
 
-        "favorito_lado":
-            favorito["lado"],
-
         "favorito_id":
             favorito["team_id"],
+
+        "favorito_lado":
+            favorito["lado"],
 
         "odd":
             odd,
 
-        "mercado":
-            "VITORIA_SIMPLES",
-
-        "selecao":
-            favorito["nome"],
-
-        "historico_favorito":
-            hist_fav,
-
-        "historico_adversario":
-            hist_adv
-    }
-
-
-# ============================================================
-# CANDIDATO DUPLA CHANCE
-# ============================================================
-
-def analisar_dupla(
-    fixture,
-    favorito
-):
-
-    odd = favorito[
-        "odd"
-    ]
-
-    if not (
-        ODD_MIN_DUPLA
-        <= odd
-        <= ODD_MAX_DUPLA
-    ):
-        return None
-
-    hist_fav = analisar_time(
-        favorito["team_id"]
-    )
-
-    hist_adv = analisar_time(
-        favorito[
-            "adversario_id"
-        ]
-    )
-
-    if (
-        not hist_fav
-        or
-        not hist_adv
-    ):
-        return None
-
-    if (
-        hist_fav["jogos"]
-        < MIN_JOGOS_HISTORICO
-        or
-        hist_adv["jogos"]
-        < MIN_JOGOS_HISTORICO
-    ):
-        return None
-
-    if (
-        hist_fav[
-            "taxa_nao_perde"
-        ]
-        < MIN_NAO_PERDE_FAVORITO
-    ):
-
-        logger.info(
-            "Reprovado dupla %s: "
-            "não perde %.1f%% < %.1f%%",
-            favorito["nome"],
-            hist_fav[
-                "taxa_nao_perde"
-            ] * 100,
-            MIN_NAO_PERDE_FAVORITO * 100
-        )
-
-        return None
-
-    if (
-        hist_adv[
-            "taxa_nao_vence"
-        ]
-        < MIN_NAO_VENCE_ADVERSARIO
-    ):
-
-        logger.info(
-            "Reprovado dupla %s: "
-            "adversário não vence %.1f%% < %.1f%%",
-            favorito["nome"],
-            hist_adv[
-                "taxa_nao_vence"
-            ] * 100,
-            MIN_NAO_VENCE_ADVERSARIO * 100
-        )
-
-        return None
-
-    times = obter_times(
-        fixture
-    )
-
-    selecao = (
-        "1X"
-        if favorito["lado"] == "home"
-        else "X2"
-    )
-
-    return {
-        "fixture_id":
-            fixture["id"],
-
-        "kickoff":
-            fixture.get(
-                "kickoff_utc"
-            ),
-
-        "home":
-            times["home"],
-
-        "away":
-            times["away"],
-
-        "favorito":
-            favorito["nome"],
-
-        "favorito_lado":
-            favorito["lado"],
-
-        "favorito_id":
-            favorito["team_id"],
-
-        "odd_favorito_1x2":
-            odd,
-
-        "mercado":
-            "DUPLA_CHANCE",
-
-        "selecao":
-            selecao,
+        "score":
+            score,
 
         "historico_favorito":
             hist_fav,
@@ -1435,7 +925,6 @@ def analisar_dupla(
 # ============================================================
 
 def buscar_proximos_jogos():
-
     inicio = datetime.now(
         timezone.utc
     )
@@ -1448,14 +937,10 @@ def buscar_proximos_jogos():
         "/fixtures",
         params={
             "start_time":
-                int(
-                    inicio.timestamp()
-                ),
+                int(inicio.timestamp()),
 
             "end_time":
-                int(
-                    fim.timestamp()
-                ),
+                int(fim.timestamp()),
 
             "status":
                 "scheduled",
@@ -1468,78 +953,45 @@ def buscar_proximos_jogos():
         }
     )
 
-    if not isinstance(
-        dados,
-        list
-    ):
-
+    if not isinstance(dados, list):
         return []
 
     return dados
 
 
 # ============================================================
-# ESCOLHER MELHORES CANDIDATOS
+# ODD COMBINADA
 # ============================================================
 
-def score_simples(jogo):
+def calcular_odd_combinada(jogos):
+    odd = 1.0
 
-    hf = jogo[
-        "historico_favorito"
-    ]
+    for jogo in jogos:
+        odd *= jogo["odd"]
 
-    ha = jogo[
-        "historico_adversario"
-    ]
-
-    # Apenas usado para ordenar candidatos aprovados.
-    return (
-        hf["taxa_win"]
-        +
-        ha["taxa_loss"]
-    )
-
-
-def score_dupla(jogo):
-
-    hf = jogo[
-        "historico_favorito"
-    ]
-
-    ha = jogo[
-        "historico_adversario"
-    ]
-
-    return (
-        hf["taxa_nao_perde"]
-        +
-        ha["taxa_nao_vence"]
+    return round(
+        odd,
+        2
     )
 
 
 # ============================================================
-# PROCURAR BILHETE
+# PROCURAR SINAL
 # ============================================================
 
 def procurar_bilhete():
-
     if existe_sinal_pendente():
-
         logger.info(
-            "Há um bilhete pendente. "
-            "Nenhum novo sinal será procurado."
+            "Há um bilhete pendente."
         )
-
         return
 
     fixtures = buscar_proximos_jogos()
 
     if not fixtures:
-
         logger.info(
             "Nenhum jogo agendado encontrado."
         )
-
         return
 
     logger.info(
@@ -1547,27 +999,15 @@ def procurar_bilhete():
         len(fixtures)
     )
 
-    candidatos_simples = []
-    candidatos_dupla = []
+    candidatos = []
 
     for fixture in fixtures:
-
         if existe_sinal_pendente():
             return
 
-        fixture_id = fixture.get(
-            "id"
-        )
+        times = obter_times(fixture)
 
-        times = obter_times(
-            fixture
-        )
-
-        if (
-            not fixture_id
-            or
-            not times
-        ):
+        if not times:
             continue
 
         odds = obter_odds_1x2(
@@ -1575,13 +1015,11 @@ def procurar_bilhete():
         )
 
         if not odds:
-
             logger.info(
-                "%s x %s | sem odds 1X2 Bet365.",
+                "%s x %s | sem 1X2 Bet365.",
                 times["home"],
                 times["away"]
             )
-
             continue
 
         favorito = identificar_favorito(
@@ -1600,101 +1038,65 @@ def procurar_bilhete():
             favorito["odd"]
         )
 
-        # A faixa da odd determina qual
-        # análise será executada.
-        if (
+        # Ignora imediatamente odds fora da faixa
+        # para não gastar requisições de histórico.
+        if not (
             ODD_MIN_SIMPLES
             <= favorito["odd"]
             <= ODD_MAX_SIMPLES
         ):
+            continue
 
-            candidato = analisar_simples(
-                fixture,
-                favorito
-            )
-
-            if candidato:
-
-                candidatos_simples.append(
-                    candidato
-                )
-
-                logger.info(
-                    "APROVADO SIMPLES: %s",
-                    favorito["nome"]
-                )
-
-        elif (
-            ODD_MIN_DUPLA
-            <= favorito["odd"]
-            <= ODD_MAX_DUPLA
-        ):
-
-            candidato = analisar_dupla(
-                fixture,
-                favorito
-            )
-
-            if candidato:
-
-                candidatos_dupla.append(
-                    candidato
-                )
-
-                logger.info(
-                    "APROVADO DUPLA: %s %s",
-                    favorito["nome"],
-                    candidato["selecao"]
-                )
-
-    if (
-        not candidatos_simples
-        or
-        not candidatos_dupla
-    ):
-
-        logger.info(
-            "Sem combinação completa. "
-            "Simples aprovados=%s | "
-            "Dupla aprovados=%s",
-            len(candidatos_simples),
-            len(candidatos_dupla)
+        candidato = analisar_candidato(
+            fixture,
+            favorito
         )
 
-        return
-
-    candidatos_simples.sort(
-        key=score_simples,
-        reverse=True
-    )
-
-    candidatos_dupla.sort(
-        key=score_dupla,
-        reverse=True
-    )
-
-    for simples in candidatos_simples:
-
-        for dupla in candidatos_dupla:
-
-            # Nunca colocar o mesmo fixture
-            # duas vezes no bilhete.
-            if (
-                simples["fixture_id"]
-                ==
-                dupla["fixture_id"]
-            ):
-                continue
-
-            criar_bilhete(
-                simples,
-                dupla
+        if candidato:
+            candidatos.append(
+                candidato
             )
 
-            return
+            logger.info(
+                "APROVADO: %s | odd %.2f | "
+                "vitórias %.1f%% | "
+                "adversário derrotas %.1f%%",
+                candidato["favorito"],
+                candidato["odd"],
+                candidato[
+                    "historico_favorito"
+                ]["taxa_win"] * 100,
+                candidato[
+                    "historico_adversario"
+                ]["taxa_loss"] * 100
+            )
 
     logger.info(
-        "Não foi possível formar dois jogos distintos."
+        "Varredura concluída: %s candidatos aprovados.",
+        len(candidatos)
+    )
+
+    if len(candidatos) < QTD_JOGOS_BILHETE:
+        logger.info(
+            "São necessários %s aprovados. "
+            "Encontrados: %s.",
+            QTD_JOGOS_BILHETE,
+            len(candidatos)
+        )
+        return
+
+    # Melhor combinação entre os aprovados
+    candidatos.sort(
+        key=lambda x: x["score"],
+        reverse=True
+    )
+
+    escolhidos = candidatos[
+        :QTD_JOGOS_BILHETE
+    ]
+
+    criar_bilhete(
+        escolhidos
     )
 
 
@@ -1702,50 +1104,41 @@ def procurar_bilhete():
 # CRIAR BILHETE
 # ============================================================
 
-def criar_bilhete(
-    simples,
-    dupla
-):
-
+def criar_bilhete(jogos):
     global sinal_atual
 
-    with lock_sinal:
+    if len(jogos) != QTD_JOGOS_BILHETE:
+        return
 
+    odd_combinada = calcular_odd_combinada(
+        jogos
+    )
+
+    with lock_sinal:
         if existe_sinal_pendente():
             return
 
         sinal_id = (
-            datetime.now(
-                timezone.utc
-            )
-            .strftime(
-                "%Y%m%d%H%M%S"
-            )
+            datetime.now(timezone.utc)
+            .strftime("%Y%m%d%H%M%S")
         )
 
         sinal_atual = {
-            "id":
-                sinal_id,
-
-            "versao":
-                "V20.1",
-
-            "status":
-                "PENDENTE",
-
-            "resultado":
-                None,
+            "id": sinal_id,
+            "versao": "V21",
+            "status": "PENDENTE",
+            "resultado": None,
 
             "criado_em":
                 datetime.now(
                     timezone.utc
                 ).isoformat(),
 
-            "jogo_simples":
-                simples,
+            "odd_combinada":
+                odd_combinada,
 
-            "jogo_dupla":
-                dupla
+            "jogos":
+                jogos
         }
 
         salvar_json(
@@ -1754,73 +1147,49 @@ def criar_bilhete(
         )
 
     with lock_stats:
-
-        stats[
-            "total_sinais"
-        ] += 1
+        stats["total_sinais"] += 1
 
         salvar_json(
             ARQUIVO_STATS,
             stats
         )
 
-    hf1 = simples[
-        "historico_favorito"
-    ]
-
-    ha1 = simples[
-        "historico_adversario"
-    ]
-
-    hf2 = dupla[
-        "historico_favorito"
-    ]
-
-    ha2 = dupla[
-        "historico_adversario"
-    ]
-
     mensagem = (
-        "🎯 <b>SINAL V20.1 — 2 JOGOS</b>\n\n"
+        "🎯 <b>SINAL V21 — 4 FAVORITOS</b>\n\n"
+        "🏆 <b>RESULTADO FINAL — VITÓRIA SIMPLES</b>\n\n"
+    )
 
+    for indice, jogo in enumerate(
+        jogos,
+        start=1
+    ):
+        hf = jogo[
+            "historico_favorito"
+        ]
+
+        ha = jogo[
+            "historico_adversario"
+        ]
+
+        mensagem += (
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<b>{indice}️⃣ {jogo['home']} x {jogo['away']}</b>\n"
+            f"⭐ <b>{jogo['favorito']} VENCE</b>\n"
+            f"💰 Odd Bet365: <b>{jogo['odd']:.2f}</b>\n"
+            f"📈 Favorito venceu: "
+            f"<b>{hf['taxa_win'] * 100:.1f}%</b> "
+            f"({hf['wins']}V/{hf['jogos']}J)\n"
+            f"📉 Adversário perdeu: "
+            f"<b>{ha['taxa_loss'] * 100:.1f}%</b> "
+            f"({ha['losses']}D/{ha['jogos']}J)\n\n"
+        )
+
+    mensagem += (
         "━━━━━━━━━━━━━━━━━━\n"
-        "⭐ <b>JOGO 1 — VITÓRIA SIMPLES</b>\n\n"
-
-        f"⚽ {simples['home']} x {simples['away']}\n"
-        f"🏆 <b>{simples['favorito']} VENCE</b>\n"
-        f"💰 Odd Bet365 1X2: <b>{simples['odd']:.2f}</b>\n\n"
-
-        f"📊 Favorito:\n"
-        f"• {hf1['wins']}V / {hf1['draws']}E / {hf1['losses']}D\n"
-        f"• Vitórias: <b>{hf1['taxa_win'] * 100:.1f}%</b>\n"
-        f"• Média gols: {hf1['media_gols_pro']:.2f}\n\n"
-
-        f"📉 Adversário:\n"
-        f"• Derrotas: <b>{ha1['taxa_loss'] * 100:.1f}%</b>\n\n"
-
-        "━━━━━━━━━━━━━━━━━━\n"
-        "🛡️ <b>JOGO 2 — DUPLA CHANCE</b>\n\n"
-
-        f"⚽ {dupla['home']} x {dupla['away']}\n"
-        f"⭐ Favorito: <b>{dupla['favorito']}</b>\n"
-        f"🎟️ Entrada: <b>{dupla['selecao']}</b>\n"
-        f"📌 Odd 1X2 do favorito: "
-        f"{dupla['odd_favorito_1x2']:.2f}\n\n"
-
-        f"📊 Favorito:\n"
-        f"• {hf2['wins']}V / {hf2['draws']}E / {hf2['losses']}D\n"
-        f"• Não perdeu: "
-        f"<b>{hf2['taxa_nao_perde'] * 100:.1f}%</b>\n\n"
-
-        f"📉 Adversário:\n"
-        f"• Não venceu: "
-        f"<b>{ha2['taxa_nao_vence'] * 100:.1f}%</b>\n\n"
-
-        "━━━━━━━━━━━━━━━━━━\n"
-        "⏳ <b>BILHETE PENDENTE</b>\n\n"
-
-        "🔒 Nenhum outro sinal será enviado "
-        "até este bilhete ser resolvido."
+        f"🔥 <b>ODD COMBINADA: {odd_combinada:.2f}</b>\n\n"
+        "⏳ <b>STATUS: PENDENTE</b>\n\n"
+        "🔒 O próximo sinal só será procurado "
+        "depois da resolução deste bilhete."
     )
 
     enviar_telegram(
@@ -1828,29 +1197,27 @@ def criar_bilhete(
     )
 
     logger.info(
-        "BILHETE %s CRIADO.",
-        sinal_id
+        "BILHETE V21 %s CRIADO | "
+        "4 jogos | odd combinada %.2f",
+        sinal_id,
+        odd_combinada
     )
 
 
 # ============================================================
-# RESULTADOS
+# RESULTADO
 # ============================================================
 
-def buscar_fixture(
-    fixture_id
-):
-
+def buscar_fixture(fixture_id):
     return api_get(
         f"/fixtures/{fixture_id}"
     )
 
 
-def resolver_simples(
+def resolver_selecao(
     jogo,
     fixture
 ):
-
     placar = extrair_gols(
         fixture
     )
@@ -1860,11 +1227,7 @@ def resolver_simples(
 
     gh, ga = placar
 
-    if (
-        jogo["favorito_lado"]
-        == "home"
-    ):
-
+    if jogo["favorito_lado"] == "home":
         return (
             "WIN"
             if gh > ga
@@ -1878,143 +1241,98 @@ def resolver_simples(
     )
 
 
-def resolver_dupla(
-    jogo,
-    fixture
-):
-
-    placar = extrair_gols(
-        fixture
-    )
-
-    if placar is None:
-        return None
-
-    gh, ga = placar
-
-    if (
-        jogo["selecao"]
-        == "1X"
-    ):
-
-        return (
-            "WIN"
-            if gh >= ga
-            else "LOSS"
-        )
-
-    if (
-        jogo["selecao"]
-        == "X2"
-    ):
-
-        return (
-            "WIN"
-            if ga >= gh
-            else "LOSS"
-        )
-
-    return None
-
-
 def verificar_resultado():
-
     global sinal_atual
 
     if not existe_sinal_pendente():
         return
 
-    simples = sinal_atual.get(
-        "jogo_simples"
+    jogos = sinal_atual.get(
+        "jogos",
+        []
     )
 
-    dupla = sinal_atual.get(
-        "jogo_dupla"
-    )
-
-    if (
-        not simples
-        or
-        not dupla
-    ):
-        return
-
-    fixture1 = buscar_fixture(
-        simples["fixture_id"]
-    )
-
-    if not fixture1:
-        return
-
-    # Evita gastar segunda requisição
-    # enquanto o primeiro ainda não terminou.
-    if (
-        fixture1.get("status")
-        != "finished"
-    ):
-        return
-
-    fixture2 = buscar_fixture(
-        dupla["fixture_id"]
-    )
-
-    if not fixture2:
-        return
-
-    if (
-        fixture2.get("status")
-        != "finished"
-    ):
-        return
-
-    r1 = resolver_simples(
-        simples,
-        fixture1
-    )
-
-    r2 = resolver_dupla(
-        dupla,
-        fixture2
-    )
-
-    if (
-        r1 is None
-        or
-        r2 is None
-    ):
-        return
-
-    resultado = (
-        "WIN"
-        if (
-            r1 == "WIN"
-            and
-            r2 == "WIN"
+    if len(jogos) != QTD_JOGOS_BILHETE:
+        logger.warning(
+            "Bilhete pendente com quantidade "
+            "inválida de jogos."
         )
+        return
+
+    resultados = []
+
+    # Todos precisam estar encerrados.
+    for jogo in jogos:
+        fixture = buscar_fixture(
+            jogo["fixture_id"]
+        )
+
+        if not fixture:
+            return
+
+        if fixture.get("status") != "finished":
+            logger.info(
+                "Aguardando terminar: %s x %s",
+                jogo["home"],
+                jogo["away"]
+            )
+            return
+
+        resultado = resolver_selecao(
+            jogo,
+            fixture
+        )
+
+        placar = extrair_gols(
+            fixture
+        )
+
+        if resultado is None or placar is None:
+            return
+
+        resultados.append({
+            "fixture_id":
+                jogo["fixture_id"],
+
+            "home":
+                jogo["home"],
+
+            "away":
+                jogo["away"],
+
+            "favorito":
+                jogo["favorito"],
+
+            "resultado":
+                resultado,
+
+            "gols_home":
+                placar[0],
+
+            "gols_away":
+                placar[1]
+        })
+
+    # Só chega aqui quando as 4 terminaram.
+    bilhete_win = all(
+        item["resultado"] == "WIN"
+        for item in resultados
+    )
+
+    resultado_bilhete = (
+        "WIN"
+        if bilhete_win
         else "LOSS"
     )
 
-    placar1 = extrair_gols(
-        fixture1
-    )
-
-    placar2 = extrair_gols(
-        fixture2
-    )
-
     with lock_sinal:
-
         sinal_atual[
-            "resultado_simples"
-        ] = r1
-
-        sinal_atual[
-            "resultado_dupla"
-        ] = r2
+            "resultados"
+        ] = resultados
 
         sinal_atual[
             "resultado"
-        ] = resultado
+        ] = resultado_bilhete
 
         sinal_atual[
             "status"
@@ -2032,18 +1350,13 @@ def verificar_resultado():
         )
 
     with lock_stats:
+        for item in resultados:
+            if item["resultado"] == "WIN":
+                stats["selecoes_win"] += 1
+            else:
+                stats["selecoes_loss"] += 1
 
-        if r1 == "WIN":
-            stats["simples_win"] += 1
-        else:
-            stats["simples_loss"] += 1
-
-        if r2 == "WIN":
-            stats["dupla_win"] += 1
-        else:
-            stats["dupla_loss"] += 1
-
-        if resultado == "WIN":
+        if resultado_bilhete == "WIN":
             stats["bilhetes_win"] += 1
         else:
             stats["bilhetes_loss"] += 1
@@ -2054,29 +1367,45 @@ def verificar_resultado():
         )
 
     mensagem = (
-        "📊 <b>RESULTADO V20.1</b>\n\n"
+        "📊 <b>RESULTADO V21 — 4 FAVORITOS</b>\n\n"
+    )
 
-        "⭐ <b>VITÓRIA SIMPLES</b>\n"
-        f"⚽ {simples['home']} x {simples['away']}\n"
-        f"🔢 {placar1[0]} x {placar1[1]}\n"
-        f"🎯 {simples['favorito']} vence\n"
-        f"Resultado: <b>{r1}</b>\n\n"
+    for indice, item in enumerate(
+        resultados,
+        start=1
+    ):
+        simbolo = (
+            "✅"
+            if item["resultado"] == "WIN"
+            else "❌"
+        )
 
-        "🛡️ <b>DUPLA CHANCE</b>\n"
-        f"⚽ {dupla['home']} x {dupla['away']}\n"
-        f"🔢 {placar2[0]} x {placar2[1]}\n"
-        f"🎯 {dupla['selecao']}\n"
-        f"Resultado: <b>{r2}</b>\n\n"
+        mensagem += (
+            f"{simbolo} <b>JOGO {indice}</b>\n"
+            f"⚽ {item['home']} "
+            f"{item['gols_home']} x "
+            f"{item['gols_away']} "
+            f"{item['away']}\n"
+            f"⭐ {item['favorito']}: "
+            f"<b>{item['resultado']}</b>\n\n"
+        )
 
+    mensagem += (
         "━━━━━━━━━━━━━━━━━━\n"
-        f"🎟️ BILHETE: <b>{resultado}</b>\n\n"
+        f"🎟️ RESULTADO DO BILHETE: "
+        f"<b>{resultado_bilhete}</b>\n\n"
 
-        f"📈 Bilhetes: <b>{taxa_bilhetes():.2f}%</b>\n"
-        f"✅ {stats['bilhetes_win']} WIN\n"
-        f"❌ {stats['bilhetes_loss']} LOSS\n\n"
+        f"📈 Assertividade dos bilhetes: "
+        f"<b>{taxa_bilhetes():.2f}%</b>\n"
 
-        f"⭐ Vitória simples: {taxa_simples():.2f}%\n"
-        f"🛡️ Dupla chance: {taxa_dupla():.2f}%\n\n"
+        f"🎯 Assertividade das seleções: "
+        f"<b>{taxa_selecoes():.2f}%</b>\n\n"
+
+        f"✅ Bilhetes WIN: "
+        f"{stats['bilhetes_win']}\n"
+
+        f"❌ Bilhetes LOSS: "
+        f"{stats['bilhetes_loss']}\n\n"
 
         "🔓 Próximo sinal liberado."
     )
@@ -2086,9 +1415,8 @@ def verificar_resultado():
     )
 
     logger.info(
-        "BILHETE %s RESOLVIDO: %s",
-        sinal_atual.get("id"),
-        resultado
+        "BILHETE V21 RESOLVIDO: %s",
+        resultado_bilhete
     )
 
 
@@ -2097,7 +1425,6 @@ def verificar_resultado():
 # ============================================================
 
 def loop_analise():
-
     logger.info(
         "Thread de análise iniciada."
     )
@@ -2105,22 +1432,16 @@ def loop_analise():
     time.sleep(10)
 
     while True:
-
         try:
-
-            if not existe_sinal_pendente():
-
-                procurar_bilhete()
-
-            else:
-
+            if existe_sinal_pendente():
                 logger.info(
                     "Bilhete pendente. "
-                    "Análise bloqueada."
+                    "Busca bloqueada."
                 )
+            else:
+                procurar_bilhete()
 
         except Exception:
-
             logger.exception(
                 "Erro no loop de análise."
             )
@@ -2131,7 +1452,6 @@ def loop_analise():
 
 
 def loop_resultados():
-
     logger.info(
         "Thread de resultados iniciada."
     )
@@ -2139,15 +1459,11 @@ def loop_resultados():
     time.sleep(30)
 
     while True:
-
         try:
-
             if existe_sinal_pendente():
-
                 verificar_resultado()
 
         except Exception:
-
             logger.exception(
                 "Erro no loop de resultados."
             )
@@ -2163,61 +1479,46 @@ def loop_resultados():
 
 @app.route("/")
 def home():
-
     return jsonify({
         "online": True,
-        "versao": "V20.1",
+        "versao": "V21",
+        "estrategia":
+            "4 favoritos - vitória simples",
 
-        "estrategia": {
-            "bilhete":
-                "2 jogos",
+        "quantidade_jogos":
+            QTD_JOGOS_BILHETE,
 
-            "jogo_1":
-                "Vitória simples do favorito",
+        "odd_min":
+            ODD_MIN_SIMPLES,
 
-            "odd_simples":
-                [
-                    ODD_MIN_SIMPLES,
-                    ODD_MAX_SIMPLES
-                ],
-
-            "jogo_2":
-                "Dupla chance no favorito",
-
-            "odd_favorito_dupla":
-                [
-                    ODD_MIN_DUPLA,
-                    ODD_MAX_DUPLA
-                ]
-        },
+        "odd_max":
+            ODD_MAX_SIMPLES,
 
         "sinal_pendente":
             existe_sinal_pendente(),
 
-        "stats": {
-            "total_sinais":
-                stats["total_sinais"],
+        "total_sinais":
+            stats["total_sinais"],
 
-            "wins":
-                stats["bilhetes_win"],
+        "wins":
+            stats["bilhetes_win"],
 
-            "losses":
-                stats["bilhetes_loss"],
+        "losses":
+            stats["bilhetes_loss"],
 
-            "assertividade":
-                taxa_bilhetes()
-        }
+        "assertividade_bilhetes":
+            taxa_bilhetes(),
+
+        "assertividade_selecoes":
+            taxa_selecoes()
     })
 
 
 @app.route("/status")
 def status():
-
     return jsonify({
         "online": True,
-
-        "versao":
-            "V20.1",
+        "versao": "V21",
 
         "sinal_pendente":
             existe_sinal_pendente(),
@@ -2226,33 +1527,20 @@ def status():
             sinal_atual,
 
         "config": {
-            "simples": {
-                "odd_min":
-                    ODD_MIN_SIMPLES,
+            "qtd_jogos_bilhete":
+                QTD_JOGOS_BILHETE,
 
-                "odd_max":
-                    ODD_MAX_SIMPLES,
+            "odd_min":
+                ODD_MIN_SIMPLES,
 
-                "win_favorito":
-                    MIN_WIN_FAVORITO,
+            "odd_max":
+                ODD_MAX_SIMPLES,
 
-                "loss_adversario":
-                    MIN_LOSS_ADVERSARIO
-            },
+            "min_win_favorito":
+                MIN_WIN_FAVORITO,
 
-            "dupla": {
-                "odd_min":
-                    ODD_MIN_DUPLA,
-
-                "odd_max":
-                    ODD_MAX_DUPLA,
-
-                "nao_perde_favorito":
-                    MIN_NAO_PERDE_FAVORITO,
-
-                "nao_vence_adversario":
-                    MIN_NAO_VENCE_ADVERSARIO
-            },
+            "min_loss_adversario":
+                MIN_LOSS_ADVERSARIO,
 
             "historico":
                 QTD_HISTORICO,
@@ -2270,21 +1558,17 @@ def status():
             "taxa_bilhetes":
                 taxa_bilhetes(),
 
-            "taxa_simples":
-                taxa_simples(),
-
-            "taxa_dupla":
-                taxa_dupla()
+            "taxa_selecoes":
+                taxa_selecoes()
         }
     })
 
 
 @app.route("/health")
 def health():
-
     return jsonify({
         "status": "ok",
-        "version": "V20.1"
+        "version": "V21"
     })
 
 
@@ -2297,11 +1581,9 @@ _threads_lock = threading.Lock()
 
 
 def iniciar_threads():
-
     global _threads_iniciadas
 
     with _threads_lock:
-
         if _threads_iniciadas:
             return
 
@@ -2320,25 +1602,29 @@ def iniciar_threads():
         ).start()
 
         logger.info(
-            "ROBÔ V20.1 INICIADO"
+            "ROBÔ V21 INICIADO"
         )
 
         logger.info(
-            "Vitória simples: odd %.2f a %.2f",
+            "Estratégia: %s favoritos "
+            "em vitória simples.",
+            QTD_JOGOS_BILHETE
+        )
+
+        logger.info(
+            "Odds: %.2f até %.2f",
             ODD_MIN_SIMPLES,
             ODD_MAX_SIMPLES
         )
 
         logger.info(
-            "Dupla chance: favorito 1X2 %.2f a %.2f",
-            ODD_MIN_DUPLA,
-            ODD_MAX_DUPLA
+            "Filtro: favorito >= %.1f%% vitórias",
+            MIN_WIN_FAVORITO * 100
         )
 
         logger.info(
-            "Histórico: %s jogos | mínimo %s",
-            QTD_HISTORICO,
-            MIN_JOGOS_HISTORICO
+            "Filtro: adversário >= %.1f%% derrotas",
+            MIN_LOSS_ADVERSARIO * 100
         )
 
         logger.info(
@@ -2350,8 +1636,7 @@ iniciar_threads()
 
 
 if __name__ == "__main__":
-
     app.run(
         host="0.0.0.0",
         port=PORT
-                          )
+        )

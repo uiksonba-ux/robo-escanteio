@@ -29,14 +29,35 @@ IQ_PASSWORD = os.getenv("IQ_PASSWORD", "").strip()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
 
+# Servidor
 PORT = int(os.getenv("PORT", "10000"))
+
+# Segurança: conta de treino fixa. Não transformar em variável de ambiente.
+CONTA = "PRACTICE"
 EXECUTAR_ORDENS = os.getenv("EXECUTAR_ORDENS", "false").lower() == "true"
-ENTRADA_BASE = float(os.getenv("ENTRADA_BASE", "2"))
+
+# Estratégia
 SCORE_MIN = int(os.getenv("SCORE_MIN", "65"))
 INTERVALO_ANALISE = int(os.getenv("INTERVALO_ANALISE", "20"))
 INTERVALO_ENTRE_ATIVOS = float(os.getenv("INTERVALO_ENTRE_ATIVOS", "0.7"))
-TEMPO_BLOQUEIO = 300
-CONTA = "PRACTICE"
+TEMPO_BLOQUEIO = int(os.getenv("TEMPO_BLOQUEIO", "300"))
+
+# Gestão V8
+ENTRADA_BASE = float(os.getenv("ENTRADA_BASE", "2"))
+RECUPERACAO_PERCENTUAL = float(os.getenv("RECUPERACAO_PERCENTUAL", "0.10"))
+MAX_SINAIS_RECUPERACAO = int(os.getenv("MAX_SINAIS_RECUPERACAO", "10"))
+MAX_CICLOS_GESTAO = 4
+
+# Ciclo 1 = entrada + 2 Gales
+# Ciclo 2 = entrada + 3 Gales
+# Ciclo 3 = entrada + 4 Gales
+# Ciclo 4 = entrada + 5 Gales
+GALES_POR_CICLO = {
+    1: 2,
+    2: 3,
+    3: 4,
+    4: 5,
+}
 
 ATIVOS = [
     "EURUSD", "GBPUSD", "EURGBP", "USDJPY", "AUDUSD", "USDCHF",
@@ -436,7 +457,7 @@ def analisar(candles):
     }
 
 # ============================================================
-# V7 - INSTRUMENT_ID VIA WEBSOCKET
+# V8 - INSTRUMENT_ID VIA WEBSOCKET
 # ============================================================
 def obter_instrumento_digital(ativo, direcao, expiracao):
     if expiracao not in (1, 5):
@@ -445,7 +466,7 @@ def obter_instrumento_digital(ativo, direcao, expiracao):
     if not garantir_practice():
         return None, None, "sem_conexao"
 
-    log.info("V7 SUBSCRIBE | %s | DIGITAL M%s", ativo, expiracao)
+    log.info("V8 SUBSCRIBE | %s | DIGITAL M%s", ativo, expiracao)
 
     try:
         # Limpa buffers antigos quando a estrutura já existe.
@@ -482,7 +503,7 @@ def obter_instrumento_digital(ativo, direcao, expiracao):
 
         if not recebeu:
             log.warning(
-                "V7 | WEBSOCKET SEM COTAÇÃO | %s | M%s",
+                "V8 | WEBSOCKET SEM COTAÇÃO | %s | M%s",
                 ativo, expiracao
             )
 
@@ -494,7 +515,7 @@ def obter_instrumento_digital(ativo, direcao, expiracao):
             return None, None, "websocket_sem_cotacao"
 
         log.info(
-            "V7 | COTAÇÃO DIGITAL RECEBIDA | %s | M%s",
+            "V8 | COTAÇÃO DIGITAL RECEBIDA | %s | M%s",
             ativo, expiracao
         )
 
@@ -516,7 +537,7 @@ def obter_instrumento_digital(ativo, direcao, expiracao):
 
         if thread.is_alive():
             log.warning(
-                "V7 | STRIKE LIST TIMEOUT | %s | M%s",
+                "V8 | STRIKE LIST TIMEOUT | %s | M%s",
                 ativo, expiracao
             )
 
@@ -536,7 +557,7 @@ def obter_instrumento_digital(ativo, direcao, expiracao):
             return None, None, "strike_list_vazia"
 
         log.info(
-            "V7 | STRIKES RECEBIDOS | %s | quantidade=%s",
+            "V8 | STRIKES RECEBIDOS | %s | quantidade=%s",
             ativo, len(strikes)
         )
 
@@ -593,7 +614,7 @@ def obter_instrumento_digital(ativo, direcao, expiracao):
         profit = escolhido["profit"]
 
         log.info(
-            "V7 | INSTRUMENTO REAL ENCONTRADO | "
+            "V8 | INSTRUMENTO REAL ENCONTRADO | "
             "%s | %s | M%s | strike=%s | profit=%s | id=%s",
             ativo,
             direcao.upper(),
@@ -612,7 +633,7 @@ def obter_instrumento_digital(ativo, direcao, expiracao):
 
     except Exception as e:
         log.exception(
-            "V7 | ERRO INSTRUMENTO | %s | %s",
+            "V8 | ERRO INSTRUMENTO | %s | %s",
             ativo, e
         )
 
@@ -1386,10 +1407,11 @@ log.info(VERSAO)
 log.info("CONTA = PRACTICE")
 log.info("EXECUTAR_ORDENS = %s", EXECUTAR_ORDENS)
 log.info(
-    "ENTRADA = %.2f -> %.2f -> %.2f",
+    "GESTÃO = base=%.2f | recuperação=%.0f%% | ciclos=%s | gales=2/3/4/5 | máximo=%s sinais",
     ENTRADA_BASE,
-    ENTRADA_BASE * 2,
-    ENTRADA_BASE * 4,
+    RECUPERACAO_PERCENTUAL * 100,
+    MAX_CICLOS_GESTAO,
+    MAX_SINAIS_RECUPERACAO,
 )
 log.info("MÉTODO V8 = websocket + strike list + instrument_id + buy_digital + gestão 4 ciclos")
 log.info("===============================================")

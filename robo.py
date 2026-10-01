@@ -3,7 +3,6 @@ import time
 import math
 import threading
 import logging
-from datetime import datetime
 
 import requests
 from flask import Flask, jsonify
@@ -15,7 +14,8 @@ except Exception:
 
 
 # ============================================================
-# CONFIGURAÇÃO
+# ROBÔ IQ OPTION - NORMAL + OTC
+# M1 / M5 / M15
 # ============================================================
 
 app = Flask(__name__)
@@ -24,8 +24,13 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
+
 logger = logging.getLogger("robo-iq")
 
+
+# ============================================================
+# VARIÁVEIS DE AMBIENTE
+# ============================================================
 
 def env_str(nome, padrao=""):
     return os.getenv(nome, padrao).strip()
@@ -46,50 +51,65 @@ def env_float(nome, padrao):
 
 
 def env_bool(nome, padrao=False):
+
     valor = os.getenv(nome)
 
     if valor is None:
         return padrao
 
     return valor.strip().lower() in (
-        "1", "true", "yes", "sim", "on"
+        "1",
+        "true",
+        "yes",
+        "sim",
+        "on"
     )
 
 
-# ------------------------------------------------------------
-# RENDER / TELEGRAM
-# ------------------------------------------------------------
+# ============================================================
+# CONFIGURAÇÃO
+# ============================================================
 
-PORT = env_int("PORT", 10000)
+PORT = env_int(
+    "PORT",
+    10000
+)
 
-TELEGRAM_TOKEN = env_str("TELEGRAM_TOKEN")
-CHAT_ID = env_str("CHAT_ID")
+TELEGRAM_TOKEN = env_str(
+    "TELEGRAM_TOKEN"
+)
+
+CHAT_ID = env_str(
+    "CHAT_ID"
+)
 
 
-# ------------------------------------------------------------
+# ============================================================
 # IQ OPTION
-# ------------------------------------------------------------
+# ============================================================
 
-IQ_EMAIL = env_str("IQ_EMAIL")
-IQ_PASSWORD = env_str("IQ_PASSWORD")
+IQ_EMAIL = env_str(
+    "IQ_EMAIL"
+)
 
-# PRACTICE por segurança
-IQ_BALANCE = env_str(
-    "IQ_BALANCE",
-    "PRACTICE"
-).upper()
+IQ_PASSWORD = env_str(
+    "IQ_PASSWORD"
+)
 
-# False = só sinais
-# True = executa automaticamente na PRACTICE
+# Esta versão trabalha em PRACTICE.
+IQ_BALANCE = "PRACTICE"
+
+# false = somente sinais
+# true = permite ordens PRACTICE M1/M5
 EXECUTAR_ORDENS = env_bool(
     "EXECUTAR_ORDENS",
     False
 )
 
 
-# ------------------------------------------------------------
-# FILTROS
-# ------------------------------------------------------------
+# ============================================================
+# SCANNER
+# ============================================================
 
 SCORE_MIN = env_int(
     "SCORE_MIN",
@@ -101,9 +121,9 @@ INTERVALO_ANALISE = env_int(
     20
 )
 
-MIN_PAYOUT = env_float(
-    "MIN_PAYOUT",
-    0.70
+ENTRADA_BASE = env_float(
+    "ENTRADA_BASE",
+    2.00
 )
 
 TIMEFRAMES = {
@@ -118,9 +138,19 @@ ATIVOS_BASE = [
     for ativo in env_str(
         "ATIVOS",
         (
-            "EURUSD,EURGBP,GBPUSD,USDJPY,"
-            "AUDUSD,EURJPY,GBPJPY,USDCHF,"
-            "AUDCAD,AUDJPY,EURCAD"
+            "EURUSD,"
+            "EURGBP,"
+            "GBPUSD,"
+            "USDJPY,"
+            "AUDUSD,"
+            "EURJPY,"
+            "GBPJPY,"
+            "USDCHF,"
+            "AUDCAD,"
+            "AUDJPY,"
+            "EURCAD,"
+            "USDCAD,"
+            "NZDUSD"
         )
     ).split(",")
     if ativo.strip()
@@ -130,11 +160,6 @@ ATIVOS_BASE = [
 # ============================================================
 # GERENCIAMENTO
 # ============================================================
-
-ENTRADA_BASE = env_float(
-    "ENTRADA_BASE",
-    2.00
-)
 
 MULTIPLICADOR_GALE = 2.0
 
@@ -146,12 +171,24 @@ RECUPERACAO_PERCENTUAL = 0.10
 
 
 gerenciamento = {
-    "entrada_original": ENTRADA_BASE,
-    "entrada_base_atual": ENTRADA_BASE,
-    "gales_permitidos": GALES_INICIAIS,
-    "gale_atual": 0,
-    "divida": 0.0,
-    "em_recuperacao": False
+
+    "entrada_original":
+        ENTRADA_BASE,
+
+    "entrada_base_atual":
+        ENTRADA_BASE,
+
+    "gales_permitidos":
+        GALES_INICIAIS,
+
+    "gale_atual":
+        0,
+
+    "divida":
+        0.0,
+
+    "em_recuperacao":
+        False
 }
 
 
@@ -160,27 +197,39 @@ gerenciamento = {
 # ============================================================
 
 stats = {
+
     "sinais": 0,
+
     "call": 0,
+
     "put": 0,
 
     "operacoes": 0,
 
     "wins": 0,
+
     "losses": 0,
+
     "draws": 0,
 
     "lucro": 0.0,
+
     "prejuizo": 0.0,
 
-    "maior_sequencia_loss": 0,
     "sequencia_loss_atual": 0,
 
-    "erros": 0
+    "maior_sequencia_loss": 0,
+
+    "erros": 0,
+
+    "ciclos_scanner": 0,
+
+    "candles_recebidos": 0
 }
 
 
 stats_timeframe = {
+
     "M1": {
         "win": 0,
         "loss": 0
@@ -199,6 +248,7 @@ stats_timeframe = {
 
 
 stats_mercado = {
+
     "NORMAL": {
         "win": 0,
         "loss": 0
@@ -212,7 +262,7 @@ stats_mercado = {
 
 
 # ============================================================
-# CONTROLE
+# CONTROLE GLOBAL
 # ============================================================
 
 api = None
@@ -224,6 +274,8 @@ estado_lock = threading.RLock()
 ultimo_sinal = {}
 
 operacao_em_andamento = False
+
+ultimo_telegram_conexao = 0
 
 
 # ============================================================
@@ -240,13 +292,13 @@ def enviar_telegram(texto):
 
         return False
 
-    try:
+    url = (
+        "https://api.telegram.org/bot"
+        + TELEGRAM_TOKEN
+        + "/sendMessage"
+    )
 
-        url = (
-            "https://api.telegram.org/bot"
-            + TELEGRAM_TOKEN
-            + "/sendMessage"
-        )
+    try:
 
         resposta = requests.post(
             url,
@@ -262,8 +314,9 @@ def enviar_telegram(texto):
         if not resposta.ok:
 
             logger.warning(
-                "Telegram HTTP %s",
-                resposta.status_code
+                "Telegram HTTP %s: %s",
+                resposta.status_code,
+                resposta.text[:200]
             )
 
         return resposta.ok
@@ -278,20 +331,22 @@ def enviar_telegram(texto):
 
 
 # ============================================================
-# IQ OPTION
+# CONEXÃO IQ OPTION
 # ============================================================
 
 def conectar_iq():
 
     global api
+    global ultimo_telegram_conexao
 
     if IQ_Option is None:
 
         logger.error(
-            "Biblioteca iqoptionapi não carregada."
+            "iqoptionapi não carregada."
         )
 
         return False
+
 
     if not IQ_EMAIL or not IQ_PASSWORD:
 
@@ -301,55 +356,76 @@ def conectar_iq():
 
         return False
 
+
     try:
+
+        logger.info(
+            "Conectando à IQ Option..."
+        )
+
+        nova_api = IQ_Option(
+            IQ_EMAIL,
+            IQ_PASSWORD
+        )
+
+        ok, motivo = nova_api.connect()
+
+        if not ok:
+
+            logger.error(
+                "Falha na conexão IQ: %s",
+                motivo
+            )
+
+            return False
+
+
+        nova_api.change_balance(
+            "PRACTICE"
+        )
+
 
         with api_lock:
 
-            api = IQ_Option(
-                IQ_EMAIL,
-                IQ_PASSWORD
-            )
+            api = nova_api
 
-            ok, motivo = api.connect()
-
-            if not ok:
-
-                logger.error(
-                    "Falha IQ Option: %s",
-                    motivo
-                )
-
-                api = None
-
-                return False
-
-            # Segurança:
-            # esta versão força PRACTICE
-            api.change_balance(
-                "PRACTICE"
-            )
 
         logger.info(
             "IQ Option conectada em PRACTICE."
         )
 
-        enviar_telegram(
-            "🟢 <b>ROBÔ CONECTADO</b>\n\n"
-            "Conta: PRACTICE\n"
-            "Mercados: Normal + OTC\n"
-            "Tempos: M1 / M5 / M15\n"
-            f"Score mínimo: {SCORE_MIN}"
-        )
+
+        agora = time.time()
+
+        # Evita Telegram repetido em reconexões rápidas.
+        if (
+            agora
+            - ultimo_telegram_conexao
+            > 300
+        ):
+
+            enviar_telegram(
+                "🟢 <b>ROBÔ CONECTADO</b>\n\n"
+                "Conta: <b>PRACTICE</b>\n"
+                "Mercados: <b>Normal + OTC</b>\n"
+                "Tempos: <b>M1 / M5 / M15</b>\n"
+                f"Score mínimo: <b>{SCORE_MIN}</b>\n"
+                f"Entrada base: <b>R$ {ENTRADA_BASE:.2f}</b>\n\n"
+                f"Execução automática: "
+                f"<b>{'ATIVA' if EXECUTAR_ORDENS else 'DESATIVADA'}</b>"
+            )
+
+            ultimo_telegram_conexao = agora
+
 
         return True
+
 
     except Exception:
 
         logger.exception(
             "Erro conectando IQ Option."
         )
-
-        api = None
 
         return False
 
@@ -368,20 +444,20 @@ def garantir_conexao():
             return True
 
     except Exception:
-
         pass
+
 
     return conectar_iq()
 
 
 # ============================================================
-# INDICADORES
+# MATEMÁTICA / INDICADORES
 # ============================================================
 
 def media(valores):
 
     if not valores:
-        return 0
+        return 0.0
 
     return (
         sum(valores)
@@ -410,7 +486,10 @@ def ema(valores, periodo):
             * multiplicador
             +
             valor
-            * (1 - multiplicador)
+            * (
+                1.0
+                - multiplicador
+            )
         )
 
     return valor
@@ -421,14 +500,18 @@ def rsi(valores, periodo=14):
     if len(valores) <= periodo:
         return 50.0
 
+
     ganhos = []
+
     perdas = []
+
 
     inicio = (
         len(valores)
         - periodo
         - 1
     )
+
 
     for i in range(
         inicio,
@@ -441,12 +524,19 @@ def rsi(valores, periodo=14):
         )
 
         ganhos.append(
-            max(diferenca, 0)
+            max(
+                diferenca,
+                0
+            )
         )
 
         perdas.append(
-            max(-diferenca, 0)
+            max(
+                -diferenca,
+                0
+            )
         )
+
 
     ganho_medio = media(
         ganhos
@@ -456,21 +546,30 @@ def rsi(valores, periodo=14):
         perdas
     )
 
+
     if perda_media == 0:
 
-        return 100.0
+        if ganho_medio > 0:
+            return 100.0
+
+        return 50.0
+
 
     rs = (
         ganho_medio
         / perda_media
     )
 
+
     return (
-        100
+        100.0
         -
         (
-            100
-            / (1 + rs)
+            100.0
+            / (
+                1.0
+                + rs
+            )
         )
     )
 
@@ -478,14 +577,23 @@ def rsi(valores, periodo=14):
 def desvio_padrao(valores):
 
     if not valores:
-        return 0
+        return 0.0
 
-    m = media(valores)
+
+    m = media(
+        valores
+    )
+
 
     variancia = media([
-        (x - m) ** 2
-        for x in valores
+        (
+            valor
+            - m
+        ) ** 2
+
+        for valor in valores
     ])
+
 
     return math.sqrt(
         variancia
@@ -497,29 +605,43 @@ def bollinger(
     periodo=20
 ):
 
+    if len(valores) < periodo:
+
+        return (
+            None,
+            None,
+            None
+        )
+
+
     dados = valores[
         -periodo:
     ]
+
 
     centro = media(
         dados
     )
 
+
     desvio = desvio_padrao(
         dados
     )
 
+
     inferior = (
         centro
-        -
-        2 * desvio
+        - 2.0
+        * desvio
     )
+
 
     superior = (
         centro
-        +
-        2 * desvio
+        + 2.0
+        * desvio
     )
+
 
     return (
         inferior,
@@ -540,12 +662,14 @@ def macd(valores):
         26
     )
 
+
     if (
         e12 is None
         or e26 is None
     ):
 
-        return 0
+        return 0.0
+
 
     return (
         e12
@@ -554,43 +678,124 @@ def macd(valores):
 
 
 # ============================================================
-# ESTRATÉGIA
+# VALIDAÇÃO DOS CANDLES
+# ============================================================
+
+def normalizar_candles(candles):
+
+    if not candles:
+        return []
+
+
+    resultado = []
+
+
+    for candle in candles:
+
+        try:
+
+            abertura = float(
+                candle["open"]
+            )
+
+            fechamento = float(
+                candle["close"]
+            )
+
+            maxima = float(
+                candle["max"]
+            )
+
+            minima = float(
+                candle["min"]
+            )
+
+            timestamp = int(
+                candle.get(
+                    "from",
+                    0
+                )
+            )
+
+
+            if (
+                abertura <= 0
+                or fechamento <= 0
+                or maxima <= 0
+                or minima <= 0
+            ):
+
+                continue
+
+
+            resultado.append({
+                "open":
+                    abertura,
+
+                "close":
+                    fechamento,
+
+                "max":
+                    maxima,
+
+                "min":
+                    minima,
+
+                "from":
+                    timestamp
+            })
+
+
+        except Exception:
+
+            continue
+
+
+    resultado.sort(
+        key=lambda x:
+            x["from"]
+    )
+
+
+    return resultado
+
+
+# ============================================================
+# MOTOR DE ESTRATÉGIAS
 # ============================================================
 
 def analisar_candles(candles):
 
-    if not candles:
-        return None
+    candles = normalizar_candles(
+        candles
+    )
+
 
     if len(candles) < 60:
         return None
 
-    candles = sorted(
-        candles,
-        key=lambda x: x.get(
-            "from",
-            0
-        )
-    )
 
     opens = [
-        float(c["open"])
-        for c in candles
+        candle["open"]
+        for candle in candles
     ]
+
 
     closes = [
-        float(c["close"])
-        for c in candles
+        candle["close"]
+        for candle in candles
     ]
+
 
     highs = [
-        float(c["max"])
-        for c in candles
+        candle["max"]
+        for candle in candles
     ]
 
+
     lows = [
-        float(c["min"])
-        for c in candles
+        candle["min"]
+        for candle in candles
     ]
 
 
@@ -598,14 +803,15 @@ def analisar_candles(candles):
 
     score_put = 0
 
+
     motivos_call = []
 
     motivos_put = []
 
 
-    # --------------------------------------------------------
-    # EMA 20 / 50
-    # --------------------------------------------------------
+    # ========================================================
+    # 1. TENDÊNCIA EMA
+    # ========================================================
 
     ema20 = ema(
         closes,
@@ -617,6 +823,7 @@ def analisar_candles(candles):
         50
     )
 
+
     if (
         ema20 is not None
         and ema50 is not None
@@ -627,7 +834,7 @@ def analisar_candles(candles):
             score_call += 20
 
             motivos_call.append(
-                "EMA tendência alta"
+                "EMA tendência de alta"
             )
 
         elif ema20 < ema50:
@@ -635,39 +842,41 @@ def analisar_candles(candles):
             score_put += 20
 
             motivos_put.append(
-                "EMA tendência baixa"
+                "EMA tendência de baixa"
             )
 
 
-    # --------------------------------------------------------
-    # RSI
-    # --------------------------------------------------------
+    # ========================================================
+    # 2. RSI
+    # ========================================================
 
     valor_rsi = rsi(
         closes,
         14
     )
 
+
     if valor_rsi <= 35:
 
         score_call += 15
 
         motivos_call.append(
-            f"RSI {valor_rsi:.1f}"
+            f"RSI sobrevendido {valor_rsi:.1f}"
         )
+
 
     elif valor_rsi >= 65:
 
         score_put += 15
 
         motivos_put.append(
-            f"RSI {valor_rsi:.1f}"
+            f"RSI sobrecomprado {valor_rsi:.1f}"
         )
 
 
-    # --------------------------------------------------------
-    # BOLLINGER
-    # --------------------------------------------------------
+    # ========================================================
+    # 3. BOLLINGER
+    # ========================================================
 
     inferior, centro, superior = (
         bollinger(
@@ -676,28 +885,33 @@ def analisar_candles(candles):
         )
     )
 
+
     ultimo = closes[-1]
 
-    if ultimo <= inferior:
 
-        score_call += 10
+    if inferior is not None:
 
-        motivos_call.append(
-            "Bollinger inferior"
-        )
+        if ultimo <= inferior:
 
-    elif ultimo >= superior:
+            score_call += 10
 
-        score_put += 10
-
-        motivos_put.append(
-            "Bollinger superior"
-        )
+            motivos_call.append(
+                "Bollinger inferior"
+            )
 
 
-    # --------------------------------------------------------
-    # PRICE ACTION
-    # --------------------------------------------------------
+        elif ultimo >= superior:
+
+            score_put += 10
+
+            motivos_put.append(
+                "Bollinger superior"
+            )
+
+
+    # ========================================================
+    # 4. PRICE ACTION
+    # ========================================================
 
     abertura = opens[-1]
 
@@ -707,20 +921,25 @@ def analisar_candles(candles):
 
     minima = lows[-1]
 
+
     corpo = abs(
         fechamento
         - abertura
     )
 
+
     amplitude = max(
-        maxima - minima,
+        maxima
+        - minima,
         0.00000001
     )
+
 
     forca_corpo = (
         corpo
         / amplitude
     )
+
 
     if (
         fechamento > abertura
@@ -730,8 +949,9 @@ def analisar_candles(candles):
         score_call += 15
 
         motivos_call.append(
-            "Price Action alta"
+            "Price Action comprador"
         )
+
 
     elif (
         fechamento < abertura
@@ -741,33 +961,41 @@ def analisar_candles(candles):
         score_put += 15
 
         motivos_put.append(
-            "Price Action baixa"
+            "Price Action vendedor"
         )
 
 
-    # --------------------------------------------------------
-    # SUPORTE / RESISTÊNCIA
-    # --------------------------------------------------------
+    # ========================================================
+    # 5. SUPORTE / RESISTÊNCIA
+    # ========================================================
 
     resistencia = max(
         highs[-11:-1]
     )
 
+
     suporte = min(
         lows[-11:-1]
     )
 
+
+    faixa = max(
+        resistencia
+        - suporte,
+        0.00000001
+    )
+
+
     tolerancia = (
-        max(
-            resistencia - suporte,
-            0.00000001
-        )
+        faixa
         * 0.10
     )
 
+
     if (
         ultimo
-        <= suporte + tolerancia
+        <= suporte
+        + tolerancia
     ):
 
         score_call += 10
@@ -776,9 +1004,11 @@ def analisar_candles(candles):
             "Região de suporte"
         )
 
+
     if (
         ultimo
-        >= resistencia - tolerancia
+        >= resistencia
+        - tolerancia
     ):
 
         score_put += 10
@@ -788,9 +1018,9 @@ def analisar_candles(candles):
         )
 
 
-    # --------------------------------------------------------
-    # ROMPIMENTO
-    # --------------------------------------------------------
+    # ========================================================
+    # 6. ROMPIMENTO
+    # ========================================================
 
     if ultimo > resistencia:
 
@@ -799,6 +1029,7 @@ def analisar_candles(candles):
         motivos_call.append(
             "Rompimento de resistência"
         )
+
 
     elif ultimo < suporte:
 
@@ -809,13 +1040,14 @@ def analisar_candles(candles):
         )
 
 
-    # --------------------------------------------------------
-    # MACD
-    # --------------------------------------------------------
+    # ========================================================
+    # 7. MACD
+    # ========================================================
 
     valor_macd = macd(
         closes
     )
+
 
     if valor_macd > 0:
 
@@ -824,6 +1056,7 @@ def analisar_candles(candles):
         motivos_call.append(
             "MACD positivo"
         )
+
 
     elif valor_macd < 0:
 
@@ -834,9 +1067,9 @@ def analisar_candles(candles):
         )
 
 
-    # --------------------------------------------------------
-    # MOMENTUM
-    # --------------------------------------------------------
+    # ========================================================
+    # 8. MOMENTUM
+    # ========================================================
 
     if (
         closes[-1]
@@ -847,8 +1080,9 @@ def analisar_candles(candles):
         score_call += 5
 
         motivos_call.append(
-            "Momentum alta"
+            "Momentum comprador"
         )
+
 
     elif (
         closes[-1]
@@ -859,7 +1093,7 @@ def analisar_candles(candles):
         score_put += 5
 
         motivos_put.append(
-            "Momentum baixa"
+            "Momentum vendedor"
         )
 
 
@@ -868,23 +1102,22 @@ def analisar_candles(candles):
         100
     )
 
+
     score_put = min(
         score_put,
         100
     )
 
 
-    # --------------------------------------------------------
-    # DECISÃO
-    # --------------------------------------------------------
-
+    # Evita sinal quando os dois lados
+    # estão muito próximos.
     diferenca = abs(
         score_call
         - score_put
     )
 
-    if diferenca < 15:
 
+    if diferenca < 15:
         return None
 
 
@@ -894,14 +1127,24 @@ def analisar_candles(candles):
     ):
 
         return {
-            "direcao": "call",
-            "score": score_call,
-            "score_contra": score_put,
-            "rsi": round(
-                valor_rsi,
-                2
-            ),
-            "motivos": motivos_call
+
+            "direcao":
+                "call",
+
+            "score":
+                score_call,
+
+            "score_contra":
+                score_put,
+
+            "rsi":
+                round(
+                    valor_rsi,
+                    2
+                ),
+
+            "motivos":
+                motivos_call
         }
 
 
@@ -911,14 +1154,24 @@ def analisar_candles(candles):
     ):
 
         return {
-            "direcao": "put",
-            "score": score_put,
-            "score_contra": score_call,
-            "rsi": round(
-                valor_rsi,
-                2
-            ),
-            "motivos": motivos_put
+
+            "direcao":
+                "put",
+
+            "score":
+                score_put,
+
+            "score_contra":
+                score_call,
+
+            "rsi":
+                round(
+                    valor_rsi,
+                    2
+                ),
+
+            "motivos":
+                motivos_put
         }
 
 
@@ -935,9 +1188,11 @@ def valor_entrada():
         "entrada_base_atual"
     ]
 
+
     gale = gerenciamento[
         "gale_atual"
     ]
+
 
     return round(
         base
@@ -957,59 +1212,76 @@ def registrar_win(
         "gale_atual"
     ] = 0
 
-    if gerenciamento[
+
+    if not gerenciamento[
         "em_recuperacao"
     ]:
 
-        gerenciamento[
-            "divida"
-        ] = max(
+        return
+
+
+    gerenciamento[
+        "divida"
+    ] = round(
+        max(
             0.0,
             gerenciamento[
                 "divida"
             ]
-            - lucro
-        )
-
-        if (
-            gerenciamento[
-                "divida"
-            ]
-            <= 0.01
-        ):
-
-            gerenciamento[
-                "divida"
-            ] = 0.0
-
-            gerenciamento[
-                "em_recuperacao"
-            ] = False
-
-            gerenciamento[
-                "entrada_base_atual"
-            ] = ENTRADA_BASE
-
-            gerenciamento[
-                "gales_permitidos"
-            ] = GALES_INICIAIS
-
-        else:
-
-            recuperacao = (
-                gerenciamento[
-                    "divida"
-                ]
-                * RECUPERACAO_PERCENTUAL
+            - max(
+                lucro,
+                0
             )
+        ),
+        2
+    )
 
-            gerenciamento[
-                "entrada_base_atual"
-            ] = round(
-                ENTRADA_BASE
-                + recuperacao,
-                2
-            )
+
+    if (
+        gerenciamento[
+            "divida"
+        ]
+        <= 0.01
+    ):
+
+        gerenciamento[
+            "divida"
+        ] = 0.0
+
+
+        gerenciamento[
+            "em_recuperacao"
+        ] = False
+
+
+        gerenciamento[
+            "entrada_base_atual"
+        ] = ENTRADA_BASE
+
+
+        gerenciamento[
+            "gales_permitidos"
+        ] = GALES_INICIAIS
+
+
+        return
+
+
+    recuperacao = (
+        gerenciamento[
+            "divida"
+        ]
+        * RECUPERACAO_PERCENTUAL
+    )
+
+
+    gerenciamento[
+        "entrada_base_atual"
+    ] = round(
+        ENTRADA_BASE
+        + recuperacao,
+        2
+    )
 
 
 def registrar_loss(
@@ -1018,8 +1290,17 @@ def registrar_loss(
 
     gerenciamento[
         "divida"
-    ] += valor_perdido
+    ] = round(
+        gerenciamento[
+            "divida"
+        ]
+        + valor_perdido,
+        2
+    )
 
+
+    # Ainda existem Gales
+    # dentro do ciclo atual.
     if (
         gerenciamento[
             "gale_atual"
@@ -1037,15 +1318,21 @@ def registrar_loss(
         return
 
 
-    # Ciclo completo perdido
+    # ========================================================
+    # CICLO COMPLETO PERDIDO
+    # ========================================================
+
     gerenciamento[
         "em_recuperacao"
     ] = True
+
 
     gerenciamento[
         "gale_atual"
     ] = 0
 
+
+    # 2 -> 3 -> 4 -> 5 Gales
     if (
         gerenciamento[
             "gales_permitidos"
@@ -1058,12 +1345,22 @@ def registrar_loss(
         ] += 1
 
 
+    # Exemplo:
+    #
+    # R$2 + R$4 + R$8 = R$14
+    #
+    # 10% de R$14 = R$1,40
+    #
+    # nova entrada =
+    # R$2 + R$1,40 = R$3,40
+
     recuperacao = (
         gerenciamento[
             "divida"
         ]
         * RECUPERACAO_PERCENTUAL
     )
+
 
     gerenciamento[
         "entrada_base_atual"
@@ -1075,116 +1372,91 @@ def registrar_loss(
 
 
 # ============================================================
-# ATIVOS
+# ATIVOS NORMAL + OTC
 # ============================================================
 
-def buscar_ativos_abertos():
+def buscar_ativos_candidatos():
 
-    if not garantir_conexao():
+    candidatos = []
 
-        return []
 
-    encontrados = set()
+    for ativo in ATIVOS_BASE:
 
-    try:
-
-        with api_lock:
-
-            dados = (
-                api.get_all_open_time()
-            )
-
-        for mercado in (
-            "digital",
-            "turbo",
-            "binary"
-        ):
-
-            tabela = (
-                dados.get(
-                    mercado,
-                    {}
-                )
-                or {}
-            )
-
-            for ativo, info in (
-                tabela.items()
-            ):
-
-                if not info.get(
-                    "open"
-                ):
-
-                    continue
-
-                ativo_base = (
-                    ativo.replace(
-                        "-OTC",
-                        ""
-                    )
-                )
-
-                if (
-                    ativo_base
-                    in ATIVOS_BASE
-                ):
-
-                    encontrados.add(
-                        ativo
-                    )
-
-    except Exception:
-
-        logger.exception(
-            "Erro buscando ativos."
+        candidatos.append(
+            ativo
         )
 
-    return sorted(
-        encontrados
+
+        candidatos.append(
+            f"{ativo}-OTC"
+        )
+
+
+    # Remove duplicados
+    # preservando a ordem.
+    return list(
+        dict.fromkeys(
+            candidatos
+        )
     )
 
 
 # ============================================================
-# SINAIS
+# CONTROLE DE SINAIS DUPLICADOS
 # ============================================================
 
 def pode_enviar(
     ativo,
-    timeframe
+    timeframe,
+    direcao
 ):
 
     chave = (
-        f"{ativo}:M{timeframe}"
+        f"{ativo}:"
+        f"M{timeframe}:"
+        f"{direcao}"
     )
+
 
     agora = int(
         time.time()
     )
 
+
+    # No máximo um sinal igual
+    # por período do timeframe.
     limite = (
         timeframe
         * 60
     )
+
 
     anterior = ultimo_sinal.get(
         chave,
         0
     )
 
+
     if (
-        agora - anterior
+        agora
+        - anterior
         < limite
     ):
 
         return False
 
+
     ultimo_sinal[
         chave
     ] = agora
 
+
     return True
 
+
+# ============================================================
+# TELEGRAM - SINAL
+# ============================================================
 
 def mensagem_sinal(
     ativo,
@@ -1198,34 +1470,54 @@ def mensagem_sinal(
         else "NORMAL"
     )
 
-    motivos = ", ".join(
-        sinal[
+
+    motivos = "\n".join([
+        f"• {motivo}"
+
+        for motivo in sinal[
             "motivos"
-        ][:5]
-    )
+        ][:6]
+    ])
+
 
     return (
         "📊 <b>NOVO SINAL</b>\n\n"
+
         f"💱 Ativo: <b>{ativo}</b>\n"
+
         f"🌐 Mercado: <b>{mercado}</b>\n"
+
         f"⏱ Tempo: <b>M{timeframe}</b>\n"
-        f"🎯 Direção: <b>{sinal['direcao'].upper()}</b>\n"
-        f"🔥 Score: <b>{sinal['score']}/100</b>\n"
-        f"↔ Contra: {sinal['score_contra']}/100\n"
-        f"📈 RSI: {sinal['rsi']}\n\n"
-        f"💰 Próxima entrada: "
-        f"R$ {valor_entrada():.2f}\n"
+
+        f"🎯 Direção: "
+        f"<b>{sinal['direcao'].upper()}</b>\n"
+
+        f"🔥 Score: "
+        f"<b>{sinal['score']}/100</b>\n"
+
+        f"↔ Score contrário: "
+        f"{sinal['score_contra']}/100\n"
+
+        f"📈 RSI: "
+        f"{sinal['rsi']}\n\n"
+
+        f"💰 Entrada calculada: "
+        f"<b>R$ {valor_entrada():.2f}</b>\n"
+
         f"🔄 Gale: "
         f"{gerenciamento['gale_atual']}/"
         f"{gerenciamento['gales_permitidos']}\n"
+
         f"♻️ Recuperação: "
         f"{'SIM' if gerenciamento['em_recuperacao'] else 'NÃO'}\n\n"
-        f"🔎 {motivos}"
+
+        f"🔎 <b>Confirmações</b>\n"
+        f"{motivos}"
     )
 
 
 # ============================================================
-# RESULTADO DIGITAL
+# RESULTADO DAS OPERAÇÕES PRACTICE
 # ============================================================
 
 def aguardar_resultado_digital(
@@ -1237,17 +1529,23 @@ def aguardar_resultado_digital(
 
     global operacao_em_andamento
 
+
     try:
 
         limite = (
             time.time()
             +
-            timeframe * 60
+            (
+                timeframe
+                * 60
+            )
             +
-            90
+            120
         )
 
+
         resultado = None
+
 
         while (
             time.time()
@@ -1264,6 +1562,7 @@ def aguardar_resultado_digital(
                         )
                     )
 
+
                 if fechado:
 
                     resultado = float(
@@ -1272,18 +1571,28 @@ def aguardar_resultado_digital(
 
                     break
 
+
             except Exception:
 
                 pass
 
-            time.sleep(2)
+
+            time.sleep(
+                2
+            )
 
 
         if resultado is None:
 
+            logger.warning(
+                "Resultado não confirmado: %s",
+                order_id
+            )
+
             enviar_telegram(
-                "⚠️ Não consegui confirmar "
-                "o resultado da operação."
+                "⚠️ <b>RESULTADO NÃO CONFIRMADO</b>\n\n"
+                f"Ativo: {ativo}\n"
+                f"Tempo: M{timeframe}"
             )
 
             return
@@ -1294,6 +1603,7 @@ def aguardar_resultado_digital(
             if "-OTC" in ativo
             else "NORMAL"
         )
+
 
         chave_tf = (
             f"M{timeframe}"
@@ -1313,13 +1623,22 @@ def aguardar_resultado_digital(
                     "wins"
                 ] += 1
 
+
                 stats[
                     "sequencia_loss_atual"
                 ] = 0
 
+
                 stats[
                     "lucro"
-                ] += resultado
+                ] = round(
+                    stats[
+                        "lucro"
+                    ]
+                    + resultado,
+                    2
+                )
+
 
                 stats_timeframe[
                     chave_tf
@@ -1327,17 +1646,22 @@ def aguardar_resultado_digital(
                     "win"
                 ] += 1
 
+
                 stats_mercado[
                     mercado
                 ][
                     "win"
                 ] += 1
 
+
                 registrar_win(
                     resultado
                 )
 
-                status = "✅ WIN"
+
+                status = (
+                    "✅ <b>WIN</b>"
+                )
 
 
             elif resultado < 0:
@@ -1346,15 +1670,24 @@ def aguardar_resultado_digital(
                     "losses"
                 ] += 1
 
+
                 stats[
                     "sequencia_loss_atual"
                 ] += 1
 
+
                 stats[
                     "prejuizo"
-                ] += abs(
-                    resultado
+                ] = round(
+                    stats[
+                        "prejuizo"
+                    ]
+                    + abs(
+                        resultado
+                    ),
+                    2
                 )
+
 
                 stats[
                     "maior_sequencia_loss"
@@ -1367,11 +1700,13 @@ def aguardar_resultado_digital(
                     ]
                 )
 
+
                 stats_timeframe[
                     chave_tf
                 ][
                     "loss"
                 ] += 1
+
 
                 stats_mercado[
                     mercado
@@ -1379,11 +1714,15 @@ def aguardar_resultado_digital(
                     "loss"
                 ] += 1
 
+
                 registrar_loss(
                     valor
                 )
 
-                status = "❌ LOSS"
+
+                status = (
+                    "❌ <b>LOSS</b>"
+                )
 
 
             else:
@@ -1392,42 +1731,91 @@ def aguardar_resultado_digital(
                     "draws"
                 ] += 1
 
-                status = "⚪ DRAW"
+
+                status = (
+                    "⚪ <b>DRAW</b>"
+                )
 
 
         total = (
-            stats["wins"]
+            stats[
+                "wins"
+            ]
             +
-            stats["losses"]
+            stats[
+                "losses"
+            ]
         )
+
 
         assertividade = (
             (
-                stats["wins"]
+                stats[
+                    "wins"
+                ]
                 / total
             )
-            * 100
+            * 100.0
+
             if total
-            else 0
+
+            else 0.0
+        )
+
+
+        saldo_resultados = (
+            stats[
+                "lucro"
+            ]
+            -
+            stats[
+                "prejuizo"
+            ]
         )
 
 
         enviar_telegram(
             f"{status}\n\n"
+
             f"💱 {ativo}\n"
+
+            f"🌐 {mercado}\n"
+
             f"⏱ M{timeframe}\n"
-            f"💵 Entrada: R$ {valor:.2f}\n"
-            f"💰 Resultado: R$ {resultado:.2f}\n\n"
-            f"✅ Wins: {stats['wins']}\n"
-            f"❌ Losses: {stats['losses']}\n"
+
+            f"💵 Entrada: "
+            f"R$ {valor:.2f}\n"
+
+            f"💰 Resultado: "
+            f"R$ {resultado:.2f}\n\n"
+
+            f"✅ Wins: "
+            f"{stats['wins']}\n"
+
+            f"❌ Losses: "
+            f"{stats['losses']}\n"
+
+            f"⚪ Draws: "
+            f"{stats['draws']}\n"
+
             f"🎯 Assertividade: "
             f"{assertividade:.2f}%\n"
+
             f"📉 Maior sequência LOSS: "
             f"{stats['maior_sequencia_loss']}\n\n"
-            f"♻️ Dívida recuperação: "
+
+            f"💵 Resultado acumulado: "
+            f"R$ {saldo_resultados:.2f}\n"
+
+            f"♻️ Dívida de recuperação: "
             f"R$ {gerenciamento['divida']:.2f}\n"
+
             f"➡️ Próxima entrada: "
-            f"R$ {valor_entrada():.2f}"
+            f"R$ {valor_entrada():.2f}\n"
+
+            f"🔄 Próximo Gale: "
+            f"{gerenciamento['gale_atual']}/"
+            f"{gerenciamento['gales_permitidos']}"
         )
 
 
@@ -1437,13 +1825,16 @@ def aguardar_resultado_digital(
             "Erro acompanhando resultado."
         )
 
+
     finally:
 
-        operacao_em_andamento = False
+        with estado_lock:
+
+            operacao_em_andamento = False
 
 
 # ============================================================
-# EXECUÇÃO
+# EXECUÇÃO PRACTICE
 # ============================================================
 
 def executar_operacao(
@@ -1455,7 +1846,10 @@ def executar_operacao(
     global operacao_em_andamento
 
 
-    # M15 permanece sinal/análise.
+    # M15 permanece análise/sinal.
+    #
+    # Não tentamos enviar Digital M15
+    # nesta versão.
     if timeframe not in (
         1,
         5
@@ -1464,18 +1858,10 @@ def executar_operacao(
         return
 
 
+    # Enquanto false:
+    # Telegram recebe sinais,
+    # mas nenhuma ordem é enviada.
     if not EXECUTAR_ORDENS:
-
-        return
-
-
-    # Proteção desta versão.
-    # Nunca envia ordem REAL.
-    if IQ_BALANCE == "REAL":
-
-        logger.error(
-            "Execução REAL bloqueada."
-        )
 
         return
 
@@ -1484,7 +1870,13 @@ def executar_operacao(
 
         if operacao_em_andamento:
 
+            logger.info(
+                "Operação em andamento. "
+                "Novo sinal não executado."
+            )
+
             return
+
 
         operacao_em_andamento = True
 
@@ -1493,12 +1885,22 @@ def executar_operacao(
 
         if not garantir_conexao():
 
-            operacao_em_andamento = False
+            with estado_lock:
+                operacao_em_andamento = False
 
             return
 
 
         valor = valor_entrada()
+
+
+        logger.info(
+            "Enviando PRACTICE | %s | M%s | %s | R$ %.2f",
+            ativo,
+            timeframe,
+            direcao,
+            valor
+        )
 
 
         with api_lock:
@@ -1515,21 +1917,37 @@ def executar_operacao(
 
         if not sucesso:
 
-            operacao_em_andamento = False
-
             logger.warning(
-                "Operação recusada."
+                "Ordem recusada: %s",
+                order_id
             )
+
+
+            with estado_lock:
+                operacao_em_andamento = False
+
 
             return
 
 
         enviar_telegram(
             "🟡 <b>ORDEM PRACTICE ABERTA</b>\n\n"
-            f"Ativo: {ativo}\n"
-            f"Tempo: M{timeframe}\n"
-            f"Direção: {direcao.upper()}\n"
-            f"Valor: R$ {valor:.2f}"
+
+            f"💱 Ativo: "
+            f"<b>{ativo}</b>\n"
+
+            f"⏱ Tempo: "
+            f"<b>M{timeframe}</b>\n"
+
+            f"🎯 Direção: "
+            f"<b>{direcao.upper()}</b>\n"
+
+            f"💵 Valor: "
+            f"<b>R$ {valor:.2f}</b>\n\n"
+
+            f"🔄 Gale: "
+            f"{gerenciamento['gale_atual']}/"
+            f"{gerenciamento['gales_permitidos']}"
         )
 
 
@@ -1547,19 +1965,23 @@ def executar_operacao(
 
     except Exception:
 
-        operacao_em_andamento = False
-
-        stats[
-            "erros"
-        ] += 1
-
         logger.exception(
             "Erro executando operação."
         )
 
 
+        stats[
+            "erros"
+        ] += 1
+
+
+        with estado_lock:
+
+            operacao_em_andamento = False
+
+
 # ============================================================
-# SCANNER
+# ANALISAR UM ATIVO
 # ============================================================
 
 def analisar_ativo(
@@ -1569,6 +1991,10 @@ def analisar_ativo(
 ):
 
     try:
+
+        if not garantir_conexao():
+            return False
+
 
         with api_lock:
 
@@ -1580,21 +2006,53 @@ def analisar_ativo(
             )
 
 
+        candles = normalizar_candles(
+            candles
+        )
+
+
+        if len(candles) < 60:
+
+            logger.debug(
+                "Sem candles suficientes: %s M%s",
+                ativo,
+                timeframe
+            )
+
+            return False
+
+
+        stats[
+            "candles_recebidos"
+        ] += 1
+
+
+        logger.info(
+            "CANDLES OK | %s | M%s | %s candles",
+            ativo,
+            timeframe,
+            len(candles)
+        )
+
+
         sinal = analisar_candles(
             candles
         )
 
-        if not sinal:
 
-            return
+        if not sinal:
+            return True
 
 
         if not pode_enviar(
             ativo,
-            timeframe
+            timeframe,
+            sinal[
+                "direcao"
+            ]
         ):
 
-            return
+            return True
 
 
         with estado_lock:
@@ -1603,24 +2061,16 @@ def analisar_ativo(
                 "sinais"
             ] += 1
 
+
             stats[
-                sinal["direcao"]
+                sinal[
+                    "direcao"
+                ]
             ] += 1
 
 
-        texto = mensagem_sinal(
-            ativo,
-            timeframe,
-            sinal
-        )
-
-        enviar_telegram(
-            texto
-        )
-
-
         logger.info(
-            "%s | M%s | %s | score=%s",
+            "SINAL | %s | M%s | %s | score=%s",
             ativo,
             timeframe,
             sinal[
@@ -1629,6 +2079,15 @@ def analisar_ativo(
             sinal[
                 "score"
             ]
+        )
+
+
+        enviar_telegram(
+            mensagem_sinal(
+                ativo,
+                timeframe,
+                sinal
+            )
         )
 
 
@@ -1641,22 +2100,36 @@ def analisar_ativo(
         )
 
 
-    except Exception:
+        return True
 
-        stats[
-            "erros"
-        ] += 1
 
-        logger.exception(
-            "Erro analisando %s M%s",
+    except Exception as erro:
+
+        # Ativo fechado ou indisponível
+        # não derruba o robô.
+        logger.debug(
+            "INDISPONÍVEL | %s | M%s | %s",
             ativo,
-            timeframe
+            timeframe,
+            erro
         )
 
 
+        return False
+
+
+# ============================================================
+# SCANNER PRINCIPAL
+# ============================================================
+
 def loop_scanner():
 
-    time.sleep(5)
+    # Aguarda Gunicorn terminar
+    # a inicialização.
+    time.sleep(
+        5
+    )
+
 
     while True:
 
@@ -1664,37 +2137,78 @@ def loop_scanner():
 
             if not garantir_conexao():
 
-                time.sleep(30)
+                logger.warning(
+                    "IQ desconectada. "
+                    "Nova tentativa em 30 segundos."
+                )
+
+                time.sleep(
+                    30
+                )
 
                 continue
 
 
-            ativos = (
-                buscar_ativos_abertos()
+            candidatos = (
+                buscar_ativos_candidatos()
             )
+
+
+            stats[
+                "ciclos_scanner"
+            ] += 1
 
 
             logger.info(
-                "Ativos encontrados: %s",
-                len(ativos)
+                "INÍCIO SCANNER | ciclo=%s | candidatos=%s",
+                stats[
+                    "ciclos_scanner"
+                ],
+                len(
+                    candidatos
+                )
             )
 
 
-            for ativo in ativos:
+            ativos_com_dados = set()
+
+
+            for ativo in candidatos:
 
                 for timeframe, segundos in (
                     TIMEFRAMES.items()
                 ):
 
-                    analisar_ativo(
+                    recebeu = analisar_ativo(
                         ativo,
                         timeframe,
                         segundos
                     )
 
+
+                    if recebeu:
+
+                        ativos_com_dados.add(
+                            ativo
+                        )
+
+
+                    # Pequeno intervalo para
+                    # não bombardear a API.
                     time.sleep(
-                        0.5
+                        0.8
                     )
+
+
+            logger.info(
+                "FIM SCANNER | ativos com dados=%s | sinais=%s",
+                len(
+                    ativos_com_dados
+                ),
+                stats[
+                    "sinais"
+                ]
+            )
 
 
             time.sleep(
@@ -1705,41 +2219,87 @@ def loop_scanner():
         except Exception:
 
             logger.exception(
-                "Erro no scanner."
+                "Erro geral no scanner."
             )
 
-            time.sleep(20)
+
+            stats[
+                "erros"
+            ] += 1
+
+
+            time.sleep(
+                20
+            )
 
 
 # ============================================================
 # FLASK / RENDER
 # ============================================================
 
+def calcular_assertividade():
+
+    total = (
+        stats[
+            "wins"
+        ]
+        +
+        stats[
+            "losses"
+        ]
+    )
+
+
+    if total == 0:
+        return 0.0
+
+
+    return round(
+        (
+            stats[
+                "wins"
+            ]
+            / total
+        )
+        * 100.0,
+        2
+    )
+
+
 @app.route("/")
 def home():
 
-    total = (
-        stats["wins"]
-        +
-        stats["losses"]
-    )
+    conectado = False
 
-    taxa = (
-        round(
-            stats["wins"]
-            / total
-            * 100,
-            2
+
+    try:
+
+        conectado = (
+            api is not None
+            and api.check_connect()
         )
-        if total
-        else 0
-    )
+
+    except Exception:
+
+        conectado = False
+
 
     return jsonify({
-        "robo": "IQ Digital/Binario",
-        "status": "online",
 
-        "conta": "PRACTICE",
+        "robo":
+            "IQ Normal + OTC",
+
+        "versao":
+            "2.0",
+
+        "status":
+            "online",
+
+        "iq_conectada":
+            conectado,
+
+        "conta":
+            "PRACTICE",
 
         "execucao_automatica":
             EXECUTAR_ORDENS,
@@ -1758,16 +2318,16 @@ def home():
         "score_minimo":
             SCORE_MIN,
 
-        "entrada":
+        "entrada_atual":
             valor_entrada(),
+
+        "assertividade":
+            calcular_assertividade(),
 
         "gerenciamento":
             gerenciamento,
 
-        "assertividade":
-            taxa,
-
-        "stats":
+        "estatisticas":
             stats,
 
         "por_timeframe":
@@ -1795,6 +2355,7 @@ def health():
 
     conectado = False
 
+
     try:
 
         conectado = (
@@ -1806,15 +2367,37 @@ def health():
 
         pass
 
+
     return jsonify({
-        "status": "ok",
-        "versao": "IQ-DIGITAL-V1",
-        "iq_conectada": conectado,
-        "execucao": (
-            "PRACTICE"
-            if EXECUTAR_ORDENS
-            else "SINAIS"
-        )
+
+        "status":
+            "ok",
+
+        "versao":
+            "IQ-V2",
+
+        "iq_conectada":
+            conectado,
+
+        "conta":
+            "PRACTICE",
+
+        "execucao":
+            (
+                "PRACTICE AUTOMATICA"
+                if EXECUTAR_ORDENS
+                else "SOMENTE SINAIS"
+            ),
+
+        "candles_recebidos":
+            stats[
+                "candles_recebidos"
+            ],
+
+        "sinais":
+            stats[
+                "sinais"
+            ]
     })
 
 
@@ -1831,12 +2414,15 @@ def iniciar_threads():
 
     global _threads_iniciadas
 
+
     with _threads_lock:
 
         if _threads_iniciadas:
             return
 
+
         _threads_iniciadas = True
+
 
         threading.Thread(
             target=loop_scanner,
@@ -1853,4 +2439,4 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=PORT
-    )
+            )

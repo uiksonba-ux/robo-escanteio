@@ -4,150 +4,64 @@ import math
 import logging
 import threading
 import requests
-
 from datetime import datetime, timezone
+
 from flask import Flask, jsonify
 from iqoptionapi.stable_api import IQ_Option
-
 
 # ============================================================
 # VERSÃO
 # ============================================================
-
-VERSAO = "IQ-3-FRENTES-V6-INSTRUMENT-ID"
-
+VERSAO = "IQ-3-FRENTES-V8-RECUPERACAO-4-CICLOS"
 app = Flask(__name__)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
-
-log = logging.getLogger("iq-v6")
-
+log = logging.getLogger("iq-v8")
 
 # ============================================================
 # CONFIGURAÇÕES
 # ============================================================
-
 IQ_EMAIL = os.getenv("IQ_EMAIL", "").strip()
 IQ_PASSWORD = os.getenv("IQ_PASSWORD", "").strip()
-
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
 
 PORT = int(os.getenv("PORT", "10000"))
-
-EXECUTAR_ORDENS = (
-    os.getenv("EXECUTAR_ORDENS", "false").lower() == "true"
-)
-
-ENTRADA_BASE = float(
-    os.getenv("ENTRADA_BASE", "2")
-)
-
-SCORE_MIN = int(
-    os.getenv("SCORE_MIN", "65")
-)
-
-INTERVALO_ANALISE = int(
-    os.getenv("INTERVALO_ANALISE", "20")
-)
-
-INTERVALO_ENTRE_ATIVOS = float(
-    os.getenv("INTERVALO_ENTRE_ATIVOS", "0.7")
-)
-
+EXECUTAR_ORDENS = os.getenv("EXECUTAR_ORDENS", "false").lower() == "true"
+ENTRADA_BASE = float(os.getenv("ENTRADA_BASE", "2"))
+SCORE_MIN = int(os.getenv("SCORE_MIN", "65"))
+INTERVALO_ANALISE = int(os.getenv("INTERVALO_ANALISE", "20"))
+INTERVALO_ENTRE_ATIVOS = float(os.getenv("INTERVALO_ENTRE_ATIVOS", "0.7"))
 TEMPO_BLOQUEIO = 300
-
 CONTA = "PRACTICE"
 
-
-# ============================================================
-# ATIVOS
-# ============================================================
-
 ATIVOS = [
-    "EURUSD",
-    "GBPUSD",
-    "EURGBP",
-    "USDJPY",
-    "AUDUSD",
-    "USDCHF",
-    "USDCAD",
-    "EURJPY",
-    "GBPJPY",
-    "AUDCAD",
-    "AUDJPY",
-    "EURCAD",
-    "NZDUSD",
-
-    "EURUSD-OTC",
-    "GBPUSD-OTC",
-    "EURGBP-OTC",
-    "USDJPY-OTC",
-    "AUDUSD-OTC",
-    "USDCHF-OTC",
-    "USDCAD-OTC",
-    "EURJPY-OTC",
-    "GBPJPY-OTC",
-    "AUDCAD-OTC",
-    "AUDJPY-OTC",
-    "EURCAD-OTC",
-    "NZDUSD-OTC",
+    "EURUSD", "GBPUSD", "EURGBP", "USDJPY", "AUDUSD", "USDCHF",
+    "USDCAD", "EURJPY", "GBPJPY", "AUDCAD", "AUDJPY", "EURCAD", "NZDUSD",
+    "EURUSD-OTC", "GBPUSD-OTC", "EURGBP-OTC", "USDJPY-OTC",
+    "AUDUSD-OTC", "USDCHF-OTC", "USDCAD-OTC", "EURJPY-OTC",
+    "GBPJPY-OTC", "AUDCAD-OTC", "AUDJPY-OTC", "EURCAD-OTC", "NZDUSD-OTC",
 ]
 
-
-# ============================================================
-# FRENTES
-#
-# timeframe_analise:
-# candles utilizados na estratégia
-#
-# expiracao:
-# contrato DIGITAL efetivamente comprado
-#
-# A API Digital documenta 1 ou 5 minutos.
-# ============================================================
-
 FRENTES = {
-
-    "BANCA 1": {
-        "timeframe_analise": 1,
-        "segundos": 60,
-        "expiracao": 1,
-    },
-
-    "BANCA 2": {
-        "timeframe_analise": 5,
-        "segundos": 300,
-        "expiracao": 5,
-    },
-
-    "BANCA 3": {
-        "timeframe_analise": 15,
-        "segundos": 900,
-
-        # Analisa M15, mas executa DIGITAL M5.
-        "expiracao": 5,
-    },
+    "BANCA 1": {"timeframe_analise": 1, "segundos": 60, "expiracao": 1},
+    "BANCA 2": {"timeframe_analise": 5, "segundos": 300, "expiracao": 5},
+    "BANCA 3": {"timeframe_analise": 15, "segundos": 900, "expiracao": 5},
 }
-
 
 # ============================================================
 # ESTADO GLOBAL
 # ============================================================
-
 api = None
-
 api_lock = threading.RLock()
 connect_lock = threading.Lock()
 estado_lock = threading.RLock()
 
 ativos_em_uso = set()
-
 bloqueados = {}
-
 ativos_validos = set()
 
 stats = {
@@ -156,156 +70,95 @@ stats = {
     "win_direto": 0,
     "win_g1": 0,
     "win_g2": 0,
+    "win_g3": 0,
+    "win_g4": 0,
+    "win_g5": 0,
     "ordens_aceitas": 0,
     "ordens_recusadas": 0,
 }
 
-estado_frentes = {}
-
-for nome in FRENTES:
-
-    estado_frentes[nome] = {
-
+estado_frentes = {
+    nome: {
         "ocupada": False,
-
         "ativo": None,
-
         "direcao": None,
-
         "score": None,
-
         "order_id": None,
-
         "wins": 0,
-
         "losses": 0,
-
         "win_direto": 0,
-
         "win_g1": 0,
-
         "win_g2": 0,
-
+        "win_g3": 0,
+        "win_g4": 0,
+        "win_g5": 0,
         "ordens_aceitas": 0,
-
         "ordens_recusadas": 0,
-
         "ultimo_sinal": None,
-    }
 
+        # Gestão independente por banca
+        "ciclo_gestao": 1,
+        "entrada_atual": ENTRADA_BASE,
+        "prejuizo_acumulado": 0.0,
+        "em_recuperacao": False,
+        "sinais_recuperacao": 0,
+    }
+    for nome in FRENTES
+}
 
 # ============================================================
 # TELEGRAM
 # ============================================================
-
 def telegram(texto):
-
     if not TELEGRAM_TOKEN or not CHAT_ID:
         return
-
     try:
-
         requests.post(
-            f"https://api.telegram.org/bot"
-            f"{TELEGRAM_TOKEN}/sendMessage",
-            data={
-                "chat_id": CHAT_ID,
-                "text": texto
-            },
-            timeout=10
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            data={"chat_id": CHAT_ID, "text": texto},
+            timeout=10,
         )
-
     except Exception as e:
-
-        log.warning(
-            "TELEGRAM ERRO | %s",
-            e
-        )
-
+        log.warning("TELEGRAM ERRO | %s", e)
 
 # ============================================================
 # CONEXÃO
 # ============================================================
-
 def conectado():
-
     global api
-
     try:
-
-        if api is None:
-            return False
-
-        return bool(
-            api.check_connect()
-        )
-
+        return api is not None and bool(api.check_connect())
     except Exception:
-
         return False
 
-
 def conectar():
-
     global api
 
     if not IQ_EMAIL or not IQ_PASSWORD:
-
-        log.error(
-            "IQ_EMAIL/IQ_PASSWORD ausentes."
-        )
-
+        log.error("IQ_EMAIL/IQ_PASSWORD ausentes.")
         return False
 
-
     with connect_lock:
-
         if conectado():
             return True
 
         try:
-
-            log.info(
-                "CONECTANDO IQ OPTION..."
-            )
-
-            nova = IQ_Option(
-                IQ_EMAIL,
-                IQ_PASSWORD
-            )
-
+            log.info("CONECTANDO IQ OPTION...")
+            nova = IQ_Option(IQ_EMAIL, IQ_PASSWORD)
             ok, motivo = nova.connect()
-
-            log.info(
-                "CONNECT | ok=%s | motivo=%s",
-                ok,
-                motivo
-            )
+            log.info("CONNECT | ok=%s | motivo=%s", ok, motivo)
 
             if not ok:
                 return False
 
-            # ================================================
-            # CONTA DE TREINO TRAVADA
-            # ================================================
-
-            nova.change_balance(
-                "PRACTICE"
-            )
-
+            nova.change_balance("PRACTICE")
             time.sleep(1)
-
             saldo = nova.get_balance()
-
             api = nova
 
-            log.info(
-                "IQ CONECTADA | PRACTICE | saldo=%s",
-                saldo
-            )
-
+            log.info("IQ CONECTADA | PRACTICE | saldo=%s", saldo)
             telegram(
-                "🤖 ROBÔ V6 ONLINE\n"
+                "🤖 ROBÔ V8 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
                 f"💰 Saldo: ${saldo}\n\n"
                 "🏦 Banca 1: análise M1 / Digital M1\n"
@@ -313,1431 +166,740 @@ def conectar():
                 "🏦 Banca 3: análise M15 / Digital M5\n\n"
                 f"🔥 Score mínimo: {SCORE_MIN}"
             )
-
             return True
 
         except Exception as e:
-
-            log.exception(
-                "ERRO CONEXÃO | %s",
-                e
-            )
-
+            log.exception("ERRO CONEXÃO | %s", e)
             return False
 
-
 def garantir_conexao():
-
-    if conectado():
-        return True
-
-    return conectar()
-
+    return conectado() or conectar()
 
 def garantir_practice():
-
     if not garantir_conexao():
         return False
-
     try:
-
-        api.change_balance(
-            "PRACTICE"
-        )
-
+        api.change_balance("PRACTICE")
         return True
-
     except Exception:
-
         return False
-
 
 # ============================================================
 # BLOQUEIO
 # ============================================================
+def chave_bloqueio(ativo, expiracao):
+    return ativo, expiracao
 
-def chave_bloqueio(
-    ativo,
-    expiracao
-):
-
-    return (
-        ativo,
-        expiracao
-    )
-
-
-def esta_bloqueado(
-    ativo,
-    expiracao
-):
-
-    chave = chave_bloqueio(
-        ativo,
-        expiracao
-    )
-
-    limite = bloqueados.get(
-        chave
-    )
+def esta_bloqueado(ativo, expiracao):
+    chave = chave_bloqueio(ativo, expiracao)
+    limite = bloqueados.get(chave)
 
     if limite is None:
         return False
 
     if time.time() >= limite:
-
-        bloqueados.pop(
-            chave,
-            None
-        )
-
+        bloqueados.pop(chave, None)
         return False
 
     return True
 
-
-def bloquear(
-    ativo,
-    expiracao,
-    motivo
-):
-
-    bloqueados[
-        chave_bloqueio(
-            ativo,
-            expiracao
-        )
-    ] = (
-        time.time()
-        + TEMPO_BLOQUEIO
-    )
-
+def bloquear(ativo, expiracao, motivo):
+    bloqueados[chave_bloqueio(ativo, expiracao)] = time.time() + TEMPO_BLOQUEIO
     log.warning(
         "BLOQUEADO | %s | DIGITAL M%s | %ss | %s",
-        ativo,
-        expiracao,
-        TEMPO_BLOQUEIO,
-        motivo
+        ativo, expiracao, TEMPO_BLOQUEIO, motivo
     )
-
 
 # ============================================================
 # CANDLES
 # ============================================================
-
-def obter_candles(
-    ativo,
-    segundos,
-    quantidade=100
-):
-
+def obter_candles(ativo, segundos, quantidade=100):
     if not garantir_conexao():
         return []
 
     try:
-
-        agora = int(
-            time.time()
-        )
-
+        agora = int(time.time())
         with api_lock:
-
-            dados = api.get_candles(
-                ativo,
-                segundos,
-                quantidade,
-                agora
-            )
+            dados = api.get_candles(ativo, segundos, quantidade, agora)
 
         if not dados:
             return []
 
         candles = []
-
-        agora = int(
-            time.time()
-        )
+        agora = int(time.time())
 
         for c in dados:
-
             try:
-
-                inicio = int(
-                    c.get(
-                        "from",
-                        0
-                    )
-                )
-
-                # ignora candle aberto
+                inicio = int(c.get("from", 0))
                 if inicio + segundos > agora:
                     continue
 
                 candles.append({
-
                     "from": inicio,
-
-                    "open": float(
-                        c["open"]
-                    ),
-
-                    "close": float(
-                        c["close"]
-                    ),
-
-                    "max": float(
-                        c["max"]
-                    ),
-
-                    "min": float(
-                        c["min"]
-                    )
+                    "open": float(c["open"]),
+                    "close": float(c["close"]),
+                    "max": float(c["max"]),
+                    "min": float(c["min"]),
                 })
-
             except Exception:
                 pass
 
         if len(candles) >= 60:
-
             with estado_lock:
-
-                ativos_validos.add(
-                    ativo
-                )
+                ativos_validos.add(ativo)
 
         return candles
 
     except Exception as e:
-
-        log.debug(
-            "CANDLES ERRO | %s | %s",
-            ativo,
-            e
-        )
-
+        log.debug("CANDLES ERRO | %s | %s", ativo, e)
         return []
-
 
 # ============================================================
 # INDICADORES
 # ============================================================
-
 def media(lista):
-
-    if not lista:
-        return 0
-
-    return (
-        sum(lista)
-        / len(lista)
-    )
-
+    return 0 if not lista else sum(lista) / len(lista)
 
 def desvio(lista):
-
     if not lista:
         return 0
+    m = media(lista)
+    return math.sqrt(sum((x - m) ** 2 for x in lista) / len(lista))
 
-    m = media(
-        lista
-    )
-
-    return math.sqrt(
-        sum(
-            (x - m) ** 2
-            for x in lista
-        )
-        / len(lista)
-    )
-
-
-def ema(
-    valores,
-    periodo
-):
-
+def ema(valores, periodo):
     if len(valores) < periodo:
         return None
 
-    resultado = media(
-        valores[:periodo]
-    )
+    resultado = media(valores[:periodo])
+    k = 2 / (periodo + 1)
 
-    k = (
-        2
-        / (periodo + 1)
-    )
-
-    for preco in valores[
-        periodo:
-    ]:
-
-        resultado = (
-            preco * k
-            + resultado * (1 - k)
-        )
+    for preco in valores[periodo:]:
+        resultado = preco * k + resultado * (1 - k)
 
     return resultado
 
-
-def rsi(
-    valores,
-    periodo=14
-):
-
+def rsi(valores, periodo=14):
     if len(valores) < periodo + 1:
         return None
 
-    ganhos = []
-    perdas = []
+    ganhos, perdas = [], []
+    inicio = len(valores) - periodo
 
-    inicio = (
-        len(valores)
-        - periodo
-    )
-
-    for i in range(
-        inicio,
-        len(valores)
-    ):
-
-        d = (
-            valores[i]
-            - valores[i - 1]
-        )
-
+    for i in range(inicio, len(valores)):
+        d = valores[i] - valores[i - 1]
         if d >= 0:
-
             ganhos.append(d)
             perdas.append(0)
-
         else:
-
             ganhos.append(0)
             perdas.append(abs(d))
 
-    g = media(
-        ganhos
-    )
-
-    p = media(
-        perdas
-    )
+    g = media(ganhos)
+    p = media(perdas)
 
     if p == 0:
         return 100
 
     rs = g / p
+    return 100 - 100 / (1 + rs)
 
-    return (
-        100
-        - 100 / (1 + rs)
-    )
+def macd(valores):
+    e12 = ema(valores, 12)
+    e26 = ema(valores, 26)
 
-
-def macd(
-    valores
-):
-
-    e12 = ema(
-        valores,
-        12
-    )
-
-    e26 = ema(
-        valores,
-        26
-    )
-
-    if (
-        e12 is None
-        or e26 is None
-    ):
-
+    if e12 is None or e26 is None:
         return None
 
-    return (
-        e12 - e26
-    )
-
+    return e12 - e26
 
 # ============================================================
 # ANÁLISE
 # ============================================================
-
-def analisar(
-    candles
-):
-
+def analisar(candles):
     if len(candles) < 60:
         return None
 
-    closes = [
-        x["close"]
-        for x in candles
-    ]
-
+    closes = [x["close"] for x in candles]
     ultimo = candles[-1]
-
-    preco = ultimo[
-        "close"
-    ]
+    preco = ultimo["close"]
 
     call = 0
     put = 0
-
     motivos_call = []
     motivos_put = []
 
+    e20 = ema(closes, 20)
+    e50 = ema(closes, 50)
 
-    # ========================================================
-    # EMA 20/50 - 20
-    # ========================================================
-
-    e20 = ema(
-        closes,
-        20
-    )
-
-    e50 = ema(
-        closes,
-        50
-    )
-
-    if (
-        e20 is not None
-        and e50 is not None
-    ):
-
-        if (
-            e20 > e50
-            and preco > e20
-        ):
-
+    if e20 is not None and e50 is not None:
+        if e20 > e50 and preco > e20:
             call += 20
-            motivos_call.append(
-                "EMA"
-            )
-
-        elif (
-            e20 < e50
-            and preco < e20
-        ):
-
+            motivos_call.append("EMA")
+        elif e20 < e50 and preco < e20:
             put += 20
-            motivos_put.append(
-                "EMA"
-            )
+            motivos_put.append("EMA")
 
-
-    # ========================================================
-    # RSI - 15
-    # ========================================================
-
-    vrsi = rsi(
-        closes
-    )
-
+    vrsi = rsi(closes)
     if vrsi is not None:
-
         if 50 <= vrsi <= 70:
-
             call += 15
-            motivos_call.append(
-                "RSI"
-            )
-
+            motivos_call.append("RSI")
         elif 30 <= vrsi < 50:
-
             put += 15
-            motivos_put.append(
-                "RSI"
-            )
-
-
-    # ========================================================
-    # BOLLINGER - 10
-    # ========================================================
+            motivos_put.append("RSI")
 
     ult20 = closes[-20:]
+    mm = media(ult20)
+    dp = desvio(ult20)
+    superior = mm + 2 * dp
+    inferior = mm - 2 * dp
 
-    mm = media(
-        ult20
-    )
-
-    dp = desvio(
-        ult20
-    )
-
-    superior = (
-        mm + 2 * dp
-    )
-
-    inferior = (
-        mm - 2 * dp
-    )
-
-    if (
-        preco > mm
-        and preco < superior
-    ):
-
+    if preco > mm and preco < superior:
         call += 10
-        motivos_call.append(
-            "BOLLINGER"
-        )
-
-    elif (
-        preco < mm
-        and preco > inferior
-    ):
-
+        motivos_call.append("BOLLINGER")
+    elif preco < mm and preco > inferior:
         put += 10
-        motivos_put.append(
-            "BOLLINGER"
-        )
+        motivos_put.append("BOLLINGER")
 
-
-    # ========================================================
-    # PRICE ACTION - 15
-    # ========================================================
-
-    corpo = abs(
-        ultimo["close"]
-        - ultimo["open"]
-    )
-
-    amplitude = (
-        ultimo["max"]
-        - ultimo["min"]
-    )
+    corpo = abs(ultimo["close"] - ultimo["open"])
+    amplitude = ultimo["max"] - ultimo["min"]
 
     if amplitude > 0:
-
-        proporcao = (
-            corpo
-            / amplitude
-        )
+        proporcao = corpo / amplitude
 
         if proporcao >= 0.55:
-
-            if (
-                ultimo["close"]
-                > ultimo["open"]
-            ):
-
+            if ultimo["close"] > ultimo["open"]:
                 call += 15
-
-                motivos_call.append(
-                    "PRICE ACTION"
-                )
-
-            elif (
-                ultimo["close"]
-                < ultimo["open"]
-            ):
-
+                motivos_call.append("PRICE ACTION")
+            elif ultimo["close"] < ultimo["open"]:
                 put += 15
+                motivos_put.append("PRICE ACTION")
 
-                motivos_put.append(
-                    "PRICE ACTION"
-                )
-
-
-    # ========================================================
-    # SUPORTE/RESISTÊNCIA - 10
-    # ========================================================
-
-    janela = candles[
-        -20:-1
-    ]
-
-    resistencia = max(
-        x["max"]
-        for x in janela
-    )
-
-    suporte = min(
-        x["min"]
-        for x in janela
-    )
-
-    distancia = (
-        resistencia
-        - suporte
-    )
+    janela = candles[-20:-1]
+    resistencia = max(x["max"] for x in janela)
+    suporte = min(x["min"] for x in janela)
+    distancia = resistencia - suporte
 
     if distancia > 0:
-
-        posicao = (
-            (preco - suporte)
-            / distancia
-        )
+        posicao = (preco - suporte) / distancia
 
         if posicao <= 0.30:
-
             call += 10
-
-            motivos_call.append(
-                "SUPORTE"
-            )
-
+            motivos_call.append("SUPORTE")
         elif posicao >= 0.70:
-
             put += 10
+            motivos_put.append("RESISTENCIA")
 
-            motivos_put.append(
-                "RESISTENCIA"
-            )
-
-
-    # ========================================================
-    # BREAKOUT - 15
-    # ========================================================
-
-    janela_break = candles[
-        -11:-1
-    ]
-
-    max_anterior = max(
-        x["max"]
-        for x in janela_break
-    )
-
-    min_anterior = min(
-        x["min"]
-        for x in janela_break
-    )
+    janela_break = candles[-11:-1]
+    max_anterior = max(x["max"] for x in janela_break)
+    min_anterior = min(x["min"] for x in janela_break)
 
     if preco > max_anterior:
-
         call += 15
-
-        motivos_call.append(
-            "BREAKOUT"
-        )
-
+        motivos_call.append("BREAKOUT")
     elif preco < min_anterior:
-
         put += 15
+        motivos_put.append("BREAKOUT")
 
-        motivos_put.append(
-            "BREAKOUT"
-        )
-
-
-    # ========================================================
-    # MACD - 10
-    # ========================================================
-
-    vm = macd(
-        closes
-    )
+    vm = macd(closes)
 
     if vm is not None:
-
         if vm > 0:
-
             call += 10
-
-            motivos_call.append(
-                "MACD"
-            )
-
+            motivos_call.append("MACD")
         elif vm < 0:
-
             put += 10
+            motivos_put.append("MACD")
 
-            motivos_put.append(
-                "MACD"
-            )
-
-
-    # ========================================================
-    # MOMENTUM - 5
-    # ========================================================
-
-    momentum = (
-        closes[-1]
-        - closes[-6]
-    )
+    momentum = closes[-1] - closes[-6]
 
     if momentum > 0:
-
         call += 5
-
-        motivos_call.append(
-            "MOMENTUM"
-        )
-
+        motivos_call.append("MOMENTUM")
     elif momentum < 0:
-
         put += 5
-
-        motivos_put.append(
-            "MOMENTUM"
-        )
-
-
-    # ========================================================
-    # RESULTADO
-    # ========================================================
+        motivos_put.append("MOMENTUM")
 
     if call >= put:
-
-        direcao = "call"
-
-        score = call
-
-        oposto = put
-
-        motivos = motivos_call
-
+        direcao, score, oposto, motivos = "call", call, put, motivos_call
     else:
+        direcao, score, oposto, motivos = "put", put, call, motivos_put
 
-        direcao = "put"
-
-        score = put
-
-        oposto = call
-
-        motivos = motivos_put
-
-
-    if score < SCORE_MIN:
+    if score < SCORE_MIN or score - oposto < 15:
         return None
-
-    if (
-        score - oposto
-        < 15
-    ):
-
-        return None
-
 
     return {
-
         "direcao": direcao,
-
         "score": score,
-
         "oposto": oposto,
-
         "motivos": motivos,
     }
 
-
 # ============================================================
-# ESCOLHER INSTRUMENT_ID REAL
+# V7 - INSTRUMENT_ID VIA WEBSOCKET
 # ============================================================
-
-def obter_instrumento_digital(
-    ativo,
-    direcao,
-    expiracao
-):
-
-    if expiracao not in (
-        1,
-        5
-    ):
-
-        return (
-            None,
-            None,
-            "expiracao_invalida"
-        )
-
+def obter_instrumento_digital(ativo, direcao, expiracao):
+    if expiracao not in (1, 5):
+        return None, None, "expiracao_invalida"
 
     if not garantir_practice():
+        return None, None, "sem_conexao"
 
-        return (
-            None,
-            None,
-            "sem_conexao"
-        )
-
-
-    log.info(
-        "STRIKE SUBSCRIBE | %s | M%s",
-        ativo,
-        expiracao
-    )
-
+    log.info("V7 SUBSCRIBE | %s | DIGITAL M%s", ativo, expiracao)
 
     try:
+        # Limpa buffers antigos quando a estrutura já existe.
+        try:
+            api.api.instrument_quites_generated_data[ativo][expiracao * 60] = {}
+        except Exception:
+            pass
+
+        try:
+            api.api.instrument_quotes_generated_raw_data[ativo][expiracao * 60] = {}
+        except Exception:
+            pass
 
         with api_lock:
+            api.subscribe_strike_list(ativo, expiracao)
 
-            api.subscribe_strike_list(
-                ativo,
-                expiracao
+        # Aguarda o websocket receber a primeira cotação.
+        inicio = time.time()
+        recebeu = False
+
+        while time.time() - inicio < 12:
+            try:
+                dados = api.api.instrument_quites_generated_data[
+                    ativo
+                ][expiracao * 60]
+
+                if dados:
+                    recebeu = True
+                    break
+            except Exception:
+                pass
+
+            time.sleep(0.25)
+
+        if not recebeu:
+            log.warning(
+                "V7 | WEBSOCKET SEM COTAÇÃO | %s | M%s",
+                ativo, expiracao
             )
-
-
-        # Dá tempo para websocket receber
-        # a primeira atualização.
-        time.sleep(1.5)
-
-
-        # IMPORTANTE:
-        # get_realtime_strike_list() da biblioteca
-        # pode ficar esperando dados.
-        #
-        # Portanto fazemos a leitura em uma thread
-        # com timeout para não congelar a banca.
-
-        resultado = {
-            "data": None,
-            "erro": None
-        }
-
-
-        def ler_strikes():
 
             try:
+                api.unsubscribe_strike_list(ativo, expiracao)
+            except Exception:
+                pass
 
-                resultado[
-                    "data"
-                ] = api.get_realtime_strike_list(
-                    ativo,
-                    expiracao
+            return None, None, "websocket_sem_cotacao"
+
+        log.info(
+            "V7 | COTAÇÃO DIGITAL RECEBIDA | %s | M%s",
+            ativo, expiracao
+        )
+
+        # get_realtime_strike_list pode esperar indefinidamente;
+        # portanto a leitura continua protegida por timeout.
+        resultado = {"data": None, "erro": None}
+
+        def buscar():
+            try:
+                resultado["data"] = api.get_realtime_strike_list(
+                    ativo, expiracao
                 )
-
             except Exception as e:
+                resultado["erro"] = str(e)
 
-                resultado[
-                    "erro"
-                ] = str(e)
+        thread = threading.Thread(target=buscar, daemon=True)
+        thread.start()
+        thread.join(timeout=10)
 
-
-        t = threading.Thread(
-            target=ler_strikes,
-            daemon=True
-        )
-
-        t.start()
-
-        t.join(
-            timeout=8
-        )
-
-
-        if t.is_alive():
-
+        if thread.is_alive():
             log.warning(
-                "STRIKE TIMEOUT | %s | M%s",
-                ativo,
-                expiracao
+                "V7 | STRIKE LIST TIMEOUT | %s | M%s",
+                ativo, expiracao
             )
 
-            return (
-                None,
-                None,
-                "strike_timeout"
-            )
+            try:
+                api.unsubscribe_strike_list(ativo, expiracao)
+            except Exception:
+                pass
 
+            return None, None, "strike_list_timeout"
 
         if resultado["erro"]:
+            return None, None, resultado["erro"]
 
-            return (
-                None,
-                None,
-                resultado["erro"]
-            )
+        strikes = resultado["data"]
 
+        if not isinstance(strikes, dict) or not strikes:
+            return None, None, "strike_list_vazia"
 
-        strikes = resultado[
-            "data"
-        ]
+        log.info(
+            "V7 | STRIKES RECEBIDOS | %s | quantidade=%s",
+            ativo, len(strikes)
+        )
 
+        preco_atual = None
 
-        if not isinstance(
-            strikes,
-            dict
-        ) or not strikes:
-
-            return (
-                None,
-                None,
-                "sem_strikes"
-            )
-
+        try:
+            candles = obter_candles(ativo, 60, 5)
+            if candles:
+                preco_atual = candles[-1]["close"]
+        except Exception:
+            pass
 
         candidatos = []
 
-
         for preco, lados in strikes.items():
-
             try:
-
-                lado = lados.get(
-                    direcao
-                )
-
+                lado = lados.get(direcao)
                 if not lado:
                     continue
 
-
-                instrument_id = lado.get(
-                    "id"
-                )
-
-                profit = lado.get(
-                    "profit"
-                )
-
+                instrument_id = lado.get("id")
+                profit = lado.get("profit")
 
                 if not instrument_id:
                     continue
 
-
                 try:
-
-                    preco_float = float(
-                        preco
-                    )
-
+                    preco_float = float(preco)
                 except Exception:
-
                     preco_float = 0
 
-
                 candidatos.append({
-
-                    "preco": preco,
-
-                    "preco_float": preco_float,
-
+                    "preco": preco_float,
                     "id": instrument_id,
-
-                    "profit": profit
+                    "profit": profit,
                 })
 
             except Exception:
-
                 continue
 
-
         if not candidatos:
-
-            return (
-                None,
-                None,
-                "sem_instrumento_direcao"
-            )
-
-
-        # ====================================================
-        # ESCOLHER STRIKE MAIS PRÓXIMO DO PREÇO ATUAL
-        # ====================================================
-
-        preco_atual = None
-
-
-        try:
-
-            candles = obter_candles(
-                ativo,
-                60,
-                3
-            )
-
-            if candles:
-
-                preco_atual = candles[
-                    -1
-                ][
-                    "close"
-                ]
-
-        except Exception:
-
-            pass
-
+            return None, None, "sem_instrumento"
 
         if preco_atual is not None:
-
             candidatos.sort(
-                key=lambda x: abs(
-                    x["preco_float"]
-                    - preco_atual
-                )
+                key=lambda x: abs(x["preco"] - preco_atual)
             )
-
+            escolhido = candidatos[0]
         else:
+            candidatos.sort(key=lambda x: x["preco"])
+            escolhido = candidatos[len(candidatos) // 2]
 
-            # Sem preço atual, escolhe o strike
-            # central em vez de um extremo.
-            candidatos.sort(
-                key=lambda x: x[
-                    "preco_float"
-                ]
-            )
-
-            meio = (
-                len(candidatos)
-                // 2
-            )
-
-            candidato = candidatos[
-                meio
-            ]
-
-            log.info(
-                "INSTRUMENTO REAL | %s | M%s | %s | strike=%s | profit=%s | id=%s",
-                ativo,
-                expiracao,
-                direcao.upper(),
-                candidato["preco"],
-                candidato["profit"],
-                candidato["id"]
-            )
-
-            return (
-                candidato["id"],
-                candidato["profit"],
-                None
-            )
-
-
-        candidato = candidatos[0]
-
+        instrument_id = escolhido["id"]
+        profit = escolhido["profit"]
 
         log.info(
-            "INSTRUMENTO REAL | %s | M%s | %s | strike=%s | profit=%s | id=%s",
+            "V7 | INSTRUMENTO REAL ENCONTRADO | "
+            "%s | %s | M%s | strike=%s | profit=%s | id=%s",
             ativo,
-            expiracao,
             direcao.upper(),
-            candidato["preco"],
-            candidato["profit"],
-            candidato["id"]
+            expiracao,
+            escolhido["preco"],
+            profit,
+            instrument_id,
         )
 
+        try:
+            api.unsubscribe_strike_list(ativo, expiracao)
+        except Exception:
+            pass
 
-        return (
-            candidato["id"],
-            candidato["profit"],
-            None
-        )
-
+        return instrument_id, profit, None
 
     except Exception as e:
-
-        log.warning(
-            "ERRO STRIKE | %s | M%s | %s",
-            ativo,
-            expiracao,
-            e
+        log.exception(
+            "V7 | ERRO INSTRUMENTO | %s | %s",
+            ativo, e
         )
 
-        return (
-            None,
-            None,
-            str(e)
-        )
+        try:
+            api.unsubscribe_strike_list(ativo, expiracao)
+        except Exception:
+            pass
 
+        return None, None, str(e)
 
 # ============================================================
-# ORDEM DIGITAL V6
+# ORDEM DIGITAL V7
 # ============================================================
-
-def executar_ordem(
-    banca,
-    ativo,
-    valor,
-    direcao,
-    expiracao
-):
-
+def executar_ordem(banca, ativo, valor, direcao, expiracao):
     if not EXECUTAR_ORDENS:
+        return False, "EXECUTAR_ORDENS=false"
 
-        return (
-            False,
-            "EXECUTAR_ORDENS=false"
-        )
+    if esta_bloqueado(ativo, expiracao):
+        return False, "ativo_bloqueado"
 
-
-    if esta_bloqueado(
-        ativo,
-        expiracao
-    ):
-
-        return (
-            False,
-            "ativo_bloqueado"
-        )
-
-
-    instrument_id, profit, erro = (
-        obter_instrumento_digital(
-            ativo,
-            direcao,
-            expiracao
-        )
+    instrument_id, profit, erro = obter_instrumento_digital(
+        ativo, direcao, expiracao
     )
 
-
     if not instrument_id:
-
         log.warning(
             "SEM INSTRUMENTO | %s | M%s | %s",
-            ativo,
-            expiracao,
-            erro
+            ativo, expiracao, erro
         )
-
-        bloquear(
-            ativo,
-            expiracao,
-            erro
-        )
-
-        return (
-            False,
-            erro
-        )
-
+        bloquear(ativo, expiracao, erro)
+        return False, erro
 
     if not garantir_practice():
-
-        return (
-            False,
-            "sem_conexao"
-        )
-
+        return False, "sem_conexao"
 
     log.info(
         "COMPRANDO DIGITAL | %s | %s | M%s | %s | $%.2f",
-        banca,
-        ativo,
-        expiracao,
-        direcao.upper(),
-        valor
+        banca, ativo, expiracao, direcao.upper(), valor
     )
 
-
     try:
-
         with api_lock:
-
             resposta = api.buy_digital(
                 float(valor),
                 instrument_id
             )
 
-
         log.info(
             "RESPOSTA BUY_DIGITAL | %s | %s",
-            ativo,
-            resposta
+            ativo, resposta
         )
-
 
         ok = False
         order_id = None
 
-
-        if isinstance(
-            resposta,
-            (tuple, list)
-        ):
-
+        if isinstance(resposta, (tuple, list)):
             if len(resposta) >= 1:
-
-                ok = bool(
-                    resposta[0]
-                )
-
+                ok = bool(resposta[0])
             if len(resposta) >= 2:
-
                 order_id = resposta[1]
 
-
-        if (
-            ok
-            and order_id
-        ):
-
+        if ok and order_id:
             with estado_lock:
-
-                stats[
-                    "ordens_aceitas"
-                ] += 1
-
-                estado_frentes[
-                    banca
-                ][
-                    "ordens_aceitas"
-                ] += 1
-
+                stats["ordens_aceitas"] += 1
+                estado_frentes[banca]["ordens_aceitas"] += 1
 
             log.info(
                 "ORDEM ACEITA !!! | %s | %s | M%s | id=%s",
-                banca,
-                ativo,
-                expiracao,
-                order_id
+                banca, ativo, expiracao, order_id
             )
-
-
-            return (
-                True,
-                order_id
-            )
-
+            return True, order_id
 
         with estado_lock:
+            stats["ordens_recusadas"] += 1
+            estado_frentes[banca]["ordens_recusadas"] += 1
 
-            stats[
-                "ordens_recusadas"
-            ] += 1
-
-            estado_frentes[
-                banca
-            ][
-                "ordens_recusadas"
-            ] += 1
-
-
-        bloquear(
-            ativo,
-            expiracao,
-            str(resposta)
-        )
-
-
-        return (
-            False,
-            str(resposta)
-        )
-
+        bloquear(ativo, expiracao, str(resposta))
+        return False, str(resposta)
 
     except Exception as e:
-
-        log.warning(
-            "BUY_DIGITAL ERRO | %s | %s",
-            ativo,
-            e
-        )
-
-
-        bloquear(
-            ativo,
-            expiracao,
-            str(e)
-        )
-
-
-        return (
-            False,
-            str(e)
-        )
-
+        log.warning("BUY_DIGITAL ERRO | %s | %s", ativo, e)
+        bloquear(ativo, expiracao, str(e))
+        return False, str(e)
 
 # ============================================================
 # RESULTADO
 # ============================================================
-
-def aguardar_resultado(
-    order_id
-):
-
+def aguardar_resultado(order_id):
     inicio = time.time()
 
-    while (
-        time.time() - inicio
-        < 900
-    ):
-
+    while time.time() - inicio < 900:
         try:
-
             if not garantir_conexao():
-
                 time.sleep(2)
-
                 continue
 
-
             with api_lock:
-
-                resposta = (
-                    api.check_win_digital_v2(
-                        order_id
-                    )
-                )
-
+                resposta = api.check_win_digital_v2(order_id)
 
             if (
-                isinstance(
-                    resposta,
-                    (tuple, list)
-                )
+                isinstance(resposta, (tuple, list))
                 and len(resposta) >= 2
             ):
-
-                fechado = resposta[0]
-
-                valor = resposta[1]
-
+                fechado, valor = resposta[0], resposta[1]
 
                 if fechado:
-
                     try:
-
-                        lucro = float(
-                            valor
-                        )
-
+                        lucro = float(valor)
                     except Exception:
-
                         lucro = 0
 
-
                     if lucro > 0:
-
-                        return (
-                            "win",
-                            lucro
-                        )
-
-                    elif lucro < 0:
-
-                        return (
-                            "loss",
-                            lucro
-                        )
-
-                    else:
-
-                        return (
-                            "draw",
-                            0
-                        )
-
+                        return "win", lucro
+                    if lucro < 0:
+                        return "loss", lucro
+                    return "draw", 0
 
         except Exception as e:
-
-            log.debug(
-                "CHECK RESULTADO | %s",
-                e
-            )
-
+            log.debug("CHECK RESULTADO | %s", e)
 
         time.sleep(1)
 
+    return "timeout", 0
 
-    return (
-        "timeout",
-        0
+# ============================================================
+# ESTATÍSTICAS E GESTÃO V8
+# ============================================================
+def taxa(wins, losses):
+    total = wins + losses
+    return 0 if total == 0 else round(wins / total * 100, 2)
+
+
+def registrar_win(banca, nivel):
+    with estado_lock:
+        stats["wins"] += 1
+        estado_frentes[banca]["wins"] += 1
+
+        chave = "win_direto" if nivel == 0 else f"win_g{nivel}"
+
+        if chave in stats:
+            stats[chave] += 1
+
+        if chave in estado_frentes[banca]:
+            estado_frentes[banca][chave] += 1
+
+
+def registrar_loss(banca):
+    with estado_lock:
+        stats["losses"] += 1
+        estado_frentes[banca]["losses"] += 1
+
+
+def valores_do_ciclo(entrada, quantidade_gales):
+    """
+    Gale 2x:
+    entrada, G1, G2... até a quantidade permitida no ciclo.
+    Ex.: R$2 + 2 Gales => 2, 4, 8.
+    """
+    return [
+        round(float(entrada) * (2 ** nivel), 2)
+        for nivel in range(quantidade_gales + 1)
+    ]
+
+
+def resetar_gestao(banca, motivo):
+    with estado_lock:
+        dados = estado_frentes[banca]
+        dados["ciclo_gestao"] = 1
+        dados["entrada_atual"] = round(ENTRADA_BASE, 2)
+        dados["prejuizo_acumulado"] = 0.0
+        dados["em_recuperacao"] = False
+        dados["sinais_recuperacao"] = 0
+
+    log.info(
+        "GESTÃO RESETADA | %s | entrada=%.2f | motivo=%s",
+        banca, ENTRADA_BASE, motivo
     )
 
 
-# ============================================================
-# TAXA
-# ============================================================
-
-def taxa(
-    wins,
-    losses
-):
-
-    total = (
-        wins
-        + losses
-    )
-
-    if total == 0:
-        return 0
-
-    return round(
-        wins / total * 100,
-        2
-    )
-
-
-# ============================================================
-# RESULTADOS
-# ============================================================
-
-def registrar_win(
-    banca,
-    nivel
-):
+def aplicar_loss_ciclo(banca, perda_ciclo):
+    """
+    LOSS completo:
+    - soma a perda ao prejuízo acumulado;
+    - entra/continua em recuperação;
+    - a próxima entrada = entrada atual + 10% do LOSS deste ciclo;
+    - avança no máximo até o ciclo 4;
+    - ciclo 1/2/3/4 possuem 2/3/4/5 Gales.
+    """
+    perda_ciclo = round(abs(float(perda_ciclo)), 2)
 
     with estado_lock:
+        dados = estado_frentes[banca]
 
-        stats[
-            "wins"
-        ] += 1
+        dados["prejuizo_acumulado"] = round(
+            dados["prejuizo_acumulado"] + perda_ciclo,
+            2
+        )
+        dados["em_recuperacao"] = True
 
-        estado_frentes[
-            banca
-        ][
-            "wins"
-        ] += 1
+        ciclo_atual = int(dados["ciclo_gestao"])
+        dados["ciclo_gestao"] = min(
+            ciclo_atual + 1,
+            MAX_CICLOS_GESTAO
+        )
 
+        acrescimo = round(
+            perda_ciclo * RECUPERACAO_PERCENTUAL,
+            2
+        )
 
-        if nivel == 0:
+        dados["entrada_atual"] = round(
+            float(dados["entrada_atual"]) + acrescimo,
+            2
+        )
 
-            stats[
-                "win_direto"
-            ] += 1
-
-            estado_frentes[
-                banca
-            ][
-                "win_direto"
-            ] += 1
-
-
-        elif nivel == 1:
-
-            stats[
-                "win_g1"
-            ] += 1
-
-            estado_frentes[
-                banca
-            ][
-                "win_g1"
-            ] += 1
+        return {
+            "ciclo": dados["ciclo_gestao"],
+            "entrada": dados["entrada_atual"],
+            "prejuizo": dados["prejuizo_acumulado"],
+            "sinais": dados["sinais_recuperacao"],
+            "acrescimo": acrescimo,
+        }
 
 
-        elif nivel == 2:
-
-            stats[
-                "win_g2"
-            ] += 1
-
-            estado_frentes[
-                banca
-            ][
-                "win_g2"
-            ] += 1
-
-
-def registrar_loss(
-    banca
-):
+def aplicar_win_recuperacao(banca, lucro):
+    """
+    WIN durante recuperação:
+    - abate somente o lucro positivo do prejuízo acumulado;
+    - se zerar, volta ao Ciclo 1 / entrada base;
+    - se ainda houver prejuízo, permanece na recuperação.
+    """
+    lucro = max(0.0, round(float(lucro), 2))
 
     with estado_lock:
+        dados = estado_frentes[banca]
 
-        stats[
-            "losses"
-        ] += 1
+        if not dados["em_recuperacao"]:
+            return {
+                "recuperado": True,
+                "restante": 0.0,
+                "sinais": 0,
+            }
 
-        estado_frentes[
-            banca
-        ][
-            "losses"
-        ] += 1
+        dados["prejuizo_acumulado"] = round(
+            max(0.0, dados["prejuizo_acumulado"] - lucro),
+            2
+        )
+
+        restante = dados["prejuizo_acumulado"]
+        sinais = dados["sinais_recuperacao"]
+
+    if restante <= 0:
+        resetar_gestao(banca, "prejuizo_recuperado")
+        return {
+            "recuperado": True,
+            "restante": 0.0,
+            "sinais": sinais,
+        }
+
+    return {
+        "recuperado": False,
+        "restante": restante,
+        "sinais": sinais,
+    }
+
+
+def iniciar_sinal_gestao(banca):
+    """
+    Conta no máximo 10 SINAIS enquanto a banca estiver em recuperação.
+    O sinal que causou o primeiro LOSS ainda era o ciclo normal e não entra
+    nessa contagem. Os próximos sinais de recuperação contam 1..10.
+    """
+    with estado_lock:
+        dados = estado_frentes[banca]
+
+        if dados["em_recuperacao"]:
+            if dados["sinais_recuperacao"] >= MAX_SINAIS_RECUPERACAO:
+                return False
+
+            dados["sinais_recuperacao"] += 1
+
+        return True
 
 
 # ============================================================
-# CICLO
+# CICLO V8 - 4 CICLOS / 10 SINAIS DE RECUPERAÇÃO
 # ============================================================
-
 def ciclo(
     banca,
     ativo,
@@ -1746,51 +908,63 @@ def ciclo(
     timeframe_analise,
     expiracao
 ):
-
-    valores = [
-
-        ENTRADA_BASE,
-
-        ENTRADA_BASE * 2,
-
-        ENTRADA_BASE * 4
-    ]
-
-
     try:
+        # Se já completou os 10 sinais de recuperação, encerra a recuperação
+        # e recomeça em R$2 antes de abrir outro sinal.
+        with estado_lock:
+            limite_atingido = (
+                estado_frentes[banca]["em_recuperacao"]
+                and estado_frentes[banca]["sinais_recuperacao"]
+                >= MAX_SINAIS_RECUPERACAO
+            )
+
+        if limite_atingido:
+            resetar_gestao(banca, "limite_10_sinais")
+            telegram(
+                f"🔄 RECUPERAÇÃO ENCERRADA\n"
+                f"🏦 {banca}\n"
+                f"Limite de {MAX_SINAIS_RECUPERACAO} sinais atingido.\n"
+                f"Nova sequência: Ciclo 1 / entrada {ENTRADA_BASE:.2f}"
+            )
+
+        if not iniciar_sinal_gestao(banca):
+            return
 
         with estado_lock:
+            dados = estado_frentes[banca]
+            ciclo_atual = int(dados["ciclo_gestao"])
+            entrada_atual = round(float(dados["entrada_atual"]), 2)
+            em_recuperacao = bool(dados["em_recuperacao"])
+            sinal_rec = int(dados["sinais_recuperacao"])
+            prejuizo_antes = round(float(dados["prejuizo_acumulado"]), 2)
 
-            estado_frentes[
-                banca
-            ][
-                "ocupada"
-            ] = True
+            estado_frentes[banca]["ocupada"] = True
+            estado_frentes[banca]["ativo"] = ativo
+            estado_frentes[banca]["direcao"] = direcao
+            estado_frentes[banca]["score"] = score
 
-            estado_frentes[
-                banca
-            ][
-                "ativo"
-            ] = ativo
+        quantidade_gales = GALES_POR_CICLO[ciclo_atual]
+        valores = valores_do_ciclo(
+            entrada_atual,
+            quantidade_gales
+        )
 
-            estado_frentes[
-                banca
-            ][
-                "direcao"
-            ] = direcao
+        log.info(
+            "GESTÃO | %s | ciclo=%s/4 | entrada=%.2f | gales=%s | "
+            "recuperacao=%s | sinal_rec=%s/10 | prejuizo=%.2f | valores=%s",
+            banca,
+            ciclo_atual,
+            entrada_atual,
+            quantidade_gales,
+            em_recuperacao,
+            sinal_rec,
+            prejuizo_antes,
+            valores,
+        )
 
-            estado_frentes[
-                banca
-            ][
-                "score"
-            ] = score
+        perdas_deste_sinal = 0.0
 
-
-        for nivel, valor in enumerate(
-            valores
-        ):
-
-
+        for nivel, valor in enumerate(valores):
             ok, order_id = executar_ordem(
                 banca,
                 ativo,
@@ -1799,46 +973,34 @@ def ciclo(
                 expiracao
             )
 
-
-            # ================================================
-            # NÃO HOUVE APOSTA
-            # ================================================
-
             if not ok:
-
                 log.warning(
                     "%s | ORDEM NÃO EXECUTADA | %s",
-                    banca,
-                    order_id
+                    banca, order_id
                 )
 
-                # Não conta como LOSS.
+                # Ordem recusada não deve consumir um dos 10 sinais.
+                if em_recuperacao:
+                    with estado_lock:
+                        estado_frentes[banca]["sinais_recuperacao"] = max(
+                            0,
+                            estado_frentes[banca]["sinais_recuperacao"] - 1
+                        )
                 return
 
-
             with estado_lock:
-
-                estado_frentes[
-                    banca
-                ][
-                    "order_id"
-                ] = order_id
-
-
-            # ================================================
-            # SINAL SOMENTE DEPOIS DA ORDEM ACEITA
-            # ================================================
+                estado_frentes[banca]["order_id"] = order_id
 
             if nivel == 0:
-
-                mercado = (
-                    "OTC"
-                    if ativo.endswith(
-                        "-OTC"
+                mercado = "OTC" if ativo.endswith("-OTC") else "NORMAL"
+                sequencia = " → ".join(
+                    (
+                        f"Entrada {v:.2f}"
+                        if i == 0
+                        else f"G{i} {v:.2f}"
                     )
-                    else "NORMAL"
+                    for i, v in enumerate(valores)
                 )
-
 
                 telegram(
                     "📊 NOVO SINAL\n"
@@ -1848,276 +1010,201 @@ def ciclo(
                     f"⏱ Digital: M{expiracao}\n"
                     f"🎯 {direcao.upper()}\n"
                     f"🔥 Score: {score}/100\n"
-                    f"💰 ${valores[0]:.2f} → "
-                    f"G1 ${valores[1]:.2f} → "
-                    f"G2 ${valores[2]:.2f}"
+                    f"🔁 Ciclo gestão: {ciclo_atual}/4\n"
+                    f"🛡 Gales: {quantidade_gales}\n"
+                    f"💰 {sequencia}\n"
+                    f"♻️ Recuperação: "
+                    f"{'SIM' if em_recuperacao else 'NÃO'}"
+                    + (
+                        f" ({sinal_rec}/{MAX_SINAIS_RECUPERACAO})\n"
+                        f"📉 A recuperar: {prejuizo_antes:.2f}"
+                        if em_recuperacao
+                        else ""
+                    )
                 )
-
 
                 with estado_lock:
-
-                    estado_frentes[
-                        banca
-                    ][
-                        "ultimo_sinal"
-                    ] = {
-
+                    estado_frentes[banca]["ultimo_sinal"] = {
                         "ativo": ativo,
-
                         "direcao": direcao,
-
                         "score": score,
-
                         "analise": timeframe_analise,
-
                         "expiracao": expiracao,
-
+                        "ciclo_gestao": ciclo_atual,
+                        "entrada": entrada_atual,
+                        "gales": quantidade_gales,
+                        "recuperacao": em_recuperacao,
+                        "sinal_recuperacao": sinal_rec,
                         "data": datetime.now(
                             timezone.utc
-                        ).isoformat()
+                        ).isoformat(),
                     }
 
-
-            resultado, lucro = (
-                aguardar_resultado(
-                    order_id
-                )
-            )
-
+            resultado, lucro = aguardar_resultado(order_id)
 
             log.info(
-                "RESULTADO | %s | %s | nivel=%s | %s | lucro=%s",
-                banca,
-                ativo,
-                nivel,
-                resultado,
-                lucro
+                "RESULTADO | %s | %s | ciclo=%s | nivel=%s | %s | lucro=%s",
+                banca, ativo, ciclo_atual, nivel, resultado, lucro
             )
 
-
-            # ================================================
-            # WIN
-            # ================================================
-
             if resultado == "win":
+                registrar_win(banca, nivel)
 
-                registrar_win(
-                    banca,
-                    nivel
-                )
-
-
-                if nivel == 0:
-
-                    nome = "WIN"
-
-                elif nivel == 1:
-
-                    nome = "WIN G1"
-
-                else:
-
-                    nome = "WIN G2"
-
-
+                nome = "WIN" if nivel == 0 else f"WIN G{nivel}"
                 w = stats["wins"]
                 l = stats["losses"]
 
+                rec = aplicar_win_recuperacao(
+                    banca,
+                    lucro
+                )
 
                 telegram(
                     f"✅ {nome}\n"
                     f"🏦 {banca}\n"
                     f"💱 {ativo}\n"
+                    f"🔁 Ciclo: {ciclo_atual}/4\n"
+                    f"💵 Lucro informado: {float(lucro):.2f}\n"
+                    f"♻️ Restante recuperação: {rec['restante']:.2f}\n"
                     f"📊 {w} WIN / {l} LOSS\n"
-                    f"🎯 Assertividade: "
-                    f"{taxa(w, l)}%"
+                    f"🎯 Assertividade: {taxa(w, l)}%"
                 )
 
+                # Se foi o 10º sinal e ainda não recuperou tudo,
+                # encerra a recuperação conforme a regra definida.
+                with estado_lock:
+                    atingiu_10 = (
+                        estado_frentes[banca]["em_recuperacao"]
+                        and estado_frentes[banca]["sinais_recuperacao"]
+                        >= MAX_SINAIS_RECUPERACAO
+                    )
+
+                if atingiu_10:
+                    resetar_gestao(
+                        banca,
+                        "10_sinais_sem_recuperacao_total"
+                    )
 
                 return
 
-
-            # ================================================
-            # DRAW/TIMEOUT
-            # ================================================
-
-            if resultado in (
-                "draw",
-                "timeout"
-            ):
-
+            if resultado in ("draw", "timeout"):
                 log.warning(
-                    "%s | %s | ciclo encerrado sem LOSS",
-                    banca,
-                    resultado
+                    "%s | %s | ciclo encerrado sem contabilizar LOSS",
+                    banca, resultado
                 )
 
+                # Não houve resultado válido: não consome sinal de recuperação.
+                if em_recuperacao:
+                    with estado_lock:
+                        estado_frentes[banca]["sinais_recuperacao"] = max(
+                            0,
+                            estado_frentes[banca]["sinais_recuperacao"] - 1
+                        )
                 return
 
+            if resultado == "loss":
+                perdas_deste_sinal = round(
+                    perdas_deste_sinal + abs(float(valor)),
+                    2
+                )
 
-            # ================================================
-            # LOSS - tenta próximo Gale
-            # ================================================
+                if nivel < quantidade_gales:
+                    log.info(
+                        "%s | LOSS nível %s | iniciando G%s",
+                        banca, nivel, nivel + 1
+                    )
+                    time.sleep(1)
+                    continue
 
-            if (
-                resultado == "loss"
-                and nivel < 2
-            ):
-
-                log.info(
-                    "%s | LOSS nível %s | iniciando próximo Gale",
+                # LOSS completo do sinal/ciclo
+                registrar_loss(banca)
+                gestao = aplicar_loss_ciclo(
                     banca,
-                    nivel
+                    perdas_deste_sinal
                 )
-
-                time.sleep(1)
-
-                continue
-
-
-            # ================================================
-            # LOSS FINAL
-            # ================================================
-
-            if (
-                resultado == "loss"
-                and nivel == 2
-            ):
-
-                registrar_loss(
-                    banca
-                )
-
 
                 w = stats["wins"]
                 l = stats["losses"]
 
-
                 telegram(
-                    "❌ LOSS\n"
+                    "❌ LOSS COMPLETO\n"
                     f"🏦 {banca}\n"
                     f"💱 {ativo}\n"
+                    f"🔁 Ciclo encerrado: {ciclo_atual}/4\n"
+                    f"💸 LOSS do ciclo: {perdas_deste_sinal:.2f}\n"
+                    f"➕ 10% somado à próxima entrada: "
+                    f"{gestao['acrescimo']:.2f}\n"
+                    f"➡️ Próximo ciclo: {gestao['ciclo']}/4\n"
+                    f"💰 Próxima entrada: {gestao['entrada']:.2f}\n"
+                    f"📉 Prejuízo acumulado: {gestao['prejuizo']:.2f}\n"
+                    f"♻️ Sinais recuperação: "
+                    f"{gestao['sinais']}/{MAX_SINAIS_RECUPERACAO}\n"
                     f"📊 {w} WIN / {l} LOSS\n"
-                    f"🎯 Assertividade: "
-                    f"{taxa(w, l)}%"
+                    f"🎯 Assertividade: {taxa(w, l)}%"
                 )
 
+                # Se este foi o 10º sinal de recuperação e terminou em LOSS,
+                # encerra a sequência e volta à base.
+                with estado_lock:
+                    atingiu_10 = (
+                        estado_frentes[banca]["em_recuperacao"]
+                        and estado_frentes[banca]["sinais_recuperacao"]
+                        >= MAX_SINAIS_RECUPERACAO
+                    )
+
+                if atingiu_10:
+                    resetar_gestao(
+                        banca,
+                        "10_sinais_sem_recuperacao_total"
+                    )
 
                 return
 
-
     finally:
-
         with estado_lock:
-
-            ativos_em_uso.discard(
-                ativo
-            )
-
-            estado_frentes[
-                banca
-            ][
-                "ocupada"
-            ] = False
-
-            estado_frentes[
-                banca
-            ][
-                "ativo"
-            ] = None
-
-            estado_frentes[
-                banca
-            ][
-                "direcao"
-            ] = None
-
-            estado_frentes[
-                banca
-            ][
-                "score"
-            ] = None
-
-            estado_frentes[
-                banca
-            ][
-                "order_id"
-            ] = None
+            ativos_em_uso.discard(ativo)
+            estado_frentes[banca]["ocupada"] = False
+            estado_frentes[banca]["ativo"] = None
+            estado_frentes[banca]["direcao"] = None
+            estado_frentes[banca]["score"] = None
+            estado_frentes[banca]["order_id"] = None
 
 
 # ============================================================
 # SCANNER
 # ============================================================
-
-def scanner(
-    banca
-):
-
-    cfg = FRENTES[
-        banca
-    ]
-
-    tf = cfg[
-        "timeframe_analise"
-    ]
-
-    segundos = cfg[
-        "segundos"
-    ]
-
-    expiracao = cfg[
-        "expiracao"
-    ]
-
+def scanner(banca):
+    cfg = FRENTES[banca]
+    tf = cfg["timeframe_analise"]
+    segundos = cfg["segundos"]
+    expiracao = cfg["expiracao"]
 
     log.info(
         "%s INICIADA | análise=M%s | digital=M%s",
-        banca,
-        tf,
-        expiracao
+        banca, tf, expiracao
     )
 
-
     while True:
-
         try:
-
             if not garantir_conexao():
-
                 time.sleep(10)
-
                 continue
 
-
             melhor = None
-
             analisados = 0
-
 
             log.info(
                 "%s | VARREDURA | análise M%s | Digital M%s",
-                banca,
-                tf,
-                expiracao
+                banca, tf, expiracao
             )
 
-
             for ativo in ATIVOS:
-
-
-                if esta_bloqueado(
-                    ativo,
-                    expiracao
-                ):
-
+                if esta_bloqueado(ativo, expiracao):
                     continue
 
-
                 with estado_lock:
-
                     if ativo in ativos_em_uso:
                         continue
-
 
                 candles = obter_candles(
                     ativo,
@@ -2125,118 +1212,65 @@ def scanner(
                     100
                 )
 
-
                 if len(candles) < 60:
-
-                    time.sleep(
-                        INTERVALO_ENTRE_ATIVOS
-                    )
-
+                    time.sleep(INTERVALO_ENTRE_ATIVOS)
                     continue
 
-
                 analisados += 1
-
-
-                resultado = analisar(
-                    candles
-                )
-
+                resultado = analisar(candles)
 
                 if resultado:
-
                     log.info(
-                        "CANDIDATO | %s | %s | análise=M%s | digital=M%s | %s | score=%s",
+                        "CANDIDATO | %s | %s | análise=M%s | "
+                        "digital=M%s | %s | score=%s",
                         banca,
                         ativo,
                         tf,
                         expiracao,
-                        resultado[
-                            "direcao"
-                        ],
-                        resultado[
-                            "score"
-                        ]
+                        resultado["direcao"],
+                        resultado["score"],
                     )
-
 
                     if (
                         melhor is None
-                        or resultado[
-                            "score"
-                        ] > melhor[
-                            "score"
-                        ]
+                        or resultado["score"] > melhor["score"]
                     ):
-
                         melhor = {
-
                             "ativo": ativo,
-
-                            "direcao": resultado[
-                                "direcao"
-                            ],
-
-                            "score": resultado[
-                                "score"
-                            ],
-
-                            "motivos": resultado[
-                                "motivos"
-                            ]
+                            "direcao": resultado["direcao"],
+                            "score": resultado["score"],
+                            "motivos": resultado["motivos"],
                         }
 
-
-                time.sleep(
-                    INTERVALO_ENTRE_ATIVOS
-                )
-
+                time.sleep(INTERVALO_ENTRE_ATIVOS)
 
             log.info(
                 "%s | FIM VARREDURA | válidos=%s | melhor=%s",
                 banca,
                 analisados,
-                (
-                    melhor["ativo"]
-                    if melhor
-                    else "nenhum"
-                )
+                melhor["ativo"] if melhor else "nenhum",
             )
 
-
             if melhor:
-
-                ativo = melhor[
-                    "ativo"
-                ]
-
+                ativo = melhor["ativo"]
 
                 with estado_lock:
-
                     if ativo in ativos_em_uso:
-
-                        time.sleep(
-                            INTERVALO_ANALISE
-                        )
-
+                        time.sleep(INTERVALO_ANALISE)
                         continue
 
-
-                    ativos_em_uso.add(
-                        ativo
-                    )
-
+                    ativos_em_uso.add(ativo)
 
                 log.info(
-                    "SINAL APROVADO | %s | %s | análise=M%s | digital=M%s | %s | score=%s",
+                    "SINAL APROVADO | %s | %s | análise=M%s | "
+                    "digital=M%s | %s | score=%s",
                     banca,
                     ativo,
                     tf,
                     expiracao,
                     melhor["direcao"],
-                    melhor["score"]
+                    melhor["score"],
                 )
-
 
                 ciclo(
                     banca,
@@ -2244,224 +1278,130 @@ def scanner(
                     melhor["direcao"],
                     melhor["score"],
                     tf,
-                    expiracao
+                    expiracao,
                 )
 
-
-            time.sleep(
-                INTERVALO_ANALISE
-            )
-
+            time.sleep(INTERVALO_ANALISE)
 
         except Exception as e:
-
             log.exception(
                 "SCANNER ERRO | %s | %s",
-                banca,
-                e
+                banca, e
             )
-
             time.sleep(5)
-
 
 # ============================================================
 # WORKER
 # ============================================================
-
 def worker():
-
-    log.info(
-        "WORKER V6 INICIADO"
-    )
-
+    log.info("WORKER V8 INICIADO")
 
     while not conectar():
-
         time.sleep(10)
 
+    for indice, banca in enumerate(FRENTES):
 
-    for indice, banca in enumerate(
-        FRENTES
-    ):
-
-
-        def iniciar(
-            nome=banca,
-            atraso=indice * 3
-        ):
-
-            time.sleep(
-                atraso
-            )
-
-            scanner(
-                nome
-            )
-
+        def iniciar(nome=banca, atraso=indice * 3):
+            time.sleep(atraso)
+            scanner(nome)
 
         threading.Thread(
             target=iniciar,
             daemon=True,
-            name=f"scanner-{banca}"
+            name=f"scanner-{banca}",
         ).start()
-
 
 # ============================================================
 # STATUS WEB
 # ============================================================
-
 @app.route("/")
 def home():
-
     saldo = None
 
     try:
-
         if conectado():
-
             saldo = api.get_balance()
-
     except Exception:
-
         pass
 
-
     with estado_lock:
-
-        frentes = {}
-
-
-        for nome, dados in estado_frentes.items():
-
-            frentes[nome] = {
-
+        frentes = {
+            nome: {
                 **dados,
-
                 "assertividade": taxa(
                     dados["wins"],
                     dados["losses"]
-                )
+                ),
             }
-
+            for nome, dados in estado_frentes.items()
+        }
 
         geral = {
-
             **stats,
-
             "assertividade": taxa(
                 stats["wins"],
                 stats["losses"]
-            )
+            ),
         }
 
-
     return jsonify({
-
         "versao": VERSAO,
-
         "status": "online",
-
         "iq_conectada": conectado(),
-
         "conta": "PRACTICE",
-
         "saldo": saldo,
-
         "execucao": EXECUTAR_ORDENS,
-
         "score_min": SCORE_MIN,
-
         "gestao": {
-
-            "entrada": ENTRADA_BASE,
-
-            "g1": ENTRADA_BASE * 2,
-
-            "g2": ENTRADA_BASE * 4
+            "entrada_base": ENTRADA_BASE,
+            "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
+            "max_sinais_recuperacao": MAX_SINAIS_RECUPERACAO,
+            "max_ciclos": MAX_CICLOS_GESTAO,
+            "gales_por_ciclo": GALES_POR_CICLO,
+            "regra": "proxima entrada = entrada atual + 10% do LOSS completo anterior",
         },
-
         "frequencias": {
-
             "BANCA 1": "M1 -> Digital M1",
-
             "BANCA 2": "M5 -> Digital M5",
-
-            "BANCA 3": "M15 -> Digital M5"
+            "BANCA 3": "M15 -> Digital M5",
         },
-
         "estatisticas": geral,
-
         "frentes": frentes,
-
-        "ativos_com_candles": sorted(
-            ativos_validos
-        ),
-
-        "bloqueados": len(
-            bloqueados
-        )
+        "ativos_com_candles": sorted(ativos_validos),
+        "bloqueados": len(bloqueados),
     })
-
 
 @app.route("/health")
 def health():
-
     return jsonify({
-
         "status": "ok",
-
-        "versao": VERSAO
-
+        "versao": VERSAO,
     }), 200
-
 
 # ============================================================
 # START
 # ============================================================
-
-log.info(
-    "==============================================="
-)
-
-log.info(
-    VERSAO
-)
-
-log.info(
-    "CONTA = PRACTICE"
-)
-
-log.info(
-    "EXECUTAR_ORDENS = %s",
-    EXECUTAR_ORDENS
-)
-
+log.info("===============================================")
+log.info(VERSAO)
+log.info("CONTA = PRACTICE")
+log.info("EXECUTAR_ORDENS = %s", EXECUTAR_ORDENS)
 log.info(
     "ENTRADA = %.2f -> %.2f -> %.2f",
     ENTRADA_BASE,
     ENTRADA_BASE * 2,
-    ENTRADA_BASE * 4
+    ENTRADA_BASE * 4,
 )
-
-log.info(
-    "MÉTODO = strike list + instrument_id + buy_digital"
-)
-
-log.info(
-    "==============================================="
-)
-
+log.info("MÉTODO V8 = websocket + strike list + instrument_id + buy_digital + gestão 4 ciclos")
+log.info("===============================================")
 
 threading.Thread(
     target=worker,
     daemon=True,
-    name="worker-iq"
+    name="worker-iq",
 ).start()
 
-
 if __name__ == "__main__":
-
     app.run(
         host="0.0.0.0",
-        port=PORT
+        port=PORT,
     )

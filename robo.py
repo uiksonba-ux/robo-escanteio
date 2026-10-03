@@ -12,14 +12,14 @@ from iqoptionapi.stable_api import IQ_Option
 # ============================================================
 # VERSÃO
 # ============================================================
-VERSAO = "IQ-3-FRENTES-V8-RECUPERACAO-4-CICLOS"
+VERSAO = "IQ-3-FRENTES-V9-DIGITAL-SPOT-SUPERVISOR"
 app = Flask(__name__)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
-log = logging.getLogger("iq-v8")
+log = logging.getLogger("iq-v9")
 
 # ============================================================
 # CONFIGURAÇÕES
@@ -179,7 +179,7 @@ def conectar():
 
             log.info("IQ CONECTADA | PRACTICE | saldo=%s", saldo)
             telegram(
-                "🤖 ROBÔ V8 ONLINE\n"
+                "🤖 ROBÔ V9 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
                 f"💰 Saldo: ${saldo}\n\n"
                 "🏦 Banca 1: análise M1 / Digital M1\n"
@@ -457,195 +457,7 @@ def analisar(candles):
     }
 
 # ============================================================
-# V8 - INSTRUMENT_ID VIA WEBSOCKET
-# ============================================================
-def obter_instrumento_digital(ativo, direcao, expiracao):
-    if expiracao not in (1, 5):
-        return None, None, "expiracao_invalida"
-
-    if not garantir_practice():
-        return None, None, "sem_conexao"
-
-    log.info("V8 SUBSCRIBE | %s | DIGITAL M%s", ativo, expiracao)
-
-    try:
-        # Limpa buffers antigos quando a estrutura já existe.
-        try:
-            api.api.instrument_quites_generated_data[ativo][expiracao * 60] = {}
-        except Exception:
-            pass
-
-        try:
-            api.api.instrument_quotes_generated_raw_data[ativo][expiracao * 60] = {}
-        except Exception:
-            pass
-
-        with api_lock:
-            api.subscribe_strike_list(ativo, expiracao)
-
-        # Aguarda o websocket receber a primeira cotação.
-        inicio = time.time()
-        recebeu = False
-
-        while time.time() - inicio < 12:
-            try:
-                dados = api.api.instrument_quites_generated_data[
-                    ativo
-                ][expiracao * 60]
-
-                if dados:
-                    recebeu = True
-                    break
-            except Exception:
-                pass
-
-            time.sleep(0.25)
-
-        if not recebeu:
-            log.warning(
-                "V8 | WEBSOCKET SEM COTAÇÃO | %s | M%s",
-                ativo, expiracao
-            )
-
-            try:
-                api.unsubscribe_strike_list(ativo, expiracao)
-            except Exception:
-                pass
-
-            return None, None, "websocket_sem_cotacao"
-
-        log.info(
-            "V8 | COTAÇÃO DIGITAL RECEBIDA | %s | M%s",
-            ativo, expiracao
-        )
-
-        # get_realtime_strike_list pode esperar indefinidamente;
-        # portanto a leitura continua protegida por timeout.
-        resultado = {"data": None, "erro": None}
-
-        def buscar():
-            try:
-                resultado["data"] = api.get_realtime_strike_list(
-                    ativo, expiracao
-                )
-            except Exception as e:
-                resultado["erro"] = str(e)
-
-        thread = threading.Thread(target=buscar, daemon=True)
-        thread.start()
-        thread.join(timeout=10)
-
-        if thread.is_alive():
-            log.warning(
-                "V8 | STRIKE LIST TIMEOUT | %s | M%s",
-                ativo, expiracao
-            )
-
-            try:
-                api.unsubscribe_strike_list(ativo, expiracao)
-            except Exception:
-                pass
-
-            return None, None, "strike_list_timeout"
-
-        if resultado["erro"]:
-            return None, None, resultado["erro"]
-
-        strikes = resultado["data"]
-
-        if not isinstance(strikes, dict) or not strikes:
-            return None, None, "strike_list_vazia"
-
-        log.info(
-            "V8 | STRIKES RECEBIDOS | %s | quantidade=%s",
-            ativo, len(strikes)
-        )
-
-        preco_atual = None
-
-        try:
-            candles = obter_candles(ativo, 60, 5)
-            if candles:
-                preco_atual = candles[-1]["close"]
-        except Exception:
-            pass
-
-        candidatos = []
-
-        for preco, lados in strikes.items():
-            try:
-                lado = lados.get(direcao)
-                if not lado:
-                    continue
-
-                instrument_id = lado.get("id")
-                profit = lado.get("profit")
-
-                if not instrument_id:
-                    continue
-
-                try:
-                    preco_float = float(preco)
-                except Exception:
-                    preco_float = 0
-
-                candidatos.append({
-                    "preco": preco_float,
-                    "id": instrument_id,
-                    "profit": profit,
-                })
-
-            except Exception:
-                continue
-
-        if not candidatos:
-            return None, None, "sem_instrumento"
-
-        if preco_atual is not None:
-            candidatos.sort(
-                key=lambda x: abs(x["preco"] - preco_atual)
-            )
-            escolhido = candidatos[0]
-        else:
-            candidatos.sort(key=lambda x: x["preco"])
-            escolhido = candidatos[len(candidatos) // 2]
-
-        instrument_id = escolhido["id"]
-        profit = escolhido["profit"]
-
-        log.info(
-            "V8 | INSTRUMENTO REAL ENCONTRADO | "
-            "%s | %s | M%s | strike=%s | profit=%s | id=%s",
-            ativo,
-            direcao.upper(),
-            expiracao,
-            escolhido["preco"],
-            profit,
-            instrument_id,
-        )
-
-        try:
-            api.unsubscribe_strike_list(ativo, expiracao)
-        except Exception:
-            pass
-
-        return instrument_id, profit, None
-
-    except Exception as e:
-        log.exception(
-            "V8 | ERRO INSTRUMENTO | %s | %s",
-            ativo, e
-        )
-
-        try:
-            api.unsubscribe_strike_list(ativo, expiracao)
-        except Exception:
-            pass
-
-        return None, None, str(e)
-
-# ============================================================
-# ORDEM DIGITAL V7
+# V9 - ORDEM DIGITAL SPOT
 # ============================================================
 def executar_ordem(banca, ativo, valor, direcao, expiracao):
     if not EXECUTAR_ORDENS:
@@ -654,36 +466,36 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao):
     if esta_bloqueado(ativo, expiracao):
         return False, "ativo_bloqueado"
 
-    instrument_id, profit, erro = obter_instrumento_digital(
-        ativo, direcao, expiracao
-    )
-
-    if not instrument_id:
-        log.warning(
-            "SEM INSTRUMENTO | %s | M%s | %s",
-            ativo, expiracao, erro
-        )
-        bloquear(ativo, expiracao, erro)
-        return False, erro
-
     if not garantir_practice():
         return False, "sem_conexao"
 
     log.info(
-        "COMPRANDO DIGITAL | %s | %s | M%s | %s | $%.2f",
+        "V9 BUY DIGITAL SPOT | %s | %s | M%s | %s | $%.2f",
         banca, ativo, expiracao, direcao.upper(), valor
     )
 
     try:
+        metodo = getattr(api, "buy_digital_spot_v2", None)
+        nome_metodo = "buy_digital_spot_v2"
+
+        if not callable(metodo):
+            metodo = getattr(api, "buy_digital_spot", None)
+            nome_metodo = "buy_digital_spot"
+
+        if not callable(metodo):
+            return False, "biblioteca_sem_buy_digital_spot"
+
         with api_lock:
-            resposta = api.buy_digital(
+            resposta = metodo(
+                ativo,
                 float(valor),
-                instrument_id
+                direcao.lower(),
+                int(expiracao),
             )
 
         log.info(
-            "RESPOSTA BUY_DIGITAL | %s | %s",
-            ativo, resposta
+            "V9 RESPOSTA %s | %s | %s",
+            nome_metodo, ativo, resposta
         )
 
         ok = False
@@ -694,6 +506,9 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao):
                 ok = bool(resposta[0])
             if len(resposta) >= 2:
                 order_id = resposta[1]
+        elif isinstance(resposta, int) and not isinstance(resposta, bool):
+            ok = resposta > 0
+            order_id = resposta
 
         if ok and order_id:
             with estado_lock:
@@ -701,8 +516,8 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao):
                 estado_frentes[banca]["ordens_aceitas"] += 1
 
             log.info(
-                "ORDEM ACEITA !!! | %s | %s | M%s | id=%s",
-                banca, ativo, expiracao, order_id
+                "ORDEM ACEITA | %s | %s | M%s | id=%s | PRACTICE",
+                ativo, direcao.upper(), expiracao, order_id
             )
             return True, order_id
 
@@ -710,11 +525,19 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao):
             stats["ordens_recusadas"] += 1
             estado_frentes[banca]["ordens_recusadas"] += 1
 
-        bloquear(ativo, expiracao, str(resposta))
-        return False, str(resposta)
+        motivo = str(order_id if order_id is not None else resposta)
+        log.warning(
+            "ORDEM RECUSADA | %s | M%s | %s",
+            ativo, expiracao, motivo
+        )
+        bloquear(ativo, expiracao, motivo)
+        return False, motivo
 
     except Exception as e:
-        log.warning("BUY_DIGITAL ERRO | %s | %s", ativo, e)
+        log.exception(
+            "V9 ERRO ORDEM DIGITAL | %s | M%s | %s",
+            ativo, expiracao, e
+        )
         bloquear(ativo, expiracao, str(e))
         return False, str(e)
 
@@ -1312,25 +1135,73 @@ def scanner(banca):
             time.sleep(5)
 
 # ============================================================
-# WORKER
+# WORKER / SUPERVISOR V9
 # ============================================================
+scanner_threads = {}
+scanner_threads_lock = threading.RLock()
+
+
+def iniciar_scanner_supervisionado(banca, atraso=0):
+    def alvo():
+        if atraso:
+            time.sleep(atraso)
+        scanner(banca)
+
+    thread = threading.Thread(
+        target=alvo,
+        daemon=True,
+        name=f"scanner-{banca}",
+    )
+    thread.start()
+
+    with scanner_threads_lock:
+        scanner_threads[banca] = thread
+
+    log.info(
+        "V9 SUPERVISOR | scanner iniciado | %s | thread=%s",
+        banca, thread.name
+    )
+    return thread
+
+
+def supervisor():
+    log.info("V9 SUPERVISOR INICIADO")
+
+    while True:
+        try:
+            with scanner_threads_lock:
+                snapshot = dict(scanner_threads)
+
+            for banca in FRENTES:
+                thread = snapshot.get(banca)
+                if thread is None or not thread.is_alive():
+                    log.error(
+                        "V9 SUPERVISOR | scanner parado | %s | reiniciando",
+                        banca
+                    )
+                    iniciar_scanner_supervisionado(banca, 0)
+
+            time.sleep(15)
+
+        except Exception as e:
+            log.exception("V9 SUPERVISOR ERRO | %s", e)
+            time.sleep(5)
+
+
 def worker():
-    log.info("WORKER V8 INICIADO")
+    log.info("WORKER V9 INICIADO")
 
     while not conectar():
         time.sleep(10)
 
     for indice, banca in enumerate(FRENTES):
+        iniciar_scanner_supervisionado(banca, indice * 3)
 
-        def iniciar(nome=banca, atraso=indice * 3):
-            time.sleep(atraso)
-            scanner(nome)
-
-        threading.Thread(
-            target=iniciar,
-            daemon=True,
-            name=f"scanner-{banca}",
-        ).start()
+    threading.Thread(
+        target=supervisor,
+        daemon=True,
+        name="supervisor-scanners",
+    ).start()
 
 # ============================================================
 # STATUS WEB
@@ -1413,7 +1284,7 @@ log.info(
     MAX_CICLOS_GESTAO,
     MAX_SINAIS_RECUPERACAO,
 )
-log.info("MÉTODO V8 = websocket + strike list + instrument_id + buy_digital + gestão 4 ciclos")
+log.info("MÉTODO V9 = buy_digital_spot_v2 + fallback buy_digital_spot + supervisor + gestão 4 ciclos")
 log.info("===============================================")
 
 threading.Thread(

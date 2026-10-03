@@ -4,6 +4,7 @@ import math
 import logging
 import threading
 import requests
+
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -14,31 +15,39 @@ from iqoptionapi.stable_api import IQ_Option
 # ============================================================
 # VERSÃO
 # ============================================================
-VERSAO = "IQ-3-FRENTES-V9-DIGITAL-SPOT-SUPERVISOR"
+
+VERSAO = "IQ-V10-3-BANCAS-M1-M5-M15-DIGITAL"
+
 app = Flask(__name__)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
-log = logging.getLogger("iq-v9")
+
+log = logging.getLogger("iq-v10")
 
 
 # ============================================================
 # CONFIGURAÇÕES
 # ============================================================
+
 IQ_EMAIL = os.getenv("IQ_EMAIL", "").strip()
 IQ_PASSWORD = os.getenv("IQ_PASSWORD", "").strip()
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
 
 PORT = int(os.getenv("PORT", "10000"))
 
+
 # ============================================================
 # SEGURANÇA
 # ============================================================
-# CONTA DE TREINO FIXA.
+
+# CONTA FIXA DE TREINO.
 # NÃO transformar em variável de ambiente.
+
 CONTA = "PRACTICE"
 
 EXECUTAR_ORDENS = (
@@ -49,7 +58,10 @@ EXECUTAR_ORDENS = (
 # ============================================================
 # ESTRATÉGIA
 # ============================================================
-SCORE_MIN = int(os.getenv("SCORE_MIN", "65"))
+
+SCORE_MIN = int(
+    os.getenv("SCORE_MIN", "65")
+)
 
 INTERVALO_ANALISE = int(
     os.getenv("INTERVALO_ANALISE", "20")
@@ -65,37 +77,36 @@ TEMPO_BLOQUEIO = int(
 
 
 # ============================================================
-# ENTRADA BASE AUTOMÁTICA PELO DIA DO MÊS - BRASIL
+# HORÁRIO BRASIL
 # ============================================================
+
 FUSO_BRASIL = ZoneInfo("America/Sao_Paulo")
+
+
+def agora_brasil():
+    return datetime.now(FUSO_BRASIL)
 
 
 def obter_entrada_base():
     """
-    Entrada base de acordo com o dia do mês no horário de Brasília.
+    Entrada base = dia do mês no Brasil.
 
-    Dia 1  = R$2
-    Dia 2  = R$2
-    Dia 3  = R$3
-    Dia 4  = R$4
-    ...
+    Dia 1 = R$2
+    Dia 2 = R$2
+    Dia 3 = R$3
     Dia 10 = R$10
-    ...
     Dia 31 = R$31
-
-    Valor mínimo = R$2.
     """
 
-    dia_brasil = datetime.now(FUSO_BRASIL).day
+    dia = agora_brasil().day
 
-    return float(
-        max(2, dia_brasil)
-    )
+    return float(max(2, dia))
 
 
 # ============================================================
 # GESTÃO
 # ============================================================
+
 RECUPERACAO_PERCENTUAL = float(
     os.getenv(
         "RECUPERACAO_PERCENTUAL",
@@ -114,12 +125,8 @@ MAX_CICLOS_GESTAO = 4
 
 
 # ============================================================
-# GALES POR CICLO
+# GALES
 # ============================================================
-# Ciclo 1 = entrada + 2 Gales
-# Ciclo 2 = entrada + 3 Gales
-# Ciclo 3 = entrada + 4 Gales
-# Ciclo 4 = entrada + 5 Gales
 
 GALES_POR_CICLO = {
     1: 2,
@@ -130,9 +137,45 @@ GALES_POR_CICLO = {
 
 
 # ============================================================
+# TIMEFRAMES
+# ============================================================
+
+TIMEFRAMES = {
+
+    1: {
+        "segundos": 60,
+        "expiracao": 1,
+    },
+
+    5: {
+        "segundos": 300,
+        "expiracao": 5,
+    },
+
+    15: {
+        "segundos": 900,
+        "expiracao": 5,
+    },
+}
+
+
+# ============================================================
+# BANCAS
+# ============================================================
+
+BANCAS = [
+    "BANCA 1",
+    "BANCA 2",
+    "BANCA 3",
+]
+
+
+# ============================================================
 # ATIVOS
 # ============================================================
+
 ATIVOS = [
+
     "EURUSD",
     "GBPUSD",
     "EURGBP",
@@ -164,33 +207,9 @@ ATIVOS = [
 
 
 # ============================================================
-# TRÊS FRENTES
-# ============================================================
-FRENTES = {
-
-    "BANCA 1": {
-        "timeframe_analise": 1,
-        "segundos": 60,
-        "expiracao": 1,
-    },
-
-    "BANCA 2": {
-        "timeframe_analise": 5,
-        "segundos": 300,
-        "expiracao": 5,
-    },
-
-    "BANCA 3": {
-        "timeframe_analise": 15,
-        "segundos": 900,
-        "expiracao": 5,
-    },
-}
-
-
-# ============================================================
 # ESTADO GLOBAL
 # ============================================================
+
 api = None
 
 api_lock = threading.RLock()
@@ -198,13 +217,16 @@ connect_lock = threading.Lock()
 estado_lock = threading.RLock()
 
 ativos_em_uso = set()
+
 bloqueados = {}
+
 ativos_validos = set()
 
 
 # ============================================================
 # ESTATÍSTICAS
 # ============================================================
+
 stats = {
 
     "wins": 0,
@@ -224,17 +246,22 @@ stats = {
 
 
 # ============================================================
-# ESTADO DAS TRÊS BANCAS
+# ESTADO DAS BANCAS
 # ============================================================
+
 estado_frentes = {
 
-    nome: {
+    banca: {
 
         "ocupada": False,
 
         "ativo": None,
         "direcao": None,
         "score": None,
+
+        "timeframe": None,
+        "expiracao": None,
+
         "order_id": None,
 
         "wins": 0,
@@ -256,7 +283,6 @@ estado_frentes = {
         # Gestão independente
         "ciclo_gestao": 1,
 
-        # Base automática pelo dia brasileiro
         "entrada_atual": obter_entrada_base(),
 
         "prejuizo_acumulado": 0.0,
@@ -266,13 +292,14 @@ estado_frentes = {
         "sinais_recuperacao": 0,
     }
 
-    for nome in FRENTES
+    for banca in BANCAS
 }
 
 
 # ============================================================
 # TELEGRAM
 # ============================================================
+
 def telegram(texto):
 
     if not TELEGRAM_TOKEN or not CHAT_ID:
@@ -301,8 +328,9 @@ def telegram(texto):
 
 
 # ============================================================
-# CONEXÃO IQ OPTION
+# CONEXÃO
 # ============================================================
+
 def conectado():
 
     global api
@@ -358,9 +386,10 @@ def conectar():
             if not ok:
                 return False
 
-            # =================================================
+            # ================================================
             # PRACTICE OBRIGATÓRIO
-            # =================================================
+            # ================================================
+
             nova.change_balance(
                 "PRACTICE"
             )
@@ -371,7 +400,7 @@ def conectar():
 
             api = nova
 
-            entrada_dia = obter_entrada_base()
+            entrada = obter_entrada_base()
 
             log.info(
                 "IQ CONECTADA | PRACTICE | saldo=%s",
@@ -379,22 +408,13 @@ def conectar():
             )
 
             telegram(
-
-                "🤖 ROBÔ V9 ONLINE\n"
-
+                "🤖 ROBÔ V10 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
-
-                f"💰 Saldo: ${saldo}\n"
-
-                f"🇧🇷 Entrada base do dia: "
-                f"R${entrada_dia:.2f}\n\n"
-
-                "🏦 Banca 1: análise M1 / Digital M1\n"
-
-                "🏦 Banca 2: análise M5 / Digital M5\n"
-
-                "🏦 Banca 3: análise M15 / Digital M5\n\n"
-
+                f"💰 Saldo: {saldo}\n"
+                f"🇧🇷 Entrada base: {entrada:.2f}\n\n"
+                "🏦 3 BANCAS INDEPENDENTES\n"
+                "⏱ M1 + M5 + M15\n"
+                "📊 SOMENTE DIGITAL\n\n"
                 f"🔥 Score mínimo: {SCORE_MIN}"
             )
 
@@ -425,20 +445,67 @@ def garantir_practice():
 
     try:
 
-        api.change_balance(
-            "PRACTICE"
-        )
+        # Segurança:
+        # força PRACTICE novamente antes da operação.
+
+        with api_lock:
+
+            api.change_balance(
+                "PRACTICE"
+            )
 
         return True
 
-    except Exception:
+    except Exception as e:
+
+        log.warning(
+            "ERRO AO GARANTIR PRACTICE | %s",
+            e
+        )
 
         return False
+
+
+def obter_saldo_atual():
+
+    try:
+
+        if not garantir_practice():
+            return None
+
+        with api_lock:
+
+            saldo = api.get_balance()
+
+        return round(
+            float(saldo),
+            2
+        )
+
+    except Exception as e:
+
+        log.warning(
+            "ERRO AO CONSULTAR SALDO | %s",
+            e
+        )
+
+        return None
+
+
+def texto_saldo():
+
+    saldo = obter_saldo_atual()
+
+    if saldo is None:
+        return "indisponível"
+
+    return f"{saldo:.2f}"
 
 
 # ============================================================
 # BLOQUEIO
 # ============================================================
+
 def chave_bloqueio(
     ativo,
     expiracao
@@ -496,7 +563,6 @@ def bloquear(
     )
 
     log.warning(
-
         "BLOQUEADO | %s | "
         "DIGITAL M%s | %ss | %s",
 
@@ -510,6 +576,7 @@ def bloquear(
 # ============================================================
 # CANDLES
 # ============================================================
+
 def obter_candles(
     ativo,
     segundos,
@@ -548,38 +615,32 @@ def obter_candles(
             try:
 
                 inicio = int(
-                    c.get(
-                        "from",
-                        0
-                    )
+                    c.get("from", 0)
                 )
 
+                # ignora candle ainda aberto
                 if (
-                    inicio
-                    + segundos
+                    inicio + segundos
                     > agora
                 ):
                     continue
 
                 candles.append({
 
-                    "from": inicio,
+                    "from":
+                        inicio,
 
-                    "open": float(
-                        c["open"]
-                    ),
+                    "open":
+                        float(c["open"]),
 
-                    "close": float(
-                        c["close"]
-                    ),
+                    "close":
+                        float(c["close"]),
 
-                    "max": float(
-                        c["max"]
-                    ),
+                    "max":
+                        float(c["max"]),
 
-                    "min": float(
-                        c["min"]
-                    ),
+                    "min":
+                        float(c["min"]),
                 })
 
             except Exception:
@@ -610,6 +671,7 @@ def obter_candles(
 # ============================================================
 # INDICADORES
 # ============================================================
+
 def media(lista):
 
     if not lista:
@@ -748,6 +810,7 @@ def macd(valores):
 # ============================================================
 # ANÁLISE
 # ============================================================
+
 def analisar(candles):
 
     if len(candles) < 60:
@@ -772,8 +835,9 @@ def analisar(candles):
 
 
     # ========================================================
-    # EMA
+    # EMA 20 / 50
     # ========================================================
+
     e20 = ema(
         closes,
         20
@@ -815,6 +879,7 @@ def analisar(candles):
     # ========================================================
     # RSI
     # ========================================================
+
     vrsi = rsi(
         closes
     )
@@ -841,6 +906,7 @@ def analisar(candles):
     # ========================================================
     # BOLLINGER
     # ========================================================
+
     ult20 = closes[-20:]
 
     mm = media(
@@ -885,6 +951,7 @@ def analisar(candles):
     # ========================================================
     # PRICE ACTION
     # ========================================================
+
     corpo = abs(
         ultimo["close"]
         - ultimo["open"]
@@ -930,6 +997,7 @@ def analisar(candles):
     # ========================================================
     # SUPORTE / RESISTÊNCIA
     # ========================================================
+
     janela = candles[
         -20:-1
     ]
@@ -976,6 +1044,7 @@ def analisar(candles):
     # ========================================================
     # BREAKOUT
     # ========================================================
+
     janela_break = candles[
         -11:-1
     ]
@@ -1010,6 +1079,7 @@ def analisar(candles):
     # ========================================================
     # MACD
     # ========================================================
+
     vm = macd(
         closes
     )
@@ -1036,6 +1106,7 @@ def analisar(candles):
     # ========================================================
     # MOMENTUM
     # ========================================================
+
     momentum = (
         closes[-1]
         - closes[-6]
@@ -1059,20 +1130,27 @@ def analisar(candles):
 
 
     # ========================================================
-    # RESULTADO DA ANÁLISE
+    # DECISÃO
     # ========================================================
+
     if call >= put:
 
         direcao = "call"
+
         score = call
+
         oposto = put
+
         motivos = motivos_call
 
     else:
 
         direcao = "put"
+
         score = put
+
         oposto = call
+
         motivos = motivos_put
 
 
@@ -1086,19 +1164,24 @@ def analisar(candles):
 
     return {
 
-        "direcao": direcao,
+        "direcao":
+            direcao,
 
-        "score": score,
+        "score":
+            score,
 
-        "oposto": oposto,
+        "oposto":
+            oposto,
 
-        "motivos": motivos,
+        "motivos":
+            motivos,
     }
 
 
 # ============================================================
-# V9 - ORDEM DIGITAL SPOT
+# ORDEM DIGITAL
 # ============================================================
+
 def executar_ordem(
     banca,
     ativo,
@@ -1126,6 +1209,10 @@ def executar_ordem(
         )
 
 
+    # ========================================================
+    # PRACTICE OBRIGATÓRIO
+    # ========================================================
+
     if not garantir_practice():
 
         return (
@@ -1135,9 +1222,8 @@ def executar_ordem(
 
 
     log.info(
-
-        "V9 BUY DIGITAL SPOT | "
-        "%s | %s | M%s | %s | $%.2f",
+        "BUY DIGITAL | "
+        "%s | %s | M%s | %s | %.2f",
 
         banca,
         ativo,
@@ -1188,25 +1274,17 @@ def executar_ordem(
         with api_lock:
 
             resposta = metodo(
-
                 ativo,
-
                 float(valor),
-
                 direcao.lower(),
-
                 int(expiracao),
             )
 
 
         log.info(
-
-            "V9 RESPOSTA %s | %s | %s",
-
+            "RESPOSTA %s | %s | %s",
             nome_metodo,
-
             ativo,
-
             resposta
         )
 
@@ -1262,16 +1340,13 @@ def executar_ordem(
 
 
             log.info(
-
-                "ORDEM ACEITA | %s | %s | "
-                "M%s | id=%s | PRACTICE",
+                "ORDEM ACEITA | "
+                "%s | %s | M%s | "
+                "id=%s | PRACTICE",
 
                 ativo,
-
                 direcao.upper(),
-
                 expiracao,
-
                 order_id
             )
 
@@ -1296,33 +1371,15 @@ def executar_ordem(
 
 
         motivo = str(
-
             order_id
-
             if order_id is not None
-
             else resposta
         )
 
 
-        log.warning(
-
-            "ORDEM RECUSADA | %s | M%s | %s",
-
-            ativo,
-
-            expiracao,
-
-            motivo
-        )
-
-
         bloquear(
-
             ativo,
-
             expiracao,
-
             motivo
         )
 
@@ -1336,24 +1393,18 @@ def executar_ordem(
     except Exception as e:
 
         log.exception(
-
-            "V9 ERRO ORDEM DIGITAL | "
+            "ERRO ORDEM DIGITAL | "
             "%s | M%s | %s",
 
             ativo,
-
             expiracao,
-
             e
         )
 
 
         bloquear(
-
             ativo,
-
             expiracao,
-
             str(e)
         )
 
@@ -1365,8 +1416,9 @@ def executar_ordem(
 
 
 # ============================================================
-# RESULTADO
+# RESULTADO DIGITAL
 # ============================================================
+
 def aguardar_resultado(
     order_id
 ):
@@ -1375,8 +1427,7 @@ def aguardar_resultado(
 
 
     while (
-        time.time()
-        - inicio
+        time.time() - inicio
         < 900
     ):
 
@@ -1399,7 +1450,6 @@ def aguardar_resultado(
 
 
             if (
-
                 isinstance(
                     resposta,
                     (tuple, list)
@@ -1409,6 +1459,7 @@ def aguardar_resultado(
             ):
 
                 fechado = resposta[0]
+
                 valor = resposta[1]
 
 
@@ -1450,9 +1501,7 @@ def aguardar_resultado(
         except Exception as e:
 
             log.debug(
-
                 "CHECK RESULTADO | %s",
-
                 e
             )
 
@@ -1469,14 +1518,14 @@ def aguardar_resultado(
 # ============================================================
 # ESTATÍSTICAS
 # ============================================================
+
 def taxa(
     wins,
     losses
 ):
 
     total = (
-        wins
-        + losses
+        wins + losses
     )
 
     if total == 0:
@@ -1507,11 +1556,8 @@ def registrar_win(
 
 
         chave = (
-
             "win_direto"
-
             if nivel == 0
-
             else f"win_g{nivel}"
         )
 
@@ -1523,10 +1569,7 @@ def registrar_win(
             ] += 1
 
 
-        if (
-            chave
-            in estado_frentes[banca]
-        ):
+        if chave in estado_frentes[banca]:
 
             estado_frentes[
                 banca
@@ -1555,20 +1598,11 @@ def registrar_loss(
 # ============================================================
 # GALE X2
 # ============================================================
+
 def valores_do_ciclo(
     entrada,
     quantidade_gales
 ):
-
-    """
-    Gale X2.
-
-    Exemplo no dia 3:
-
-    Entrada = R$3
-    G1      = R$6
-    G2      = R$12
-    """
 
     return [
 
@@ -1585,14 +1619,20 @@ def valores_do_ciclo(
 
 
 # ============================================================
-# RESET DA GESTÃO
+# SINCRONIZA BASE DO DIA
 # ============================================================
-def resetar_gestao(
-    banca,
-    motivo
+
+def sincronizar_entrada_base_do_dia(
+    banca
 ):
 
-    # Busca novamente o dia atual no Brasil.
+    """
+    Se a banca estiver no Ciclo 1 normal,
+    atualiza a entrada para o dia atual.
+
+    NÃO altera uma recuperação em andamento.
+    """
+
     entrada_base = (
         obter_entrada_base()
     )
@@ -1605,10 +1645,44 @@ def resetar_gestao(
         )
 
 
+        if (
+            not dados["em_recuperacao"]
+            and int(
+                dados["ciclo_gestao"]
+            ) == 1
+        ):
+
+            dados[
+                "entrada_atual"
+            ] = round(
+                entrada_base,
+                2
+            )
+
+
+# ============================================================
+# RESET GESTÃO
+# ============================================================
+
+def resetar_gestao(
+    banca,
+    motivo
+):
+
+    entrada_base = (
+        obter_entrada_base()
+    )
+
+
+    with estado_lock:
+
+        dados = (
+            estado_frentes[banca]
+        )
+
         dados[
             "ciclo_gestao"
         ] = 1
-
 
         dados[
             "entrada_atual"
@@ -1617,16 +1691,13 @@ def resetar_gestao(
             2
         )
 
-
         dados[
             "prejuizo_acumulado"
         ] = 0.0
 
-
         dados[
             "em_recuperacao"
         ] = False
-
 
         dados[
             "sinais_recuperacao"
@@ -1634,30 +1705,26 @@ def resetar_gestao(
 
 
     log.info(
-
-        "GESTÃO RESETADA | %s | "
-        "entrada=%.2f | motivo=%s",
+        "GESTÃO RESETADA | "
+        "%s | entrada=%.2f | %s",
 
         banca,
-
         entrada_base,
-
         motivo
     )
 
 
 # ============================================================
-# LOSS COMPLETO
+# LOSS CICLO
 # ============================================================
+
 def aplicar_loss_ciclo(
     banca,
     perda_ciclo
 ):
 
     perda_ciclo = round(
-        abs(
-            float(perda_ciclo)
-        ),
+        abs(float(perda_ciclo)),
         2
     )
 
@@ -1689,7 +1756,6 @@ def aplicar_loss_ciclo(
 
 
         ciclo_atual = int(
-
             dados[
                 "ciclo_gestao"
             ]
@@ -1699,18 +1765,14 @@ def aplicar_loss_ciclo(
         dados[
             "ciclo_gestao"
         ] = min(
-
             ciclo_atual + 1,
-
             MAX_CICLOS_GESTAO
         )
 
 
         acrescimo = round(
-
             perda_ciclo
             * RECUPERACAO_PERCENTUAL,
-
             2
         )
 
@@ -1759,17 +1821,16 @@ def aplicar_loss_ciclo(
 
 
 # ============================================================
-# WIN DURANTE RECUPERAÇÃO
+# WIN RECUPERAÇÃO
 # ============================================================
+
 def aplicar_win_recuperacao(
     banca,
     lucro
 ):
 
     lucro = max(
-
         0.0,
-
         round(
             float(lucro),
             2
@@ -1789,11 +1850,8 @@ def aplicar_win_recuperacao(
         ]:
 
             return {
-
                 "recuperado": True,
-
                 "restante": 0.0,
-
                 "sinais": 0,
             }
 
@@ -1803,7 +1861,6 @@ def aplicar_win_recuperacao(
         ] = round(
 
             max(
-
                 0.0,
 
                 dados[
@@ -1823,7 +1880,6 @@ def aplicar_win_recuperacao(
             ]
         )
 
-
         sinais = (
             dados[
                 "sinais_recuperacao"
@@ -1838,23 +1894,16 @@ def aplicar_win_recuperacao(
             "prejuizo_recuperado"
         )
 
-
         return {
-
             "recuperado": True,
-
             "restante": 0.0,
-
             "sinais": sinais,
         }
 
 
     return {
-
         "recuperado": False,
-
         "restante": restante,
-
         "sinais": sinais,
     }
 
@@ -1862,6 +1911,7 @@ def aplicar_win_recuperacao(
 # ============================================================
 # CONTROLE DOS 10 SINAIS
 # ============================================================
+
 def iniciar_sinal_gestao(
     banca
 ):
@@ -1896,8 +1946,37 @@ def iniciar_sinal_gestao(
 
 
 # ============================================================
-# CICLO
+# LIBERAR BANCA
 # ============================================================
+
+def liberar_banca(
+    banca,
+    ativo
+):
+
+    with estado_lock:
+
+        ativos_em_uso.discard(
+            ativo
+        )
+
+        dados = (
+            estado_frentes[banca]
+        )
+
+        dados["ocupada"] = False
+        dados["ativo"] = None
+        dados["direcao"] = None
+        dados["score"] = None
+        dados["timeframe"] = None
+        dados["expiracao"] = None
+        dados["order_id"] = None
+
+
+# ============================================================
+# CICLO DA OPERAÇÃO
+# ============================================================
+
 def ciclo(
     banca,
     ativo,
@@ -1909,12 +1988,13 @@ def ciclo(
 
     try:
 
-        # ====================================================
-        # LIMITE DOS 10 SINAIS
-        # ====================================================
+        # ================================================
+        # LIMITE RECUPERAÇÃO
+        # ================================================
+
         with estado_lock:
 
-            limite_atingido = (
+            limite = (
 
                 estado_frentes[
                     banca
@@ -1934,7 +2014,7 @@ def ciclo(
             )
 
 
-        if limite_atingido:
+        if limite:
 
             resetar_gestao(
                 banca,
@@ -1942,25 +2022,13 @@ def ciclo(
             )
 
 
-            entrada_base = (
-                obter_entrada_base()
-            )
+        # ================================================
+        # ATUALIZA BASE DO DIA
+        # ================================================
 
-
-            telegram(
-
-                "🔄 RECUPERAÇÃO ENCERRADA\n"
-
-                f"🏦 {banca}\n"
-
-                f"Limite de "
-                f"{MAX_SINAIS_RECUPERACAO} "
-                f"sinais atingido.\n"
-
-                f"🇧🇷 Nova sequência: "
-                f"Ciclo 1 / entrada "
-                f"{entrada_base:.2f}"
-            )
+        sincronizar_entrada_base_do_dia(
+            banca
+        )
 
 
         if not iniciar_sinal_gestao(
@@ -1970,90 +2038,47 @@ def ciclo(
             return
 
 
-        # ====================================================
-        # DADOS DA GESTÃO
-        # ====================================================
         with estado_lock:
 
             dados = (
                 estado_frentes[banca]
             )
 
-
             ciclo_atual = int(
-
                 dados[
                     "ciclo_gestao"
                 ]
             )
 
-
             entrada_atual = round(
-
                 float(
                     dados[
                         "entrada_atual"
                     ]
                 ),
-
                 2
             )
 
-
             em_recuperacao = bool(
-
                 dados[
                     "em_recuperacao"
                 ]
             )
 
-
             sinal_rec = int(
-
                 dados[
                     "sinais_recuperacao"
                 ]
             )
 
-
             prejuizo_antes = round(
-
                 float(
                     dados[
                         "prejuizo_acumulado"
                     ]
                 ),
-
                 2
             )
-
-
-            estado_frentes[
-                banca
-            ][
-                "ocupada"
-            ] = True
-
-
-            estado_frentes[
-                banca
-            ][
-                "ativo"
-            ] = ativo
-
-
-            estado_frentes[
-                banca
-            ][
-                "direcao"
-            ] = direcao
-
-
-            estado_frentes[
-                banca
-            ][
-                "score"
-            ] = score
 
 
         quantidade_gales = (
@@ -2064,35 +2089,23 @@ def ciclo(
 
 
         valores = valores_do_ciclo(
-
             entrada_atual,
-
             quantidade_gales
         )
 
 
         log.info(
-
-            "GESTÃO | %s | ciclo=%s/4 | "
-            "entrada=%.2f | gales=%s | "
-            "recuperacao=%s | "
-            "sinal_rec=%s/10 | "
-            "prejuizo=%.2f | valores=%s",
+            "GESTÃO | %s | M%s | "
+            "ciclo=%s/4 | entrada=%.2f | "
+            "gales=%s | recuperação=%s | "
+            "valores=%s",
 
             banca,
-
+            timeframe_analise,
             ciclo_atual,
-
             entrada_atual,
-
             quantidade_gales,
-
             em_recuperacao,
-
-            sinal_rec,
-
-            prejuizo_antes,
-
             valores
         )
 
@@ -2100,23 +2113,19 @@ def ciclo(
         perdas_deste_sinal = 0.0
 
 
-        # ====================================================
+        # ================================================
         # ENTRADA + GALES
-        # ====================================================
+        # ================================================
+
         for nivel, valor in enumerate(
             valores
         ):
 
             ok, order_id = executar_ordem(
-
                 banca,
-
                 ativo,
-
                 valor,
-
                 direcao,
-
                 expiracao
             )
 
@@ -2124,11 +2133,8 @@ def ciclo(
             if not ok:
 
                 log.warning(
-
                     "%s | ORDEM NÃO EXECUTADA | %s",
-
                     banca,
-
                     order_id
                 )
 
@@ -2167,19 +2173,15 @@ def ciclo(
                 ] = order_id
 
 
-            # =================================================
+            # ============================================
             # NOVO SINAL
-            # =================================================
+            # ============================================
+
             if nivel == 0:
 
                 mercado = (
-
                     "OTC"
-
-                    if ativo.endswith(
-                        "-OTC"
-                    )
-
+                    if ativo.endswith("-OTC")
                     else "NORMAL"
                 )
 
@@ -2187,11 +2189,8 @@ def ciclo(
                 sequencia = " → ".join(
 
                     (
-
                         f"Entrada {v:.2f}"
-
                         if i == 0
-
                         else f"G{i} {v:.2f}"
                     )
 
@@ -2201,48 +2200,24 @@ def ciclo(
 
 
                 telegram(
-
-                    "📊 NOVO SINAL\n"
-
+                    "📊 NOVO SINAL DIGITAL\n"
                     f"🏦 {banca}\n"
-
-                    f"💱 {ativo} | "
-                    f"{mercado}\n"
-
-                    f"📈 Análise: "
-                    f"M{timeframe_analise}\n"
-
-                    f"⏱ Digital: "
-                    f"M{expiracao}\n"
-
-                    f"🎯 "
-                    f"{direcao.upper()}\n"
-
-                    f"🔥 Score: "
-                    f"{score}/100\n"
-
-                    f"🔁 Ciclo gestão: "
-                    f"{ciclo_atual}/4\n"
-
-                    f"🛡 Gales: "
-                    f"{quantidade_gales}\n"
-
+                    f"💱 {ativo} | {mercado}\n"
+                    f"📈 Análise: M{timeframe_analise}\n"
+                    f"⏱ Digital: M{expiracao}\n"
+                    f"🎯 {direcao.upper()}\n"
+                    f"🔥 Score: {score}/100\n"
+                    f"🔁 Ciclo: {ciclo_atual}/4\n"
+                    f"🛡 Gales: {quantidade_gales}\n"
                     f"💰 {sequencia}\n"
-
                     f"♻️ Recuperação: "
                     f"{'SIM' if em_recuperacao else 'NÃO'}"
-
                     + (
-
-                        f" "
-                        f"({sinal_rec}/"
+                        f" ({sinal_rec}/"
                         f"{MAX_SINAIS_RECUPERACAO})\n"
-
                         f"📉 A recuperar: "
                         f"{prejuizo_antes:.2f}"
-
                         if em_recuperacao
-
                         else ""
                     )
                 )
@@ -2265,13 +2240,13 @@ def ciclo(
                         "score":
                             score,
 
-                        "analise":
+                        "timeframe":
                             timeframe_analise,
 
                         "expiracao":
                             expiracao,
 
-                        "ciclo_gestao":
+                        "ciclo":
                             ciclo_atual,
 
                         "entrada":
@@ -2283,9 +2258,6 @@ def ciclo(
                         "recuperacao":
                             em_recuperacao,
 
-                        "sinal_recuperacao":
-                            sinal_rec,
-
                         "data":
                             datetime.now(
                                 timezone.utc
@@ -2293,9 +2265,10 @@ def ciclo(
                     }
 
 
-            # =================================================
-            # AGUARDA RESULTADO
-            # =================================================
+            # ============================================
+            # RESULTADO
+            # ============================================
+
             resultado, lucro = (
                 aguardar_resultado(
                     order_id
@@ -2304,28 +2277,22 @@ def ciclo(
 
 
             log.info(
-
                 "RESULTADO | %s | %s | "
-                "ciclo=%s | nivel=%s | "
-                "%s | lucro=%s",
+                "M%s | nivel=%s | %s | %s",
 
                 banca,
-
                 ativo,
-
-                ciclo_atual,
-
+                timeframe_analise,
                 nivel,
-
                 resultado,
-
                 lucro
             )
 
 
-            # =================================================
+            # ============================================
             # WIN
-            # =================================================
+            # ============================================
+
             if resultado == "win":
 
                 registrar_win(
@@ -2335,52 +2302,40 @@ def ciclo(
 
 
                 nome = (
-
                     "WIN"
-
                     if nivel == 0
-
                     else f"WIN G{nivel}"
                 )
 
 
-                w = stats[
-                    "wins"
-                ]
-
-                l = stats[
-                    "losses"
-                ]
+                rec = aplicar_win_recuperacao(
+                    banca,
+                    lucro
+                )
 
 
-                rec = (
-                    aplicar_win_recuperacao(
-                        banca,
-                        lucro
-                    )
+                w = stats["wins"]
+                l = stats["losses"]
+
+
+                saldo_atual = (
+                    texto_saldo()
                 )
 
 
                 telegram(
-
                     f"✅ {nome}\n"
-
                     f"🏦 {banca}\n"
-
                     f"💱 {ativo}\n"
-
-                    f"🔁 Ciclo: "
-                    f"{ciclo_atual}/4\n"
-
-                    f"💵 Lucro informado: "
-                    f"{float(lucro):.2f}\n"
-
+                    f"⏱ M{timeframe_analise} / "
+                    f"Digital M{expiracao}\n"
+                    f"🔁 Ciclo: {ciclo_atual}/4\n"
+                    f"💵 Lucro: {float(lucro):.2f}\n"
+                    f"💰 Saldo atual PRACTICE: "
+                    f"{saldo_atual}\n"
                     f"♻️ Restante recuperação: "
                     f"{rec['restante']:.2f}\n"
-
-                    f"📊 {w} WIN / "
-                    f"{l} LOSS\n"
-
+                    f"📊 {w} WIN / {l} LOSS\n"
                     f"🎯 Assertividade: "
                     f"{taxa(w, l)}%"
                 )
@@ -2411,9 +2366,7 @@ def ciclo(
                 if atingiu_10:
 
                     resetar_gestao(
-
                         banca,
-
                         "10_sinais_sem_recuperacao_total"
                     )
 
@@ -2421,25 +2374,14 @@ def ciclo(
                 return
 
 
-            # =================================================
+            # ============================================
             # DRAW / TIMEOUT
-            # =================================================
+            # ============================================
+
             if resultado in (
                 "draw",
                 "timeout"
             ):
-
-                log.warning(
-
-                    "%s | %s | "
-                    "ciclo encerrado "
-                    "sem contabilizar LOSS",
-
-                    banca,
-
-                    resultado
-                )
-
 
                 if em_recuperacao:
 
@@ -2466,105 +2408,83 @@ def ciclo(
                 return
 
 
-            # =================================================
+            # ============================================
             # LOSS
-            # =================================================
+            # ============================================
+
             if resultado == "loss":
 
                 perdas_deste_sinal = round(
 
                     perdas_deste_sinal
-
-                    + abs(
-                        float(valor)
-                    ),
+                    + abs(float(valor)),
 
                     2
                 )
 
 
-                if (
-                    nivel
-                    < quantidade_gales
-                ):
+                if nivel < quantidade_gales:
 
                     log.info(
-
-                        "%s | LOSS nível %s | "
-                        "iniciando G%s",
-
+                        "%s | LOSS nível %s | G%s",
                         banca,
-
                         nivel,
-
                         nivel + 1
                     )
-
 
                     time.sleep(1)
 
                     continue
 
 
-                # =============================================
+                # ========================================
                 # LOSS COMPLETO
-                # =============================================
+                # ========================================
+
                 registrar_loss(
                     banca
                 )
 
 
                 gestao = aplicar_loss_ciclo(
-
                     banca,
-
                     perdas_deste_sinal
                 )
 
 
-                w = stats[
-                    "wins"
-                ]
+                w = stats["wins"]
+                l = stats["losses"]
 
-                l = stats[
-                    "losses"
-                ]
+
+                saldo_atual = (
+                    texto_saldo()
+                )
 
 
                 telegram(
-
                     "❌ LOSS COMPLETO\n"
-
                     f"🏦 {banca}\n"
-
                     f"💱 {ativo}\n"
-
+                    f"⏱ M{timeframe_analise} / "
+                    f"Digital M{expiracao}\n"
                     f"🔁 Ciclo encerrado: "
                     f"{ciclo_atual}/4\n"
-
                     f"💸 LOSS do ciclo: "
                     f"{perdas_deste_sinal:.2f}\n"
-
-                    f"➕ 10% somado à "
-                    f"próxima entrada: "
+                    f"💰 Saldo atual PRACTICE: "
+                    f"{saldo_atual}\n"
+                    f"➕ 10% na próxima entrada: "
                     f"{gestao['acrescimo']:.2f}\n"
-
                     f"➡️ Próximo ciclo: "
                     f"{gestao['ciclo']}/4\n"
-
-                    f"💰 Próxima entrada: "
+                    f"💵 Próxima entrada: "
                     f"{gestao['entrada']:.2f}\n"
-
                     f"📉 Prejuízo acumulado: "
                     f"{gestao['prejuizo']:.2f}\n"
-
-                    f"♻️ Sinais recuperação: "
+                    f"♻️ Recuperação: "
                     f"{gestao['sinais']}/"
                     f"{MAX_SINAIS_RECUPERACAO}\n"
-
-                    f"📊 {w} WIN / "
-                    f"{l} LOSS\n"
-
+                    f"📊 {w} WIN / {l} LOSS\n"
                     f"🎯 Assertividade: "
                     f"{taxa(w, l)}%"
                 )
@@ -2595,9 +2515,7 @@ def ciclo(
                 if atingiu_10:
 
                     resetar_gestao(
-
                         banca,
-
                         "10_sinais_sem_recuperacao_total"
                     )
 
@@ -2607,61 +2525,155 @@ def ciclo(
 
     finally:
 
-        with estado_lock:
+        liberar_banca(
+            banca,
+            ativo
+        )
 
-            ativos_em_uso.discard(
-                ativo
+
+# ============================================================
+# LOCALIZA UMA BANCA LIVRE
+# ============================================================
+
+def reservar_banca(
+    ativo,
+    direcao,
+    score,
+    timeframe,
+    expiracao
+):
+
+    with estado_lock:
+
+        # Mesmo ativo não pode ser usado simultaneamente.
+        if ativo in ativos_em_uso:
+            return None
+
+
+        for banca in BANCAS:
+
+            dados = (
+                estado_frentes[banca]
             )
 
 
-            estado_frentes[
-                banca
-            ][
+            if not dados[
                 "ocupada"
-            ] = False
+            ]:
+
+                dados[
+                    "ocupada"
+                ] = True
+
+                dados[
+                    "ativo"
+                ] = ativo
+
+                dados[
+                    "direcao"
+                ] = direcao
+
+                dados[
+                    "score"
+                ] = score
+
+                dados[
+                    "timeframe"
+                ] = timeframe
+
+                dados[
+                    "expiracao"
+                ] = expiracao
 
 
-            estado_frentes[
-                banca
-            ][
-                "ativo"
-            ] = None
+                ativos_em_uso.add(
+                    ativo
+                )
 
 
-            estado_frentes[
-                banca
-            ][
-                "direcao"
-            ] = None
+                return banca
 
 
-            estado_frentes[
-                banca
-            ][
-                "score"
-            ] = None
-
-
-            estado_frentes[
-                banca
-            ][
-                "order_id"
-            ] = None
+    return None
 
 
 # ============================================================
-# SCANNER
+# DISPARA SINAL PARA A PRIMEIRA BANCA LIVRE
 # ============================================================
-def scanner(
-    banca
+
+def disparar_sinal(
+    ativo,
+    direcao,
+    score,
+    timeframe,
+    expiracao
 ):
 
-    cfg = FRENTES[
-        banca
-    ]
+    banca = reservar_banca(
+        ativo,
+        direcao,
+        score,
+        timeframe,
+        expiracao
+    )
 
-    tf = cfg[
-        "timeframe_analise"
+
+    if banca is None:
+        return False
+
+
+    log.info(
+        "SINAL RESERVADO | "
+        "%s | %s | M%s | "
+        "Digital M%s | %s | score=%s",
+
+        banca,
+        ativo,
+        timeframe,
+        expiracao,
+        direcao.upper(),
+        score
+    )
+
+
+    thread = threading.Thread(
+
+        target=ciclo,
+
+        args=(
+            banca,
+            ativo,
+            direcao,
+            score,
+            timeframe,
+            expiracao,
+        ),
+
+        daemon=True,
+
+        name=(
+            f"operacao-{banca}-"
+            f"M{timeframe}-{ativo}"
+        )
+    )
+
+
+    thread.start()
+
+
+    return True
+
+
+# ============================================================
+# SCANNER DE UM TIMEFRAME
+# ============================================================
+
+def scanner_timeframe(
+    timeframe
+):
+
+    cfg = TIMEFRAMES[
+        timeframe
     ]
 
     segundos = cfg[
@@ -2674,14 +2686,10 @@ def scanner(
 
 
     log.info(
+        "SCANNER M%s INICIADO | "
+        "Digital M%s",
 
-        "%s INICIADA | "
-        "análise=M%s | digital=M%s",
-
-        banca,
-
-        tf,
-
+        timeframe,
         expiracao
     )
 
@@ -2697,24 +2705,40 @@ def scanner(
                 continue
 
 
-            melhor = None
-            analisados = 0
-
-
             log.info(
-
-                "%s | VARREDURA | "
-                "análise M%s | Digital M%s",
-
-                banca,
-
-                tf,
-
+                "VARREDURA M%s | Digital M%s",
+                timeframe,
                 expiracao
             )
 
 
+            # =================================================
+            # O PRIMEIRO SINAL APROVADO TENTA PEGAR BANCA LIVRE
+            # =================================================
+
             for ativo in ATIVOS:
+
+                # Se todas as bancas estiverem ocupadas,
+                # não precisa continuar analisando.
+
+                with estado_lock:
+
+                    existe_banca_livre = any(
+
+                        not estado_frentes[
+                            banca
+                        ][
+                            "ocupada"
+                        ]
+
+                        for banca in BANCAS
+                    )
+
+
+                if not existe_banca_livre:
+
+                    break
+
 
                 if esta_bloqueado(
                     ativo,
@@ -2726,20 +2750,13 @@ def scanner(
 
                 with estado_lock:
 
-                    if (
-                        ativo
-                        in ativos_em_uso
-                    ):
-
+                    if ativo in ativos_em_uso:
                         continue
 
 
                 candles = obter_candles(
-
                     ativo,
-
                     segundos,
-
                     100
                 )
 
@@ -2753,9 +2770,6 @@ def scanner(
                     continue
 
 
-                analisados += 1
-
-
                 resultado = analisar(
                     candles
                 )
@@ -2764,19 +2778,24 @@ def scanner(
                 if resultado:
 
                     log.info(
-
-                        "CANDIDATO | %s | %s | "
-                        "análise=M%s | "
-                        "digital=M%s | %s | "
+                        "CANDIDATO | "
+                        "%s | M%s | %s | "
                         "score=%s",
 
-                        banca,
+                        ativo,
+                        timeframe,
+                        resultado[
+                            "direcao"
+                        ],
+                        resultado[
+                            "score"
+                        ]
+                    )
+
+
+                    reservado = disparar_sinal(
 
                         ativo,
-
-                        tf,
-
-                        expiracao,
 
                         resultado[
                             "direcao"
@@ -2784,140 +2803,26 @@ def scanner(
 
                         resultado[
                             "score"
-                        ]
+                        ],
+
+                        timeframe,
+
+                        expiracao
                     )
 
 
-                    if (
+                    if reservado:
 
-                        melhor is None
-
-                        or
-
-                        resultado[
-                            "score"
-                        ]
-
-                        > melhor[
-                            "score"
-                        ]
-                    ):
-
-                        melhor = {
-
-                            "ativo":
-                                ativo,
-
-                            "direcao":
-                                resultado[
-                                    "direcao"
-                                ],
-
-                            "score":
-                                resultado[
-                                    "score"
-                                ],
-
-                            "motivos":
-                                resultado[
-                                    "motivos"
-                                ],
-                        }
+                        log.info(
+                            "SINAL APROVADO E DISTRIBUÍDO | "
+                            "%s | M%s",
+                            ativo,
+                            timeframe
+                        )
 
 
                 time.sleep(
                     INTERVALO_ENTRE_ATIVOS
-                )
-
-
-            log.info(
-
-                "%s | FIM VARREDURA | "
-                "válidos=%s | melhor=%s",
-
-                banca,
-
-                analisados,
-
-                melhor[
-                    "ativo"
-                ]
-
-                if melhor
-
-                else "nenhum"
-            )
-
-
-            if melhor:
-
-                ativo = melhor[
-                    "ativo"
-                ]
-
-
-                with estado_lock:
-
-                    if (
-                        ativo
-                        in ativos_em_uso
-                    ):
-
-                        time.sleep(
-                            INTERVALO_ANALISE
-                        )
-
-                        continue
-
-
-                    ativos_em_uso.add(
-                        ativo
-                    )
-
-
-                log.info(
-
-                    "SINAL APROVADO | "
-                    "%s | %s | "
-                    "análise=M%s | "
-                    "digital=M%s | %s | "
-                    "score=%s",
-
-                    banca,
-
-                    ativo,
-
-                    tf,
-
-                    expiracao,
-
-                    melhor[
-                        "direcao"
-                    ],
-
-                    melhor[
-                        "score"
-                    ]
-                )
-
-
-                ciclo(
-
-                    banca,
-
-                    ativo,
-
-                    melhor[
-                        "direcao"
-                    ],
-
-                    melhor[
-                        "score"
-                    ],
-
-                    tf,
-
-                    expiracao
                 )
 
 
@@ -2929,21 +2834,18 @@ def scanner(
         except Exception as e:
 
             log.exception(
-
-                "SCANNER ERRO | %s | %s",
-
-                banca,
-
+                "SCANNER M%s ERRO | %s",
+                timeframe,
                 e
             )
-
 
             time.sleep(5)
 
 
 # ============================================================
-# WORKER / SUPERVISOR V9
+# SUPERVISOR DOS SCANNERS
 # ============================================================
+
 scanner_threads = {}
 
 scanner_threads_lock = (
@@ -2951,8 +2853,8 @@ scanner_threads_lock = (
 )
 
 
-def iniciar_scanner_supervisionado(
-    banca,
+def iniciar_scanner(
+    timeframe,
     atraso=0
 ):
 
@@ -2964,8 +2866,8 @@ def iniciar_scanner_supervisionado(
                 atraso
             )
 
-        scanner(
-            banca
+        scanner_timeframe(
+            timeframe
         )
 
 
@@ -2975,7 +2877,7 @@ def iniciar_scanner_supervisionado(
 
         daemon=True,
 
-        name=f"scanner-{banca}"
+        name=f"scanner-M{timeframe}"
     )
 
 
@@ -2985,17 +2887,13 @@ def iniciar_scanner_supervisionado(
     with scanner_threads_lock:
 
         scanner_threads[
-            banca
+            timeframe
         ] = thread
 
 
     log.info(
-
-        "V9 SUPERVISOR | "
-        "scanner iniciado | %s | thread=%s",
-
-        banca,
-
+        "SCANNER M%s CRIADO | %s",
+        timeframe,
         thread.name
     )
 
@@ -3006,7 +2904,7 @@ def iniciar_scanner_supervisionado(
 def supervisor():
 
     log.info(
-        "V9 SUPERVISOR INICIADO"
+        "SUPERVISOR V10 INICIADO"
     )
 
 
@@ -3021,10 +2919,10 @@ def supervisor():
                 )
 
 
-            for banca in FRENTES:
+            for timeframe in TIMEFRAMES:
 
                 thread = snapshot.get(
-                    banca
+                    timeframe
                 )
 
 
@@ -3034,19 +2932,15 @@ def supervisor():
                 ):
 
                     log.error(
+                        "SCANNER M%s PAROU | "
+                        "REINICIANDO",
 
-                        "V9 SUPERVISOR | "
-                        "scanner parado | %s | "
-                        "reiniciando",
-
-                        banca
+                        timeframe
                     )
 
 
-                    iniciar_scanner_supervisionado(
-
-                        banca,
-
+                    iniciar_scanner(
+                        timeframe,
                         0
                     )
 
@@ -3057,20 +2951,21 @@ def supervisor():
         except Exception as e:
 
             log.exception(
-
-                "V9 SUPERVISOR ERRO | %s",
-
+                "SUPERVISOR ERRO | %s",
                 e
             )
-
 
             time.sleep(5)
 
 
+# ============================================================
+# WORKER
+# ============================================================
+
 def worker():
 
     log.info(
-        "WORKER V9 INICIADO"
+        "WORKER V10 INICIADO"
     )
 
 
@@ -3079,16 +2974,23 @@ def worker():
         time.sleep(10)
 
 
-    for indice, banca in enumerate(
-        FRENTES
-    ):
+    # Três scanners simultâneos:
+    # M1 / M5 / M15
 
-        iniciar_scanner_supervisionado(
+    iniciar_scanner(
+        1,
+        0
+    )
 
-            banca,
+    iniciar_scanner(
+        5,
+        2
+    )
 
-            indice * 3
-        )
+    iniciar_scanner(
+        15,
+        4
+    )
 
 
     threading.Thread(
@@ -3105,6 +3007,7 @@ def worker():
 # ============================================================
 # STATUS WEB
 # ============================================================
+
 @app.route("/")
 def home():
 
@@ -3115,9 +3018,11 @@ def home():
 
         if conectado():
 
-            saldo = (
-                api.get_balance()
-            )
+            with api_lock:
+
+                saldo = (
+                    api.get_balance()
+                )
 
     except Exception:
 
@@ -3134,14 +3039,8 @@ def home():
 
                 "assertividade":
                     taxa(
-
-                        dados[
-                            "wins"
-                        ],
-
-                        dados[
-                            "losses"
-                        ]
+                        dados["wins"],
+                        dados["losses"]
                     ),
             }
 
@@ -3156,26 +3055,13 @@ def home():
 
             "assertividade":
                 taxa(
-
-                    stats[
-                        "wins"
-                    ],
-
-                    stats[
-                        "losses"
-                    ]
+                    stats["wins"],
+                    stats["losses"]
                 ),
         }
 
 
-    agora_brasil = datetime.now(
-        FUSO_BRASIL
-    )
-
-
-    entrada_base_dia = (
-        obter_entrada_base()
-    )
+    agora = agora_brasil()
 
 
     return jsonify({
@@ -3202,20 +3088,23 @@ def home():
             SCORE_MIN,
 
         "data_brasil":
-            agora_brasil.strftime(
-                "%d/%m/%Y"
+            agora.strftime(
+                "%d/%m/%Y %H:%M:%S"
             ),
 
         "dia_brasil":
-            agora_brasil.day,
+            agora.day,
 
         "gestao": {
 
             "entrada_base":
-                entrada_base_dia,
+                obter_entrada_base(),
 
             "entrada_base_regra":
-                "dia do mês no horário de Brasília, mínimo R$2",
+                "dia do mês Brasil, mínimo 2",
+
+            "multiplicador_gale":
+                2,
 
             "recuperacao_percentual":
                 RECUPERACAO_PERCENTUAL,
@@ -3228,31 +3117,36 @@ def home():
 
             "gales_por_ciclo":
                 GALES_POR_CICLO,
-
-            "multiplicador_gale":
-                2,
-
-            "regra":
-                "proxima entrada = entrada atual + 10% do LOSS completo anterior",
         },
 
-        "frequencias": {
+        "mercado":
+            "DIGITAL",
 
-            "BANCA 1":
-                "M1 -> Digital M1",
+        "timeframes": {
 
-            "BANCA 2":
-                "M5 -> Digital M5",
+            "M1":
+                "Digital M1",
 
-            "BANCA 3":
-                "M15 -> Digital M5",
+            "M5":
+                "Digital M5",
+
+            "M15":
+                "Digital M5",
         },
+
+        "distribuicao":
+            "primeiro sinal aprovado -> primeira banca livre",
 
         "estatisticas":
             geral,
 
-        "frentes":
+        "bancas":
             frentes,
+
+        "ativos_em_uso":
+            sorted(
+                ativos_em_uso
+            ),
 
         "ativos_com_candles":
             sorted(
@@ -3265,6 +3159,10 @@ def home():
             ),
     })
 
+
+# ============================================================
+# HEALTH
+# ============================================================
 
 @app.route("/health")
 def health():
@@ -3280,19 +3178,31 @@ def health():
         "conta":
             "PRACTICE",
 
+        "mercado":
+            "DIGITAL",
+
         "entrada_base":
             obter_entrada_base(),
 
         "dia_brasil":
-            datetime.now(
-                FUSO_BRASIL
-            ).day,
+            agora_brasil().day,
+
+        "timeframes":
+            [
+                "M1",
+                "M5",
+                "M15"
+            ],
+
+        "bancas":
+            3,
     }), 200
 
 
 # ============================================================
 # START
 # ============================================================
+
 entrada_inicial = (
     obter_entrada_base()
 )
@@ -3311,47 +3221,46 @@ log.info(
 )
 
 log.info(
+    "MERCADO = DIGITAL"
+)
+
+log.info(
+    "TIMEFRAMES = M1 + M5 + M15"
+)
+
+log.info(
+    "BANCAS = 3"
+)
+
+log.info(
     "EXECUTAR_ORDENS = %s",
     EXECUTAR_ORDENS
 )
 
 log.info(
-
-    "ENTRADA AUTOMÁTICA BRASIL | "
+    "ENTRADA BRASIL | "
     "dia=%s | base=%.2f",
 
-    datetime.now(
-        FUSO_BRASIL
-    ).day,
+    agora_brasil().day,
 
     entrada_inicial
 )
 
 log.info(
-
-    "GESTÃO = base=%.2f | "
-    "recuperação=%.0f%% | "
-    "ciclos=%s | "
-    "gales=2/3/4/5 | "
-    "multiplicador=X2 | "
-    "máximo=%s sinais",
-
-    entrada_inicial,
+    "GESTÃO | "
+    "GALE X2 | "
+    "CICLOS 2/3/4/5 GALES | "
+    "RECUPERAÇÃO %.0f%% | "
+    "MAX %s SINAIS",
 
     RECUPERACAO_PERCENTUAL * 100,
-
-    MAX_CICLOS_GESTAO,
 
     MAX_SINAIS_RECUPERACAO
 )
 
 log.info(
-
-    "MÉTODO V9 = "
-    "buy_digital_spot_v2 + "
-    "fallback buy_digital_spot + "
-    "supervisor + "
-    "gestão 4 ciclos"
+    "DISTRIBUIÇÃO = "
+    "M1/M5/M15 -> PRIMEIRA BANCA LIVRE"
 )
 
 log.info(
@@ -3373,8 +3282,6 @@ threading.Thread(
 if __name__ == "__main__":
 
     app.run(
-
         host="0.0.0.0",
-
         port=PORT
-    )
+        )

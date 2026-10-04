@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V10-10-BANCAS-X3-M1-M5-M15-DIGITAL"
+VERSAO = "IQ-V10-10-BANCAS-X3-2C-M1-M5-M15-DIGITAL"
 
 app = Flask(__name__)
 
@@ -59,6 +59,8 @@ EXECUTAR_ORDENS = (
 # ESTRATÉGIA
 # ============================================================
 
+# ESTRATÉGIA VIGENTE MANTIDA SEM ALTERAÇÕES
+
 SCORE_MIN = int(
     os.getenv("SCORE_MIN", "65")
 )
@@ -95,8 +97,27 @@ def obter_entrada_base():
 
 
 # ============================================================
-# GESTÃO
+# NOVA GESTÃO
 # ============================================================
+
+# Ciclo 1:
+# entrada + G1 + G2
+#
+# Se ocorrer LOSS completo:
+# entrada do Ciclo 2 =
+# entrada do Ciclo 1 + 10% do LOSS do Ciclo 1
+#
+# Ciclo 2:
+# entrada + G1 + G2
+#
+# Se o Ciclo 2 perder:
+# - permanece no Ciclo 2
+# - NÃO aumenta a entrada
+# - NÃO cria Ciclo 3
+#
+# Repete até:
+# - recuperar todo prejuízo; ou
+# - completar 10 sinais de recuperação.
 
 RECUPERACAO_PERCENTUAL = float(
     os.getenv(
@@ -112,18 +133,16 @@ MAX_SINAIS_RECUPERACAO = int(
     )
 )
 
-MAX_CICLOS_GESTAO = 4
+MAX_CICLOS_GESTAO = 2
 
 
 # ============================================================
-# GALES
+# GALE X3 - 2 GALES EM AMBOS OS CICLOS
 # ============================================================
 
 GALES_POR_CICLO = {
     1: 2,
-    2: 3,
-    3: 4,
-    4: 5,
+    2: 2,
 }
 
 
@@ -244,7 +263,7 @@ stats = {
 
 
 # ============================================================
-# ESTADO DAS BANCAS
+# ESTADO DAS 10 BANCAS
 # ============================================================
 
 estado_frentes = {
@@ -278,7 +297,7 @@ estado_frentes = {
 
         "ultimo_sinal": None,
 
-        # Gestão independente por banca
+        # Gestão individual
         "ciclo_gestao": 1,
 
         "entrada_atual": obter_entrada_base(),
@@ -384,9 +403,7 @@ def conectar():
             if not ok:
                 return False
 
-            # ================================================
             # PRACTICE OBRIGATÓRIO
-            # ================================================
 
             nova.change_balance(
                 "PRACTICE"
@@ -409,11 +426,14 @@ def conectar():
                 "🤖 ROBÔ V10 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
                 f"💰 Saldo: {saldo}\n"
-                f"💵 Entrada fixa: {entrada:.2f}\n\n"
+                f"💵 Entrada base: {entrada:.2f}\n\n"
                 "🏦 10 BANCAS INDEPENDENTES\n"
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
-                "📈 GALE X3\n\n"
+                "📈 GALE X3\n"
+                "🛡 2 GALES POR CICLO\n"
+                "🔁 2 CICLOS\n"
+                "♻️ RECUPERAÇÃO 10%\n\n"
                 f"🔥 Score mínimo: {SCORE_MIN}"
             )
 
@@ -443,9 +463,6 @@ def garantir_practice():
         return False
 
     try:
-
-        # Segurança:
-        # força PRACTICE novamente antes da operação.
 
         with api_lock:
 
@@ -806,7 +823,7 @@ def macd(valores):
 
 
 # ============================================================
-# ANÁLISE
+# ESTRATÉGIA ATUAL - SEM ALTERAÇÃO
 # ============================================================
 
 def analisar(candles):
@@ -832,7 +849,7 @@ def analisar(candles):
     motivos_put = []
 
 
-    # EMA 20 / 50
+    # EMA 20 / 50 = 20
 
     e20 = ema(
         closes,
@@ -872,7 +889,7 @@ def analisar(candles):
             )
 
 
-    # RSI
+    # RSI = 15
 
     vrsi = rsi(
         closes
@@ -897,7 +914,7 @@ def analisar(candles):
             )
 
 
-    # BOLLINGER
+    # BOLLINGER = 10
 
     ult20 = closes[-20:]
 
@@ -940,7 +957,7 @@ def analisar(candles):
         )
 
 
-    # PRICE ACTION
+    # PRICE ACTION = 15
 
     corpo = abs(
         ultimo["close"]
@@ -984,7 +1001,7 @@ def analisar(candles):
                 )
 
 
-    # SUPORTE / RESISTÊNCIA
+    # SUPORTE / RESISTÊNCIA = 10
 
     janela = candles[
         -20:-1
@@ -1029,7 +1046,7 @@ def analisar(candles):
             )
 
 
-    # BREAKOUT
+    # BREAKOUT = 15
 
     janela_break = candles[
         -11:-1
@@ -1062,7 +1079,7 @@ def analisar(candles):
         )
 
 
-    # MACD
+    # MACD = 10
 
     vm = macd(
         closes
@@ -1087,7 +1104,7 @@ def analisar(candles):
             )
 
 
-    # MOMENTUM
+    # MOMENTUM = 5
 
     momentum = (
         closes[-1]
@@ -1111,7 +1128,7 @@ def analisar(candles):
         )
 
 
-    # DECISÃO
+    # DECISÃO ATUAL
 
     if call >= put:
 
@@ -1308,18 +1325,6 @@ def executar_ordem(
                 ][
                     "ordens_aceitas"
                 ] += 1
-
-
-            log.info(
-                "ORDEM ACEITA | "
-                "%s | %s | M%s | "
-                "id=%s | PRACTICE",
-
-                ativo,
-                direcao.upper(),
-                expiracao,
-                order_id
-            )
 
 
             return (
@@ -1587,31 +1592,22 @@ def valores_do_ciclo(
         )
         ]
     # ============================================================
-# SINCRONIZA ENTRADA BASE FIXA
+# SINCRONIZA ENTRADA BASE
 # ============================================================
 
 def sincronizar_entrada_base_do_dia(
     banca
 ):
 
-    """
-    Se a banca estiver no Ciclo 1 normal,
-    mantém a entrada base fixa em R$ 2,00.
-
-    NÃO altera uma recuperação em andamento.
-    """
-
     entrada_base = (
         obter_entrada_base()
     )
-
 
     with estado_lock:
 
         dados = (
             estado_frentes[banca]
         )
-
 
         if (
             not dados["em_recuperacao"]
@@ -1640,7 +1636,6 @@ def resetar_gestao(
     entrada_base = (
         obter_entrada_base()
     )
-
 
     with estado_lock:
 
@@ -1671,7 +1666,6 @@ def resetar_gestao(
             "sinais_recuperacao"
         ] = 0
 
-
     log.info(
         "GESTÃO RESETADA | "
         "%s | entrada=%.2f | %s",
@@ -1683,7 +1677,7 @@ def resetar_gestao(
 
 
 # ============================================================
-# LOSS CICLO
+# LOSS COMPLETO DO CICLO
 # ============================================================
 
 def aplicar_loss_ciclo(
@@ -1696,32 +1690,11 @@ def aplicar_loss_ciclo(
         2
     )
 
-
     with estado_lock:
 
         dados = (
             estado_frentes[banca]
         )
-
-
-        dados[
-            "prejuizo_acumulado"
-        ] = round(
-
-            dados[
-                "prejuizo_acumulado"
-            ]
-
-            + perda_ciclo,
-
-            2
-        )
-
-
-        dados[
-            "em_recuperacao"
-        ] = True
-
 
         ciclo_atual = int(
             dados[
@@ -1729,36 +1702,77 @@ def aplicar_loss_ciclo(
             ]
         )
 
+        # Soma o LOSS ao prejuízo total
+        # que ainda precisa ser recuperado.
 
         dados[
-            "ciclo_gestao"
-        ] = min(
-            ciclo_atual + 1,
-            MAX_CICLOS_GESTAO
-        )
-
-
-        acrescimo = round(
-            perda_ciclo
-            * RECUPERACAO_PERCENTUAL,
+            "prejuizo_acumulado"
+        ] = round(
+            dados[
+                "prejuizo_acumulado"
+            ]
+            + perda_ciclo,
             2
         )
 
-
         dados[
-            "entrada_atual"
-        ] = round(
+            "em_recuperacao"
+        ] = True
 
-            float(
-                dados[
-                    "entrada_atual"
-                ]
+
+        # ====================================================
+        # LOSS NO CICLO 1
+        #
+        # Calcula 10% SOMENTE aqui.
+        #
+        # Exemplo:
+        # 2 + 6 + 18 = 26
+        # 10% = 2,60
+        # próxima entrada = 4,60
+        # ====================================================
+
+        if ciclo_atual == 1:
+
+            acrescimo = round(
+                perda_ciclo
+                * RECUPERACAO_PERCENTUAL,
+                2
             )
 
-            + acrescimo,
+            dados[
+                "entrada_atual"
+            ] = round(
+                float(
+                    dados[
+                        "entrada_atual"
+                    ]
+                )
+                + acrescimo,
+                2
+            )
 
-            2
-        )
+            dados[
+                "ciclo_gestao"
+            ] = 2
+
+
+        # ====================================================
+        # LOSS NO CICLO 2
+        #
+        # Permanece no Ciclo 2.
+        # NÃO aumenta entrada.
+        # NÃO recalcula os 10%.
+        # ====================================================
+
+        else:
+
+            acrescimo = 0.0
+
+            dados[
+                "ciclo_gestao"
+            ] = 2
+
+            # entrada_atual NÃO é alterada
 
 
         return {
@@ -1789,7 +1803,7 @@ def aplicar_loss_ciclo(
 
 
 # ============================================================
-# WIN RECUPERAÇÃO
+# WIN DURANTE RECUPERAÇÃO
 # ============================================================
 
 def aplicar_win_recuperacao(
@@ -1805,13 +1819,11 @@ def aplicar_win_recuperacao(
         )
     )
 
-
     with estado_lock:
 
         dados = (
             estado_frentes[banca]
         )
-
 
         if not dados[
             "em_recuperacao"
@@ -1824,23 +1836,21 @@ def aplicar_win_recuperacao(
             }
 
 
+        # O lucro reduz o prejuízo acumulado.
+        # A entrada do Ciclo 2 continua congelada.
+
         dados[
             "prejuizo_acumulado"
         ] = round(
-
             max(
                 0.0,
-
                 dados[
                     "prejuizo_acumulado"
                 ]
-
                 - lucro
             ),
-
             2
         )
-
 
         restante = (
             dados[
@@ -1854,6 +1864,9 @@ def aplicar_win_recuperacao(
             ]
         )
 
+
+    # Recuperou tudo:
+    # volta ao Ciclo 1 / R$2.
 
     if restante <= 0:
 
@@ -1877,7 +1890,7 @@ def aplicar_win_recuperacao(
 
 
 # ============================================================
-# CONTROLE DOS 10 SINAIS
+# CONTROLE DOS 10 SINAIS DE RECUPERAÇÃO
 # ============================================================
 
 def iniciar_sinal_gestao(
@@ -1889,7 +1902,6 @@ def iniciar_sinal_gestao(
         dados = (
             estado_frentes[banca]
         )
-
 
         if dados[
             "em_recuperacao"
@@ -1904,11 +1916,9 @@ def iniciar_sinal_gestao(
 
                 return False
 
-
             dados[
                 "sinais_recuperacao"
             ] += 1
-
 
         return True
 
@@ -1956,31 +1966,27 @@ def ciclo(
 
     try:
 
-        # ================================================
-        # LIMITE RECUPERAÇÃO
-        # ================================================
+        # ====================================================
+        # SE JÁ COMPLETOU 10 SINAIS DE RECUPERAÇÃO
+        # RESETA PARA CICLO 1 / R$2
+        # ====================================================
 
         with estado_lock:
 
             limite = (
-
                 estado_frentes[
                     banca
                 ][
                     "em_recuperacao"
                 ]
-
                 and
-
                 estado_frentes[
                     banca
                 ][
                     "sinais_recuperacao"
                 ]
-
                 >= MAX_SINAIS_RECUPERACAO
             )
-
 
         if limite:
 
@@ -1990,14 +1996,18 @@ def ciclo(
             )
 
 
-        # ================================================
-        # ATUALIZA BASE FIXA
-        # ================================================
+        # ====================================================
+        # MANTÉM R$2 SOMENTE FORA DA RECUPERAÇÃO
+        # ====================================================
 
         sincronizar_entrada_base_do_dia(
             banca
         )
 
+
+        # ====================================================
+        # CONTA O SINAL SE ESTIVER EM RECUPERAÇÃO
+        # ====================================================
 
         if not iniciar_sinal_gestao(
             banca
@@ -2056,6 +2066,9 @@ def ciclo(
         )
 
 
+        # Sempre:
+        # entrada -> G1 x3 -> G2 x3
+
         valores = valores_do_ciclo(
             entrada_atual,
             quantidade_gales
@@ -2064,9 +2077,9 @@ def ciclo(
 
         log.info(
             "GESTÃO | %s | M%s | "
-            "ciclo=%s/4 | entrada=%.2f | "
-            "gales=%s | recuperação=%s | "
-            "valores=%s",
+            "ciclo=%s/2 | entrada=%.2f | "
+            "gales=%s | X3 | recuperação=%s | "
+            "sinal_rec=%s/%s | valores=%s",
 
             banca,
             timeframe_analise,
@@ -2074,6 +2087,8 @@ def ciclo(
             entrada_atual,
             quantidade_gales,
             em_recuperacao,
+            sinal_rec,
+            MAX_SINAIS_RECUPERACAO,
             valores
         )
 
@@ -2081,9 +2096,9 @@ def ciclo(
         perdas_deste_sinal = 0.0
 
 
-        # ================================================
-        # ENTRADA + GALES
-        # ================================================
+        # ====================================================
+        # ENTRADA + G1 + G2
+        # ====================================================
 
         for nivel, valor in enumerate(
             valores
@@ -2098,6 +2113,12 @@ def ciclo(
             )
 
 
+            # =================================================
+            # ORDEM RECUSADA
+            #
+            # Não consome tentativa de recuperação.
+            # =================================================
+
             if not ok:
 
                 log.warning(
@@ -2105,7 +2126,6 @@ def ciclo(
                     banca,
                     order_id
                 )
-
 
                 if em_recuperacao:
 
@@ -2116,18 +2136,14 @@ def ciclo(
                         ][
                             "sinais_recuperacao"
                         ] = max(
-
                             0,
-
                             estado_frentes[
                                 banca
                             ][
                                 "sinais_recuperacao"
                             ]
-
                             - 1
                         )
-
 
                 return
 
@@ -2141,9 +2157,9 @@ def ciclo(
                 ] = order_id
 
 
-            # ============================================
-            # NOVO SINAL
-            # ============================================
+            # =================================================
+            # TELEGRAM - NOVO SINAL
+            # =================================================
 
             if nivel == 0:
 
@@ -2153,15 +2169,12 @@ def ciclo(
                     else "NORMAL"
                 )
 
-
                 sequencia = " → ".join(
-
                     (
                         f"Entrada {v:.2f}"
                         if i == 0
                         else f"G{i} {v:.2f}"
                     )
-
                     for i, v
                     in enumerate(valores)
                 )
@@ -2175,8 +2188,8 @@ def ciclo(
                     f"⏱ Digital: M{expiracao}\n"
                     f"🎯 {direcao.upper()}\n"
                     f"🔥 Score: {score}/100\n"
-                    f"🔁 Ciclo: {ciclo_atual}/4\n"
-                    f"🛡 Gales: {quantidade_gales}\n"
+                    f"🔁 Ciclo: {ciclo_atual}/2\n"
+                    f"🛡 Gales: 2\n"
                     f"📈 Multiplicador: X3\n"
                     f"💰 {sequencia}\n"
                     f"♻️ Recuperação: "
@@ -2230,6 +2243,9 @@ def ciclo(
                         "recuperacao":
                             em_recuperacao,
 
+                        "sinal_recuperacao":
+                            sinal_rec,
+
                         "data":
                             datetime.now(
                                 timezone.utc
@@ -2237,9 +2253,9 @@ def ciclo(
                     }
 
 
-            # ============================================
-            # RESULTADO
-            # ============================================
+            # =================================================
+            # AGUARDA RESULTADO
+            # =================================================
 
             resultado, lucro = (
                 aguardar_resultado(
@@ -2261,9 +2277,9 @@ def ciclo(
             )
 
 
-            # ============================================
+            # =================================================
             # WIN
-            # ============================================
+            # =================================================
 
             if resultado == "win":
 
@@ -2289,7 +2305,6 @@ def ciclo(
                 w = stats["wins"]
                 l = stats["losses"]
 
-
                 saldo_atual = (
                     texto_saldo()
                 )
@@ -2301,7 +2316,7 @@ def ciclo(
                     f"💱 {ativo}\n"
                     f"⏱ M{timeframe_analise} / "
                     f"Digital M{expiracao}\n"
-                    f"🔁 Ciclo: {ciclo_atual}/4\n"
+                    f"🔁 Ciclo: {ciclo_atual}/2\n"
                     f"💵 Lucro: {float(lucro):.2f}\n"
                     f"💰 Saldo atual PRACTICE: "
                     f"{saldo_atual}\n"
@@ -2313,24 +2328,23 @@ def ciclo(
                 )
 
 
+                # Se chegou ao 10º sinal e ainda
+                # existe prejuízo, reseta.
+
                 with estado_lock:
 
                     atingiu_10 = (
-
                         estado_frentes[
                             banca
                         ][
                             "em_recuperacao"
                         ]
-
                         and
-
                         estado_frentes[
                             banca
                         ][
                             "sinais_recuperacao"
                         ]
-
                         >= MAX_SINAIS_RECUPERACAO
                     )
 
@@ -2346,9 +2360,11 @@ def ciclo(
                 return
 
 
-            # ============================================
+            # =================================================
             # DRAW / TIMEOUT
-            # ============================================
+            #
+            # Não consome tentativa.
+            # =================================================
 
             if resultado in (
                 "draw",
@@ -2364,41 +2380,40 @@ def ciclo(
                         ][
                             "sinais_recuperacao"
                         ] = max(
-
                             0,
-
                             estado_frentes[
                                 banca
                             ][
                                 "sinais_recuperacao"
                             ]
-
                             - 1
                         )
-
 
                 return
 
 
-            # ============================================
+            # =================================================
             # LOSS
-            # ============================================
+            # =================================================
 
             if resultado == "loss":
 
-                perdas_deste_sinal = round(
+                # Mantém a lógica vigente:
+                # contabiliza o valor da entrada perdida.
 
+                perdas_deste_sinal = round(
                     perdas_deste_sinal
                     + abs(float(valor)),
-
                     2
                 )
 
 
+                # Ainda tem Gale disponível.
+
                 if nivel < quantidade_gales:
 
                     log.info(
-                        "%s | LOSS nível %s | G%s",
+                        "%s | LOSS nível %s | G%s X3",
                         banca,
                         nivel,
                         nivel + 1
@@ -2409,9 +2424,9 @@ def ciclo(
                     continue
 
 
-                # ========================================
+                # =================================================
                 # LOSS COMPLETO
-                # ========================================
+                # =================================================
 
                 registrar_loss(
                     banca
@@ -2427,10 +2442,29 @@ def ciclo(
                 w = stats["wins"]
                 l = stats["losses"]
 
-
                 saldo_atual = (
                     texto_saldo()
                 )
+
+
+                if ciclo_atual == 1:
+
+                    mensagem_gestao = (
+                        f"➕ 10% aplicado uma vez: "
+                        f"{gestao['acrescimo']:.2f}\n"
+                        f"➡️ Próximo ciclo: 2/2\n"
+                        f"💵 Entrada do Ciclo 2: "
+                        f"{gestao['entrada']:.2f}"
+                    )
+
+                else:
+
+                    mensagem_gestao = (
+                        "🔒 Ciclo 2 mantido\n"
+                        "➕ Novo aumento: NÃO\n"
+                        f"💵 Entrada mantida: "
+                        f"{gestao['entrada']:.2f}"
+                    )
 
 
                 telegram(
@@ -2440,18 +2474,14 @@ def ciclo(
                     f"⏱ M{timeframe_analise} / "
                     f"Digital M{expiracao}\n"
                     f"🔁 Ciclo encerrado: "
-                    f"{ciclo_atual}/4\n"
+                    f"{ciclo_atual}/2\n"
                     f"📈 Gale: X3\n"
-                    f"💸 LOSS do ciclo: "
+                    f"🛡 Gales: 2\n"
+                    f"💸 LOSS do sinal: "
                     f"{perdas_deste_sinal:.2f}\n"
                     f"💰 Saldo atual PRACTICE: "
                     f"{saldo_atual}\n"
-                    f"➕ 10% na próxima entrada: "
-                    f"{gestao['acrescimo']:.2f}\n"
-                    f"➡️ Próximo ciclo: "
-                    f"{gestao['ciclo']}/4\n"
-                    f"💵 Próxima entrada: "
-                    f"{gestao['entrada']:.2f}\n"
+                    f"{mensagem_gestao}\n"
                     f"📉 Prejuízo acumulado: "
                     f"{gestao['prejuizo']:.2f}\n"
                     f"♻️ Recuperação: "
@@ -2463,24 +2493,25 @@ def ciclo(
                 )
 
 
+                # =================================================
+                # SE FOI A 10ª TENTATIVA DE RECUPERAÇÃO
+                # RESETA APÓS REGISTRAR O RESULTADO.
+                # =================================================
+
                 with estado_lock:
 
                     atingiu_10 = (
-
                         estado_frentes[
                             banca
                         ][
                             "em_recuperacao"
                         ]
-
                         and
-
                         estado_frentes[
                             banca
                         ][
                             "sinais_recuperacao"
                         ]
-
                         >= MAX_SINAIS_RECUPERACAO
                     )
 
@@ -2505,7 +2536,7 @@ def ciclo(
 
 
 # ============================================================
-# LOCALIZA UMA BANCA LIVRE
+# RESERVAR BANCA
 # ============================================================
 
 def reservar_banca(
@@ -2518,7 +2549,6 @@ def reservar_banca(
 
     with estado_lock:
 
-        # Mesmo ativo não pode ser usado simultaneamente.
         if ativo in ativos_em_uso:
             return None
 
@@ -2571,7 +2601,7 @@ def reservar_banca(
 
 
 # ============================================================
-# DISPARA SINAL PARA A PRIMEIRA BANCA LIVRE
+# DISPARAR SINAL
 # ============================================================
 
 def disparar_sinal(
@@ -2633,12 +2663,11 @@ def disparar_sinal(
 
     thread.start()
 
-
     return True
 
 
 # ============================================================
-# SCANNER DE UM TIMEFRAME
+# SCANNER DE TIMEFRAME
 # ============================================================
 
 def scanner_timeframe(
@@ -2690,19 +2719,16 @@ def scanner_timeframe(
                 with estado_lock:
 
                     existe_banca_livre = any(
-
                         not estado_frentes[
                             banca
                         ][
                             "ocupada"
                         ]
-
                         for banca in BANCAS
                     )
 
 
                 if not existe_banca_livre:
-
                     break
 
 
@@ -2760,19 +2786,14 @@ def scanner_timeframe(
 
 
                     reservado = disparar_sinal(
-
                         ativo,
-
                         resultado[
                             "direcao"
                         ],
-
                         resultado[
                             "score"
                         ],
-
                         timeframe,
-
                         expiracao
                     )
 
@@ -2809,7 +2830,7 @@ def scanner_timeframe(
 
 
 # ============================================================
-# SUPERVISOR DOS SCANNERS
+# SUPERVISOR
 # ============================================================
 
 scanner_threads = {}
@@ -2900,7 +2921,6 @@ def supervisor():
                     log.error(
                         "SCANNER M%s PAROU | "
                         "REINICIANDO",
-
                         timeframe
                     )
 
@@ -2957,13 +2977,9 @@ def worker():
 
 
     threading.Thread(
-
         target=supervisor,
-
         daemon=True,
-
         name="supervisor-scanners"
-
     ).start()
 
 
@@ -3064,22 +3080,28 @@ def home():
                 obter_entrada_base(),
 
             "entrada_base_regra":
-                "fixa em R$ 2,00",
+                "fixa R$2 no ciclo 1",
 
             "multiplicador_gale":
                 3,
 
+            "gales_por_ciclo":
+                GALES_POR_CICLO,
+
+            "max_ciclos":
+                2,
+
             "recuperacao_percentual":
                 RECUPERACAO_PERCENTUAL,
 
+            "regra_recuperacao":
+                "10% aplicado somente na passagem do ciclo 1 para o ciclo 2",
+
+            "entrada_ciclo_2":
+                "mantida fixa mesmo após LOSS",
+
             "max_sinais_recuperacao":
                 MAX_SINAIS_RECUPERACAO,
-
-            "max_ciclos":
-                MAX_CICLOS_GESTAO,
-
-            "gales_por_ciclo":
-                GALES_POR_CICLO,
         },
 
         "mercado":
@@ -3150,6 +3172,18 @@ def health():
         "multiplicador_gale":
             3,
 
+        "gales_por_ciclo":
+            2,
+
+        "max_ciclos":
+            2,
+
+        "recuperacao_percentual":
+            RECUPERACAO_PERCENTUAL,
+
+        "max_sinais_recuperacao":
+            MAX_SINAIS_RECUPERACAO,
+
         "dia_brasil":
             agora_brasil().day,
 
@@ -3204,15 +3238,17 @@ log.info(
 )
 
 log.info(
-    "ENTRADA FIXA = %.2f",
+    "ENTRADA BASE = %.2f",
     entrada_inicial
 )
 
 log.info(
     "GESTÃO | "
     "GALE X3 | "
-    "CICLOS 2/3/4/5 GALES | "
+    "2 GALES | "
+    "2 CICLOS | "
     "RECUPERAÇÃO %.0f%% | "
+    "CICLO 2 ENTRADA FIXA | "
     "MAX %s SINAIS",
 
     RECUPERACAO_PERCENTUAL * 100,
@@ -3231,13 +3267,9 @@ log.info(
 
 
 threading.Thread(
-
     target=worker,
-
     daemon=True,
-
     name="worker-iq"
-
 ).start()
 
 
@@ -3246,4 +3278,4 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=PORT
-            )
+        )

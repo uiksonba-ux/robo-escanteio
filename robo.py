@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V10-10-BANCAS-M1-M5-M15-DIGITAL"
+VERSAO = "IQ-V10-10-BANCAS-X3-M1-M5-M15-DIGITAL"
 
 app = Flask(__name__)
 
@@ -278,7 +278,7 @@ estado_frentes = {
 
         "ultimo_sinal": None,
 
-        # Gestão independente
+        # Gestão independente por banca
         "ciclo_gestao": 1,
 
         "entrada_atual": obter_entrada_base(),
@@ -412,7 +412,8 @@ def conectar():
                 f"💵 Entrada fixa: {entrada:.2f}\n\n"
                 "🏦 10 BANCAS INDEPENDENTES\n"
                 "⏱ M1 + M5 + M15\n"
-                "📊 SOMENTE DIGITAL\n\n"
+                "📊 SOMENTE DIGITAL\n"
+                "📈 GALE X3\n\n"
                 f"🔥 Score mínimo: {SCORE_MIN}"
             )
 
@@ -616,7 +617,6 @@ def obter_candles(
                     c.get("from", 0)
                 )
 
-                # ignora candle ainda aberto
                 if (
                     inicio + segundos
                     > agora
@@ -832,9 +832,7 @@ def analisar(candles):
     motivos_put = []
 
 
-    # ========================================================
     # EMA 20 / 50
-    # ========================================================
 
     e20 = ema(
         closes,
@@ -874,9 +872,7 @@ def analisar(candles):
             )
 
 
-    # ========================================================
     # RSI
-    # ========================================================
 
     vrsi = rsi(
         closes
@@ -901,9 +897,7 @@ def analisar(candles):
             )
 
 
-    # ========================================================
     # BOLLINGER
-    # ========================================================
 
     ult20 = closes[-20:]
 
@@ -946,9 +940,7 @@ def analisar(candles):
         )
 
 
-    # ========================================================
     # PRICE ACTION
-    # ========================================================
 
     corpo = abs(
         ultimo["close"]
@@ -992,9 +984,7 @@ def analisar(candles):
                 )
 
 
-    # ========================================================
     # SUPORTE / RESISTÊNCIA
-    # ========================================================
 
     janela = candles[
         -20:-1
@@ -1039,9 +1029,7 @@ def analisar(candles):
             )
 
 
-    # ========================================================
     # BREAKOUT
-    # ========================================================
 
     janela_break = candles[
         -11:-1
@@ -1074,9 +1062,7 @@ def analisar(candles):
         )
 
 
-    # ========================================================
     # MACD
-    # ========================================================
 
     vm = macd(
         closes
@@ -1101,9 +1087,7 @@ def analisar(candles):
             )
 
 
-    # ========================================================
     # MOMENTUM
-    # ========================================================
 
     momentum = (
         closes[-1]
@@ -1127,28 +1111,20 @@ def analisar(candles):
         )
 
 
-    # ========================================================
     # DECISÃO
-    # ========================================================
 
     if call >= put:
 
         direcao = "call"
-
         score = call
-
         oposto = put
-
         motivos = motivos_call
 
     else:
 
         direcao = "put"
-
         score = put
-
         oposto = call
-
         motivos = motivos_put
 
 
@@ -1207,9 +1183,7 @@ def executar_ordem(
         )
 
 
-    # ========================================================
     # PRACTICE OBRIGATÓRIO
-    # ========================================================
 
     if not garantir_practice():
 
@@ -1315,7 +1289,6 @@ def executar_ordem(
         ):
 
             ok = resposta > 0
-
             order_id = resposta
 
 
@@ -1457,7 +1430,6 @@ def aguardar_resultado(
             ):
 
                 fechado = resposta[0]
-
                 valor = resposta[1]
 
 
@@ -1594,7 +1566,7 @@ def registrar_loss(
 
 
 # ============================================================
-# GALE X2
+# GALE X3
 # ============================================================
 
 def valores_do_ciclo(
@@ -1606,17 +1578,15 @@ def valores_do_ciclo(
 
         round(
             float(entrada)
-            * (2 ** nivel),
+            * (3 ** nivel),
             2
         )
 
         for nivel in range(
             quantidade_gales + 1
         )
-    ]
-
-
-# ============================================================
+        ]
+    # ============================================================
 # SINCRONIZA ENTRADA BASE FIXA
 # ============================================================
 
@@ -2207,6 +2177,7 @@ def ciclo(
                     f"🔥 Score: {score}/100\n"
                     f"🔁 Ciclo: {ciclo_atual}/4\n"
                     f"🛡 Gales: {quantidade_gales}\n"
+                    f"📈 Multiplicador: X3\n"
                     f"💰 {sequencia}\n"
                     f"♻️ Recuperação: "
                     f"{'SIM' if em_recuperacao else 'NÃO'}"
@@ -2253,6 +2224,9 @@ def ciclo(
                         "gales":
                             quantidade_gales,
 
+                        "multiplicador":
+                            3,
+
                         "recuperacao":
                             em_recuperacao,
 
@@ -2284,7 +2258,9 @@ def ciclo(
                 nivel,
                 resultado,
                 lucro
-)
+            )
+
+
             # ============================================
             # WIN
             # ============================================
@@ -2465,6 +2441,7 @@ def ciclo(
                     f"Digital M{expiracao}\n"
                     f"🔁 Ciclo encerrado: "
                     f"{ciclo_atual}/4\n"
+                    f"📈 Gale: X3\n"
                     f"💸 LOSS do ciclo: "
                     f"{perdas_deste_sinal:.2f}\n"
                     f"💰 Saldo atual PRACTICE: "
@@ -2708,14 +2685,7 @@ def scanner_timeframe(
             )
 
 
-            # =================================================
-            # O PRIMEIRO SINAL APROVADO TENTA PEGAR BANCA LIVRE
-            # =================================================
-
             for ativo in ATIVOS:
-
-                # Se todas as bancas estiverem ocupadas,
-                # não precisa continuar analisando.
 
                 with estado_lock:
 
@@ -2970,9 +2940,6 @@ def worker():
         time.sleep(10)
 
 
-    # Três scanners simultâneos:
-    # M1 / M5 / M15
-
     iniciar_scanner(
         1,
         0
@@ -3100,7 +3067,7 @@ def home():
                 "fixa em R$ 2,00",
 
             "multiplicador_gale":
-                2,
+                3,
 
             "recuperacao_percentual":
                 RECUPERACAO_PERCENTUAL,
@@ -3180,6 +3147,9 @@ def health():
         "entrada_base":
             obter_entrada_base(),
 
+        "multiplicador_gale":
+            3,
+
         "dia_brasil":
             agora_brasil().day,
 
@@ -3240,7 +3210,7 @@ log.info(
 
 log.info(
     "GESTÃO | "
-    "GALE X2 | "
+    "GALE X3 | "
     "CICLOS 2/3/4/5 GALES | "
     "RECUPERAÇÃO %.0f%% | "
     "MAX %s SINAIS",
@@ -3276,4 +3246,4 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=PORT
-        )            
+            )

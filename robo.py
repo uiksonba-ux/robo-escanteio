@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V10-3-BANCAS-M1-M5-M15-DIGITAL"
+VERSAO = "IQ-V10-10-BANCAS-M1-M5-M15-DIGITAL"
 
 app = Flask(__name__)
 
@@ -89,18 +89,9 @@ def agora_brasil():
 
 def obter_entrada_base():
     """
-    Entrada base = dia do mês no Brasil.
-
-    Dia 1 = R$2
-    Dia 2 = R$2
-    Dia 3 = R$3
-    Dia 10 = R$10
-    Dia 31 = R$31
+    Entrada base fixa de R$ 2,00.
     """
-
-    dia = agora_brasil().day
-
-    return float(max(2, dia))
+    return 2.00
 
 
 # ============================================================
@@ -167,6 +158,13 @@ BANCAS = [
     "BANCA 1",
     "BANCA 2",
     "BANCA 3",
+    "BANCA 4",
+    "BANCA 5",
+    "BANCA 6",
+    "BANCA 7",
+    "BANCA 8",
+    "BANCA 9",
+    "BANCA 10",
 ]
 
 
@@ -411,8 +409,8 @@ def conectar():
                 "🤖 ROBÔ V10 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
                 f"💰 Saldo: {saldo}\n"
-                f"🇧🇷 Entrada base: {entrada:.2f}\n\n"
-                "🏦 3 BANCAS INDEPENDENTES\n"
+                f"💵 Entrada fixa: {entrada:.2f}\n\n"
+                "🏦 10 BANCAS INDEPENDENTES\n"
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n\n"
                 f"🔥 Score mínimo: {SCORE_MIN}"
@@ -1619,7 +1617,7 @@ def valores_do_ciclo(
 
 
 # ============================================================
-# SINCRONIZA BASE DO DIA
+# SINCRONIZA ENTRADA BASE FIXA
 # ============================================================
 
 def sincronizar_entrada_base_do_dia(
@@ -1628,7 +1626,7 @@ def sincronizar_entrada_base_do_dia(
 
     """
     Se a banca estiver no Ciclo 1 normal,
-    atualiza a entrada para o dia atual.
+    mantém a entrada base fixa em R$ 2,00.
 
     NÃO altera uma recuperação em andamento.
     """
@@ -2023,7 +2021,7 @@ def ciclo(
 
 
         # ================================================
-        # ATUALIZA BASE DO DIA
+        # ATUALIZA BASE FIXA
         # ================================================
 
         sincronizar_entrada_base_do_dia(
@@ -2286,9 +2284,7 @@ def ciclo(
                 nivel,
                 resultado,
                 lucro
-            )
-
-
+)
             # ============================================
             # WIN
             # ============================================
@@ -3101,7 +3097,7 @@ def home():
                 obter_entrada_base(),
 
             "entrada_base_regra":
-                "dia do mês Brasil, mínimo 2",
+                "fixa em R$ 2,00",
 
             "multiplicador_gale":
                 2,
@@ -3195,7 +3191,7 @@ def health():
             ],
 
         "bancas":
-            3,
+            10,
     }), 200
 
 
@@ -3229,7 +3225,7 @@ log.info(
 )
 
 log.info(
-    "BANCAS = 3"
+    "BANCAS = 10"
 )
 
 log.info(
@@ -3238,11 +3234,7 @@ log.info(
 )
 
 log.info(
-    "ENTRADA BRASIL | "
-    "dia=%s | base=%.2f",
-
-    agora_brasil().day,
-
+    "ENTRADA FIXA = %.2f",
     entrada_inicial
 )
 
@@ -3284,4 +3276,4 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=PORT
-        )
+        )            

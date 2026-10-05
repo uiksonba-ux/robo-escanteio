@@ -114,7 +114,7 @@ def obter_entrada_base():
 RECUPERACAO_PERCENTUAL = float(
     os.getenv(
         "RECUPERACAO_PERCENTUAL",
-        "0.02"
+        "0.10"
     )
 )
 

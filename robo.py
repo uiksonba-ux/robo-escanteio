@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V10-RENDER-CONFIG-M1-M5-M15-DIGITAL"
+VERSAO = "IQ-V10-DIGITAL-V2-NO-HANG-PRACTICE"
 
 app = Flask(__name__)
 
@@ -1172,83 +1172,74 @@ def executar_ordem(
         return (False, f"direcao_invalida:{direcao}")
 
     log.info(
-        "BUY DIGITAL | %s | %s | M%s | %s | %.2f",
+        "BUY DIGITAL V2 | %s | %s | M%s | %s | %.2f",
         banca, ativo, expiracao, direcao.upper(), valor
     )
 
-    # Testa primeiro o método clássico. Algumas versões/forks da
-    # iqoptionapi montam o instrument_id incorretamente no V2.
-    tentativas = [
-        ("buy_digital_spot", getattr(api, "buy_digital_spot", None)),
-        ("buy_digital_spot_v2", getattr(api, "buy_digital_spot_v2", None)),
-    ]
+    # IMPORTANTE: não usa buy_digital_spot() clássico.
+    # Nesta biblioteca ele pode bloquear a thread indefinidamente.
+    metodo = getattr(api, "buy_digital_spot_v2", None)
 
-    ultimo_motivo = "biblioteca_sem_buy_digital_spot"
-    encontrou_metodo = False
+    if not callable(metodo):
+        motivo = "biblioteca_sem_buy_digital_spot_v2"
+        with estado_lock:
+            stats["ordens_recusadas"] += 1
+            estado_frentes[banca]["ordens_recusadas"] += 1
+        bloquear(ativo, expiracao, motivo)
+        return (False, motivo)
 
-    for nome_metodo, metodo in tentativas:
-        if not callable(metodo):
-            continue
+    try:
+        with api_lock:
+            resposta = metodo(
+                ativo,
+                valor,
+                direcao,
+                expiracao,
+            )
 
-        encontrou_metodo = True
+        log.info(
+            "RESPOSTA buy_digital_spot_v2 | %s | %s",
+            ativo, resposta
+        )
 
-        try:
-            with api_lock:
-                resposta = metodo(
-                    ativo,
-                    valor,
-                    direcao,
-                    expiracao,
-                )
+        ok = False
+        order_id = None
+
+        if isinstance(resposta, (tuple, list)):
+            if len(resposta) >= 1:
+                ok = bool(resposta[0])
+            if len(resposta) >= 2:
+                order_id = resposta[1]
+        elif isinstance(resposta, int) and not isinstance(resposta, bool):
+            ok = resposta > 0
+            order_id = resposta
+
+        if ok and order_id:
+            with estado_lock:
+                stats["ordens_aceitas"] += 1
+                estado_frentes[banca]["ordens_aceitas"] += 1
 
             log.info(
-                "RESPOSTA %s | %s | %s",
-                nome_metodo, ativo, resposta
+                "ORDEM DIGITAL ACEITA | V2 | %s | ID=%s",
+                ativo, order_id
             )
+            return (True, order_id)
 
-            ok = False
-            order_id = None
+        motivo = str(order_id if order_id is not None else resposta)
 
-            if isinstance(resposta, (tuple, list)):
-                if len(resposta) >= 1:
-                    ok = bool(resposta[0])
-                if len(resposta) >= 2:
-                    order_id = resposta[1]
-            elif isinstance(resposta, int) and not isinstance(resposta, bool):
-                ok = resposta > 0
-                order_id = resposta
-
-            if ok and order_id:
-                with estado_lock:
-                    stats["ordens_aceitas"] += 1
-                    estado_frentes[banca]["ordens_aceitas"] += 1
-
-                log.info(
-                    "ORDEM DIGITAL ACEITA | %s | %s | ID=%s",
-                    nome_metodo, ativo, order_id
-                )
-                return (True, order_id)
-
-            ultimo_motivo = str(
-                order_id if order_id is not None else resposta
-            )
-
-        except Exception as e:
-            ultimo_motivo = str(e)
-            log.warning(
-                "FALHA %s | %s | %s",
-                nome_metodo, ativo, e
-            )
-
-    if not encontrou_metodo:
-        ultimo_motivo = "biblioteca_sem_buy_digital_spot"
+    except Exception as e:
+        motivo = str(e)
+        log.exception(
+            "ERRO buy_digital_spot_v2 | %s | %s",
+            ativo, e
+        )
 
     with estado_lock:
         stats["ordens_recusadas"] += 1
         estado_frentes[banca]["ordens_recusadas"] += 1
 
-    bloquear(ativo, expiracao, ultimo_motivo)
-    return (False, ultimo_motivo)
+    bloquear(ativo, expiracao, motivo)
+    return (False, motivo)
 
 
 # ============================================================

@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V10-DIGITAL-V2-NO-HANG-PRACTICE"
+VERSAO = "IQ-V10-DIGITAL-V2-G5-X2-PRACTICE"
 
 app = Flask(__name__)
 
@@ -152,17 +152,16 @@ ENTRADA_BASE = env_float(
 
 MULTIPLICADOR_GALE = env_float(
     "MULTIPLICADOR_GALE",
-    3.0,
+    2.0,
     1.0
 )
 
-# Mantido no máximo em 2 para preservar a estrutura atual
-# de estatísticas WIN direto / G1 / G2.
+# Até 5 gales por ciclo.
 GALES_POR_CICLO = env_int(
     "MAX_GALES",
-    2,
+    5,
     0,
-    2
+    5
 )
 
 RECUPERACAO_PERCENTUAL = env_float(
@@ -300,6 +299,9 @@ stats = {
     "win_direto": 0,
     "win_g1": 0,
     "win_g2": 0,
+    "win_g3": 0,
+    "win_g4": 0,
+    "win_g5": 0,
 
     "ordens_aceitas": 0,
     "ordens_recusadas": 0,
@@ -331,6 +333,9 @@ estado_frentes = {
         "win_direto": 0,
         "win_g1": 0,
         "win_g2": 0,
+        "win_g3": 0,
+        "win_g4": 0,
+        "win_g5": 0,
 
         "ordens_aceitas": 0,
         "ordens_recusadas": 0,

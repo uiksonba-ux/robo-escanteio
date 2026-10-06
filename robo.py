@@ -1154,192 +1154,101 @@ def executar_ordem(
 ):
 
     if not EXECUTAR_ORDENS:
+        return (False, "EXECUTAR_ORDENS=false")
 
-        return (
-            False,
-            "EXECUTAR_ORDENS=false"
-        )
-
-    if esta_bloqueado(
-        ativo,
-        expiracao
-    ):
-
-        return (
-            False,
-            "ativo_bloqueado"
-        )
+    if esta_bloqueado(ativo, expiracao):
+        return (False, "ativo_bloqueado")
 
     # PRACTICE OBRIGATÓRIO
     if not garantir_practice():
+        return (False, "sem_conexao")
 
-        return (
-            False,
-            "sem_conexao"
-        )
+    ativo = str(ativo).strip().upper()
+    direcao = str(direcao).strip().lower()
+    valor = round(float(valor), 2)
+    expiracao = int(expiracao)
+
+    if direcao not in ("call", "put"):
+        return (False, f"direcao_invalida:{direcao}")
 
     log.info(
-        "BUY DIGITAL | "
-        "%s | %s | M%s | %s | %.2f",
-
-        banca,
-        ativo,
-        expiracao,
-        direcao.upper(),
-        valor
+        "BUY DIGITAL | %s | %s | M%s | %s | %.2f",
+        banca, ativo, expiracao, direcao.upper(), valor
     )
 
-    try:
+    # Testa primeiro o método clássico. Algumas versões/forks da
+    # iqoptionapi montam o instrument_id incorretamente no V2.
+    tentativas = [
+        ("buy_digital_spot", getattr(api, "buy_digital_spot", None)),
+        ("buy_digital_spot_v2", getattr(api, "buy_digital_spot_v2", None)),
+    ]
 
-        metodo = getattr(
-            api,
-            "buy_digital_spot_v2",
-            None
-        )
+    ultimo_motivo = "biblioteca_sem_buy_digital_spot"
+    encontrou_metodo = False
 
-        nome_metodo = (
-            "buy_digital_spot_v2"
-        )
+    for nome_metodo, metodo in tentativas:
+        if not callable(metodo):
+            continue
 
-        if not callable(
-            metodo
-        ):
+        encontrou_metodo = True
 
-            metodo = getattr(
-                api,
-                "buy_digital_spot",
-                None
-            )
-
-            nome_metodo = (
-                "buy_digital_spot"
-            )
-
-        if not callable(
-            metodo
-        ):
-
-            return (
-                False,
-                "biblioteca_sem_buy_digital_spot"
-            )
-
-        with api_lock:
-
-            resposta = metodo(
-                ativo,
-                float(valor),
-                direcao.lower(),
-                int(expiracao),
-            )
-
-        log.info(
-            "RESPOSTA %s | %s | %s",
-            nome_metodo,
-            ativo,
-            resposta
-        )
-
-        ok = False
-        order_id = None
-
-        if isinstance(
-            resposta,
-            (tuple, list)
-        ):
-
-            if len(resposta) >= 1:
-
-                ok = bool(
-                    resposta[0]
+        try:
+            with api_lock:
+                resposta = metodo(
+                    ativo,
+                    valor,
+                    direcao,
+                    expiracao,
                 )
 
-            if len(resposta) >= 2:
-
-                order_id = (
-                    resposta[1]
-                )
-
-        elif (
-            isinstance(resposta, int)
-            and not isinstance(resposta, bool)
-        ):
-
-            ok = resposta > 0
-            order_id = resposta
-
-        if (
-            ok
-            and order_id
-        ):
-
-            with estado_lock:
-
-                stats[
-                    "ordens_aceitas"
-                ] += 1
-
-                estado_frentes[
-                    banca
-                ][
-                    "ordens_aceitas"
-                ] += 1
-
-            return (
-                True,
-                order_id
+            log.info(
+                "RESPOSTA %s | %s | %s",
+                nome_metodo, ativo, resposta
             )
 
-        with estado_lock:
+            ok = False
+            order_id = None
 
-            stats[
-                "ordens_recusadas"
-            ] += 1
+            if isinstance(resposta, (tuple, list)):
+                if len(resposta) >= 1:
+                    ok = bool(resposta[0])
+                if len(resposta) >= 2:
+                    order_id = resposta[1]
+            elif isinstance(resposta, int) and not isinstance(resposta, bool):
+                ok = resposta > 0
+                order_id = resposta
 
-            estado_frentes[
-                banca
-            ][
-                "ordens_recusadas"
-            ] += 1
+            if ok and order_id:
+                with estado_lock:
+                    stats["ordens_aceitas"] += 1
+                    estado_frentes[banca]["ordens_aceitas"] += 1
 
-        motivo = str(
-            order_id
-            if order_id is not None
-            else resposta
-        )
+                log.info(
+                    "ORDEM DIGITAL ACEITA | %s | %s | ID=%s",
+                    nome_metodo, ativo, order_id
+                )
+                return (True, order_id)
 
-        bloquear(
-            ativo,
-            expiracao,
-            motivo
-        )
+            ultimo_motivo = str(
+                order_id if order_id is not None else resposta
+            )
 
-        return (
-            False,
-            motivo
-        )
+        except Exception as e:
+            ultimo_motivo = str(e)
+            log.warning(
+                "FALHA %s | %s | %s",
+                nome_metodo, ativo, e
+            )
 
-    except Exception as e:
+    if not encontrou_metodo:
+        ultimo_motivo = "biblioteca_sem_buy_digital_spot"
 
-        log.exception(
-            "ERRO ORDEM DIGITAL | "
-            "%s | M%s | %s",
+    with estado_lock:
+        stats["ordens_recusadas"] += 1
+        estado_frentes[banca]["ordens_recusadas"] += 1
 
-            ativo,
-            expiracao,
-            e
-        )
-
-        bloquear(
-            ativo,
-            expiracao,
-            str(e)
-        )
-
-        return (
-            False,
-            str(e)
-        )
+    bloquear(ativo, expiracao, ultimo_motivo)
+    return (False, ultimo_motivo)
 
 
 # ============================================================

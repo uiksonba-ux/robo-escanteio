@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V10-DIGITAL-BASE10-G2-X2-REC1-PRACTICE"
+VERSAO = "IQ-V11-DIGITAL-BASE2-G2-X2-REC100-C2-PRACTICE"
 
 app = Flask(__name__)
 
@@ -150,7 +150,7 @@ TEMPO_BLOQUEIO = env_int(
 
 ENTRADA_BASE = env_float(
     "ENTRADA_BASE",
-    10.0,
+    2.0,
     0.01
 )
 
@@ -170,8 +170,15 @@ GALES_POR_CICLO = env_int(
 
 RECUPERACAO_PERCENTUAL = env_float(
     "RECUPERACAO_PERCENTUAL",
-    0.01,
+    1.0,
     0.0
+)
+
+MAX_CICLOS_GESTAO = env_int(
+    "MAX_CICLOS_GESTAO",
+    2,
+    1,
+    2
 )
 
 QTD_BANCAS = env_int(
@@ -1518,51 +1525,49 @@ def aplicar_loss_ciclo(
     with estado_lock:
 
         dados = estado_frentes[banca]
+        ciclo_atual = int(dados["ciclo_gestao"])
+
+        # LOSS no último ciclo permitido: encerra a tentativa de
+        # recuperação e volta imediatamente ao Ciclo 1.
+        if ciclo_atual >= MAX_CICLOS_GESTAO:
+            entrada_base = obter_entrada_base()
+            dados["ciclo_gestao"] = 1
+            dados["entrada_atual"] = round(entrada_base, 2)
+            dados["prejuizo_acumulado"] = 0.0
+            dados["em_recuperacao"] = False
+
+            return {
+                "ciclo": 1,
+                "entrada": round(entrada_base, 2),
+                "prejuizo": 0.0,
+                "acrescimo": 0.0,
+                "reset_limite": True,
+            }
 
         dados["prejuizo_acumulado"] = round(
-            float(
-                dados["prejuizo_acumulado"]
-            )
-            + perda_ciclo,
+            float(dados["prejuizo_acumulado"]) + perda_ciclo,
             2
         )
-
         dados["em_recuperacao"] = True
 
         acrescimo = round(
-            dados["prejuizo_acumulado"]
-            * RECUPERACAO_PERCENTUAL,
+            dados["prejuizo_acumulado"] * RECUPERACAO_PERCENTUAL,
             2
         )
 
         dados["entrada_atual"] = round(
-            obter_entrada_base()
-            + acrescimo,
+            obter_entrada_base() + acrescimo,
             2
         )
-
-        dados["ciclo_gestao"] = (
-            int(
-                dados["ciclo_gestao"]
-            )
-            + 1
-        )
+        dados["ciclo_gestao"] = ciclo_atual + 1
 
         return {
-
-            "ciclo":
-                dados["ciclo_gestao"],
-
-            "entrada":
-                dados["entrada_atual"],
-
-            "prejuizo":
-                dados["prejuizo_acumulado"],
-
-            "acrescimo":
-                acrescimo,
+            "ciclo": dados["ciclo_gestao"],
+            "entrada": dados["entrada_atual"],
+            "prejuizo": dados["prejuizo_acumulado"],
+            "acrescimo": acrescimo,
+            "reset_limite": False,
         }
-
 
 # ============================================================
 # WIN DURANTE RECUPERAÇÃO
@@ -2004,15 +2009,15 @@ def ciclo(
                     f"➕ Recuperação "
                     f"{RECUPERACAO_PERCENTUAL * 100:g}%: "
                     f"{gestao['acrescimo']:.2f}\n"
-                    "(sobre o prejuízo acumulado)\n"
                     f"➡️ Próximo ciclo: "
                     f"{gestao['ciclo']}\n"
+                    + ("🔄 LIMITE ATINGIDO: gestão resetada\n" if gestao.get("reset_limite") else "")
                     f"💵 Próxima entrada: "
                     f"{gestao['entrada']:.2f}\n"
                     f"📉 Prejuízo acumulado: "
                     f"{gestao['prejuizo']:.2f}\n"
-                    f"♾️ Limite de ciclos: "
-                    f"NENHUM\n"
+                    f"🔄 Limite de ciclos: "
+                    f"{MAX_CICLOS_GESTAO}\n"
                     f"💰 Saldo PRACTICE: "
                     f"{saldo_atual}\n"
                     f"📊 {w} WIN / {l} LOSS\n"

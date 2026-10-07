@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V15-DIGITAL-0.5PCT-G5-X2-REC20-5B-PRACTICE"
+VERSAO = "IQ-V16-DIGITAL-0.5PCT-DINAMICO-G5-X2-REC20-5B-PRACTICE"
 
 app = Flask(__name__)
 
@@ -148,10 +148,10 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_BASE = env_float(
-    "ENTRADA_BASE",
-    2.0,
-    0.01
+ENTRADA_PERCENTUAL = env_float(
+    "ENTRADA_PERCENTUAL",
+    0.005,
+    0.0001
 )
 
 MULTIPLICADOR_GALE = env_float(
@@ -198,8 +198,19 @@ def agora_brasil():
 # ============================================================
 
 def obter_entrada_base(saldo=None):
-    # Valor fixo configurado no Render, independente do saldo PRACTICE.
-    return max(0.01, round(ENTRADA_BASE, 2))
+    # Base dinâmica: percentual sobre o saldo PRACTICE atual.
+    if saldo is None:
+        try:
+            if api is not None and conectado():
+                with api_lock:
+                    saldo = api.get_balance()
+        except Exception:
+            saldo = None
+
+    if saldo is None:
+        return 0.01
+
+    return max(0.01, round(float(saldo) * ENTRADA_PERCENTUAL, 2))
 
 
 # ============================================================
@@ -2067,6 +2078,13 @@ def reservar_banca(
 
             if not dados["ocupada"]:
 
+                saldo_atual = obter_saldo_atual()
+                base_percentual = obter_entrada_base(saldo_atual)
+                dados["entrada_atual"] = round(
+                    base_percentual + float(dados["prejuizo_acumulado"]),
+                    2
+                )
+
                 dados["ocupada"] = True
                 dados["ativo"] = ativo
                 dados["direcao"] = direcao
@@ -2539,7 +2557,7 @@ def home():
 
             "entrada_base_regra":
                 (
-                    f"R${obter_entrada_base():.2f} fixos "
+                    f"{ENTRADA_PERCENTUAL * 100:g}% do saldo PRACTICE atual "
                     "fora da recuperação"
                 ),
 
@@ -2709,7 +2727,8 @@ log.info(
 )
 
 log.info(
-    "ENTRADA BASE FIXA = R$%.2f",
+    "ENTRADA BASE = %g%% DO SALDO | inicial=R$%.2f",
+    ENTRADA_PERCENTUAL * 100,
     entrada_inicial
 )
 

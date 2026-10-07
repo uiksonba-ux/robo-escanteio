@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V12-DIGITAL-BASE2-G2-X2-REC10-DISTRIBUIDA-INFINITO-PRACTICE"
+VERSAO = "IQ-V13-DIGITAL-BASE2-G1-X2-REC20-5B-INFINITO-PRACTICE"
 
 app = Flask(__name__)
 
@@ -163,20 +163,20 @@ MULTIPLICADOR_GALE = env_float(
 # Até 5 gales suportados; configuração atual: 2.
 GALES_POR_CICLO = env_int(
     "MAX_GALES",
-    2,
+    1,
     0,
     5
 )
 
 RECUPERACAO_PERCENTUAL = env_float(
     "RECUPERACAO_PERCENTUAL",
-    0.10,
+    0.20,
     0.0
 )
 
 QTD_BANCAS = env_int(
     "QTD_BANCAS",
-    10,
+    5,
     1,
     20
 )
@@ -1516,8 +1516,8 @@ def aplicar_loss_ciclo(
     )
 
     # Cada LOSS completo é dividido entre todas as bancas.
-    # Com 10 bancas e RECUPERACAO_PERCENTUAL=0.10,
-    # cada banca recebe 10% do prejuízo para recuperar.
+    # Com 5 bancas e RECUPERACAO_PERCENTUAL=0.20,
+    # cada banca recebe 20% do prejuízo para recuperar.
     parcela = round(
         perda_ciclo * RECUPERACAO_PERCENTUAL,
         2

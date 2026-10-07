@@ -1992,6 +1992,12 @@ def ciclo(
                     texto_saldo()
                 )
 
+                texto_reset_limite = (
+                    "🔄 LIMITE ATINGIDO: gestão resetada\n"
+                    if gestao.get("reset_limite")
+                    else ""
+                )
+
                 telegram(
                     "❌ LOSS COMPLETO\n"
                     f"🏦 {banca}\n"
@@ -2011,7 +2017,7 @@ def ciclo(
                     f"{gestao['acrescimo']:.2f}\n"
                     f"➡️ Próximo ciclo: "
                     f"{gestao['ciclo']}\n"
-                    + ("🔄 LIMITE ATINGIDO: gestão resetada\n" if gestao.get("reset_limite") else "")
+                    f"{texto_reset_limite}"
                     f"💵 Próxima entrada: "
                     f"{gestao['entrada']:.2f}\n"
                     f"📉 Prejuízo acumulado: "

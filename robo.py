@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V10-DIGITAL-V2-G5-X2-PRACTICE"
+VERSAO = "IQ-V10-DIGITAL-1PCT-G2-X2-REC10-PRACTICE"
 
 app = Flask(__name__)
 
@@ -144,10 +144,10 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_BASE = env_float(
-    "ENTRADA_BASE",
-    2.00,
-    0.01
+ENTRADA_PERCENTUAL = env_float(
+    "ENTRADA_PERCENTUAL",
+    0.01,
+    0.0001
 )
 
 MULTIPLICADOR_GALE = env_float(
@@ -156,17 +156,17 @@ MULTIPLICADOR_GALE = env_float(
     1.0
 )
 
-# Até 5 gales por ciclo.
+# Até 5 gales suportados; configuração atual: 2.
 GALES_POR_CICLO = env_int(
     "MAX_GALES",
-    5,
+    2,
     0,
     5
 )
 
 RECUPERACAO_PERCENTUAL = env_float(
     "RECUPERACAO_PERCENTUAL",
-    0.01,
+    0.10,
     0.0
 )
 
@@ -193,11 +193,21 @@ def agora_brasil():
 # ENTRADA BASE
 # ============================================================
 
-def obter_entrada_base():
-    return round(
-        ENTRADA_BASE,
-        2
-    )
+def obter_entrada_base(saldo=None):
+    # Fora da recuperação, a entrada é 1% (configurável) do saldo PRACTICE.
+    if saldo is None:
+        try:
+            if api is not None and conectado():
+                with api_lock:
+                    saldo = float(api.get_balance())
+        except Exception:
+            saldo = None
+
+    if saldo is None:
+        # Valor provisório apenas antes da conexão; será sincronizado antes da operação.
+        return 0.01
+
+    return max(0.01, round(float(saldo) * ENTRADA_PERCENTUAL, 2))
 
 
 # ============================================================
@@ -457,7 +467,7 @@ def conectar():
 
             api = nova
 
-            entrada = obter_entrada_base()
+            entrada = obter_entrada_base(saldo)
 
             log.info(
                 "IQ CONECTADA | "
@@ -1446,7 +1456,12 @@ def valores_do_ciclo(
 
 def sincronizar_entrada_base_do_dia(banca):
 
-    entrada_base = obter_entrada_base()
+    saldo = obter_saldo_atual()
+    if saldo is None:
+        log.warning("%s | saldo indisponível para calcular entrada de 1%%", banca)
+        return
+
+    entrada_base = obter_entrada_base(saldo)
 
     with estado_lock:
 
@@ -1472,7 +1487,8 @@ def resetar_gestao(
     motivo
 ):
 
-    entrada_base = obter_entrada_base()
+    saldo = obter_saldo_atual()
+    entrada_base = obter_entrada_base(saldo)
 
     with estado_lock:
 
@@ -2517,11 +2533,14 @@ def home():
         "gestao": {
 
             "entrada_base":
-                obter_entrada_base(),
+                obter_entrada_base(saldo),
+
+            "entrada_percentual":
+                ENTRADA_PERCENTUAL,
 
             "entrada_base_regra":
                 (
-                    f"R${obter_entrada_base():.2f} "
+                    f"{ENTRADA_PERCENTUAL * 100:g}% do saldo PRACTICE "
                     "fora da recuperação"
                 ),
 
@@ -2616,6 +2635,9 @@ def health():
         "entrada_base":
             obter_entrada_base(),
 
+        "entrada_percentual":
+            ENTRADA_PERCENTUAL,
+
         "multiplicador_gale":
             MULTIPLICADOR_GALE,
 
@@ -2691,8 +2713,8 @@ log.info(
 )
 
 log.info(
-    "ENTRADA BASE = %.2f",
-    entrada_inicial
+    "ENTRADA BASE = %g%% DO SALDO PRACTICE",
+    ENTRADA_PERCENTUAL * 100
 )
 
 log.info(

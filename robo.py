@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V10-DIGITAL-1PCT-G2-X2-REC10-PRACTICE"
+VERSAO = "IQ-V10-DIGITAL-BASE10-G2-X2-REC1-PRACTICE"
 
 app = Flask(__name__)
 
@@ -38,6 +38,10 @@ def env_float(nome, padrao, minimo=None):
     except (TypeError, ValueError):
         valor = float(padrao)
         log.warning("%s inválido; usando padrão %s", nome, padrao)
+
+    if not math.isfinite(valor):
+        valor = float(padrao)
+        log.warning("%s não finito; usando padrão %s", nome, padrao)
 
     if minimo is not None and valor < minimo:
         log.warning("%s abaixo do mínimo; usando %s", nome, minimo)
@@ -144,10 +148,10 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_PERCENTUAL = env_float(
-    "ENTRADA_PERCENTUAL",
-    0.01,
-    0.0001
+ENTRADA_BASE = env_float(
+    "ENTRADA_BASE",
+    10.0,
+    0.01
 )
 
 MULTIPLICADOR_GALE = env_float(
@@ -166,7 +170,7 @@ GALES_POR_CICLO = env_int(
 
 RECUPERACAO_PERCENTUAL = env_float(
     "RECUPERACAO_PERCENTUAL",
-    0.10,
+    0.01,
     0.0
 )
 
@@ -194,20 +198,8 @@ def agora_brasil():
 # ============================================================
 
 def obter_entrada_base(saldo=None):
-    # Fora da recuperação, a entrada é 1% (configurável) do saldo PRACTICE.
-    if saldo is None:
-        try:
-            if api is not None and conectado():
-                with api_lock:
-                    saldo = float(api.get_balance())
-        except Exception:
-            saldo = None
-
-    if saldo is None:
-        # Valor provisório apenas antes da conexão; será sincronizado antes da operação.
-        return 0.01
-
-    return max(0.01, round(float(saldo) * ENTRADA_PERCENTUAL, 2))
+    # Valor fixo configurado no Render, independente do saldo PRACTICE.
+    return max(0.01, round(ENTRADA_BASE, 2))
 
 
 # ============================================================
@@ -1456,12 +1448,7 @@ def valores_do_ciclo(
 
 def sincronizar_entrada_base_do_dia(banca):
 
-    saldo = obter_saldo_atual()
-    if saldo is None:
-        log.warning("%s | saldo indisponível para calcular entrada de 1%%", banca)
-        return
-
-    entrada_base = obter_entrada_base(saldo)
+    entrada_base = obter_entrada_base()
 
     with estado_lock:
 
@@ -1487,8 +1474,7 @@ def resetar_gestao(
     motivo
 ):
 
-    saldo = obter_saldo_atual()
-    entrada_base = obter_entrada_base(saldo)
+    entrada_base = obter_entrada_base()
 
     with estado_lock:
 
@@ -1544,15 +1530,13 @@ def aplicar_loss_ciclo(
         dados["em_recuperacao"] = True
 
         acrescimo = round(
-            perda_ciclo
+            dados["prejuizo_acumulado"]
             * RECUPERACAO_PERCENTUAL,
             2
         )
 
         dados["entrada_atual"] = round(
-            float(
-                dados["entrada_atual"]
-            )
+            obter_entrada_base()
             + acrescimo,
             2
         )
@@ -1589,24 +1573,13 @@ def aplicar_win_recuperacao(
     lucro
 ):
 
-    lucro = max(
-        0.0,
-        round(
-            float(lucro),
-            2
-        )
-    )
+    # Resultado líquido do sinal: WIN menos os LOSS anteriores.
+    # Valores negativos também preservam perdas de ciclos interrompidos.
+    lucro = round(float(lucro), 2)
 
     with estado_lock:
 
         dados = estado_frentes[banca]
-
-        if not dados["em_recuperacao"]:
-
-            return {
-                "recuperado": True,
-                "restante": 0.0,
-            }
 
         dados["prejuizo_acumulado"] = round(
             max(
@@ -1626,17 +1599,24 @@ def aplicar_win_recuperacao(
             2
         )
 
-    if restante <= 0:
+        if restante <= 0:
 
-        resetar_gestao(
-            banca,
-            "prejuizo_recuperado"
+            resetar_gestao(
+                banca,
+                "prejuizo_recuperado"
+            )
+
+            return {
+                "recuperado": True,
+                "restante": 0.0,
+            }
+
+        dados["em_recuperacao"] = True
+        dados["entrada_atual"] = round(
+            obter_entrada_base()
+            + round(restante * RECUPERACAO_PERCENTUAL, 2),
+            2
         )
-
-        return {
-            "recuperado": True,
-            "restante": 0.0,
-        }
 
     return {
         "recuperado": False,
@@ -1682,6 +1662,9 @@ def ciclo(
     timeframe_analise,
     expiracao
 ):
+
+    perdas_deste_sinal = 0.0
+    gestao_contabilizada = False
 
     try:
 
@@ -1741,8 +1724,6 @@ def ciclo(
             prejuizo_antes,
             valores
         )
-
-        perdas_deste_sinal = 0.0
 
         for nivel, valor in enumerate(
             valores
@@ -1890,10 +1871,16 @@ def ciclo(
                     else f"WIN G{nivel}"
                 )
 
+                lucro_liquido = round(
+                    float(lucro) - perdas_deste_sinal,
+                    2
+                )
+
                 rec = aplicar_win_recuperacao(
                     banca,
-                    lucro
+                    lucro_liquido
                 )
+                gestao_contabilizada = True
 
                 with estado_lock:
 
@@ -1930,8 +1917,8 @@ def ciclo(
                     f"⏱ M{timeframe_analise} / "
                     f"Digital M{expiracao}\n"
                     f"🔁 Ciclo: {ciclo_atual}\n"
-                    f"💵 Lucro: "
-                    f"{float(lucro):.2f}\n"
+                    f"💵 Resultado líquido do sinal: "
+                    f"{lucro_liquido:.2f}\n"
                     f"💰 Saldo atual PRACTICE: "
                     f"{saldo_atual}\n"
                     f"{texto_recuperacao}\n"
@@ -1949,7 +1936,8 @@ def ciclo(
 
                 log.warning(
                     "%s | %s | "
-                    "GESTÃO NÃO ALTERADA",
+                    "CICLO INTERROMPIDO; "
+                    "CONTABILIZAR APENAS PERDAS CONFIRMADAS",
                     banca,
                     resultado.upper()
                 )
@@ -1960,7 +1948,7 @@ def ciclo(
 
                 perdas_deste_sinal = round(
                     perdas_deste_sinal
-                    + abs(float(valor)),
+                    + abs(float(lucro)),
                     2
                 )
 
@@ -1988,6 +1976,7 @@ def ciclo(
                     banca,
                     perdas_deste_sinal
                 )
+                gestao_contabilizada = True
 
                 with estado_lock:
 
@@ -2015,6 +2004,7 @@ def ciclo(
                     f"➕ Recuperação "
                     f"{RECUPERACAO_PERCENTUAL * 100:g}%: "
                     f"{gestao['acrescimo']:.2f}\n"
+                    "(sobre o prejuízo acumulado)\n"
                     f"➡️ Próximo ciclo: "
                     f"{gestao['ciclo']}\n"
                     f"💵 Próxima entrada: "
@@ -2034,10 +2024,21 @@ def ciclo(
 
     finally:
 
-        liberar_banca(
-            banca,
-            ativo
-        )
+        try:
+            if perdas_deste_sinal > 0 and not gestao_contabilizada:
+                rec = aplicar_win_recuperacao(banca, -perdas_deste_sinal)
+                log.warning(
+                    "%s | CICLO INTERROMPIDO | perda confirmada=%.2f | "
+                    "prejuizo restante=%.2f",
+                    banca,
+                    perdas_deste_sinal,
+                    rec["restante"]
+                )
+        finally:
+            liberar_banca(
+                banca,
+                ativo
+            )
 
 
 # ============================================================
@@ -2535,12 +2536,9 @@ def home():
             "entrada_base":
                 obter_entrada_base(saldo),
 
-            "entrada_percentual":
-                ENTRADA_PERCENTUAL,
-
             "entrada_base_regra":
                 (
-                    f"{ENTRADA_PERCENTUAL * 100:g}% do saldo PRACTICE "
+                    f"R${obter_entrada_base():.2f} fixos "
                     "fora da recuperação"
                 ),
 
@@ -2559,8 +2557,8 @@ def home():
             "regra_recuperacao":
                 (
                     f"{RECUPERACAO_PERCENTUAL * 100:g}% "
-                    "do LOSS do ciclo adicionado "
-                    "à entrada do próximo ciclo"
+                    "do prejuízo acumulado restante adicionado "
+                    "à ENTRADA_BASE do próximo sinal"
                 ),
 
             "reset":
@@ -2634,9 +2632,6 @@ def health():
 
         "entrada_base":
             obter_entrada_base(),
-
-        "entrada_percentual":
-            ENTRADA_PERCENTUAL,
 
         "multiplicador_gale":
             MULTIPLICADOR_GALE,
@@ -2713,8 +2708,8 @@ log.info(
 )
 
 log.info(
-    "ENTRADA BASE = %g%% DO SALDO PRACTICE",
-    ENTRADA_PERCENTUAL * 100
+    "ENTRADA BASE FIXA = R$%.2f",
+    entrada_inicial
 )
 
 log.info(

@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V16-DIGITAL-0.5PCT-DINAMICO-G5-X2-REC20-5B-PRACTICE"
+VERSAO = "IQ-V17-SINAIS-G0-G3-10B-REC10-PRACTICE"
 
 app = Flask(__name__)
 
@@ -148,11 +148,7 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_PERCENTUAL = env_float(
-    "ENTRADA_PERCENTUAL",
-    0.005,
-    0.0001
-)
+ENTRADA_BASE = env_float("ENTRADA_BASE", 2.0, 0.01)
 
 MULTIPLICADOR_GALE = env_float(
     "MULTIPLICADOR_GALE",
@@ -161,12 +157,7 @@ MULTIPLICADOR_GALE = env_float(
 )
 
 # Até 5 gales suportados; configuração atual: 5.
-GALES_POR_CICLO = env_int(
-    "MAX_GALES",
-    1,
-    0,
-    5
-)
+GALES_POR_CICLO = 3  # Limite; o sinal global define 0, 1, 2 ou 3.
 
 RECUPERACAO_PERCENTUAL = env_float(
     "RECUPERACAO_PERCENTUAL",
@@ -198,19 +189,7 @@ def agora_brasil():
 # ============================================================
 
 def obter_entrada_base(saldo=None):
-    # Base dinâmica: percentual sobre o saldo PRACTICE atual.
-    if saldo is None:
-        try:
-            if api is not None and conectado():
-                with api_lock:
-                    saldo = api.get_balance()
-        except Exception:
-            saldo = None
-
-    if saldo is None:
-        return 0.01
-
-    return max(0.01, round(float(saldo) * ENTRADA_PERCENTUAL, 2))
+    return round(ENTRADA_BASE, 2)
 
 
 # ============================================================
@@ -298,6 +277,7 @@ estado_lock = threading.RLock()
 ativos_em_uso = set()
 bloqueados = {}
 ativos_validos = set()
+contador_sinais = 0
 
 
 # ============================================================
@@ -1712,9 +1692,10 @@ def ciclo(
                 2
             )
 
-        quantidade_gales = (
-            GALES_POR_CICLO
-        )
+        with estado_lock:
+            quantidade_gales = estado_frentes[banca]["gales_sinal"]
+            numero_sinal = estado_frentes[banca]["numero_sinal"]
+        log.info("SEQUENCIA GLOBAL | sinal=%s | %s | gales=%s", numero_sinal, banca, quantidade_gales)
 
         valores = valores_do_ciclo(
             entrada_atual,
@@ -2078,11 +2059,12 @@ def reservar_banca(
 
             if not dados["ocupada"]:
 
-                saldo_atual = obter_saldo_atual()
-                base_percentual = obter_entrada_base(saldo_atual)
+                global contador_sinais
+                numero_sinal = contador_sinais + 1
+                dados["numero_sinal"] = numero_sinal
+                dados["gales_sinal"] = (numero_sinal - 1) % 4
                 dados["entrada_atual"] = round(
-                    base_percentual + float(dados["prejuizo_acumulado"]),
-                    2
+                    obter_entrada_base() + float(dados["prejuizo_acumulado"]), 2
                 )
 
                 dados["ocupada"] = True
@@ -2095,6 +2077,7 @@ def reservar_banca(
                 ativos_em_uso.add(
                     ativo
                 )
+                contador_sinais = numero_sinal
 
                 return banca
 
@@ -2557,15 +2540,14 @@ def home():
 
             "entrada_base_regra":
                 (
-                    f"{ENTRADA_PERCENTUAL * 100:g}% do saldo PRACTICE atual "
-                    "fora da recuperação"
+                    f"R${ENTRADA_BASE:.2f} fixos fora da recuperação"
                 ),
 
             "multiplicador_gale":
                 MULTIPLICADOR_GALE,
 
             "gales_por_ciclo":
-                GALES_POR_CICLO,
+                "global por sinal: 0, 1, 2, 3 (repetição)",
 
             "ciclos":
                 "ilimitados",
@@ -2656,7 +2638,7 @@ def health():
             MULTIPLICADOR_GALE,
 
         "gales_por_ciclo":
-            GALES_POR_CICLO,
+            "global por sinal: 0, 1, 2, 3 (repetição)",
 
         "ciclos":
             "ilimitados",
@@ -2727,8 +2709,7 @@ log.info(
 )
 
 log.info(
-    "ENTRADA BASE = %g%% DO SALDO | inicial=R$%.2f",
-    ENTRADA_PERCENTUAL * 100,
+    "ENTRADA BASE FIXA = R$%.2f",
     entrada_inicial
 )
 

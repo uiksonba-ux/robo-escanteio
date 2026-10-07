@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V17-SINAIS-G0-G3-10B-REC10-PRACTICE"
+VERSAO = "IQ-V18-10B-LOSS-X2-WIN-HALF-G2-PRACTICE"
 
 app = Flask(__name__)
 
@@ -148,7 +148,8 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_BASE = env_float("ENTRADA_BASE", 2.0, 0.01)
+ENTRADA_BASE = 10.0
+ENTRADA_MINIMA = 2.0
 
 MULTIPLICADOR_GALE = env_float(
     "MULTIPLICADOR_GALE",
@@ -157,20 +158,11 @@ MULTIPLICADOR_GALE = env_float(
 )
 
 # Até 5 gales suportados; configuração atual: 5.
-GALES_POR_CICLO = 3  # Limite; o sinal global define 0, 1, 2 ou 3.
+GALES_POR_CICLO = 2
 
-RECUPERACAO_PERCENTUAL = env_float(
-    "RECUPERACAO_PERCENTUAL",
-    0.0,
-    0.0
-)
+RECUPERACAO_PERCENTUAL = 0.0
 
-QTD_BANCAS = env_int(
-    "QTD_BANCAS",
-    5,
-    1,
-    20
-)
+QTD_BANCAS = 10
 
 
 # ============================================================
@@ -1438,6 +1430,10 @@ def valores_do_ciclo(
 # ============================================================
 
 def sincronizar_entrada_base_do_dia(banca):
+    return
+
+
+def sincronizacao_antiga_desativada(banca):
 
     entrada_base = obter_entrada_base()
 
@@ -1496,126 +1492,27 @@ def resetar_gestao(
 # LOSS COMPLETO DO CICLO
 # ============================================================
 
-def aplicar_loss_ciclo(
-    banca,
-    perda_ciclo
-):
-
-    perda_ciclo = round(
-        abs(float(perda_ciclo)),
-        2
-    )
-
-    # Cada LOSS completo é dividido entre todas as bancas.
-    # Com 5 bancas e RECUPERACAO_PERCENTUAL=0.20,
-    # cada banca recebe 20% do prejuízo para recuperar.
-    parcela = round(
-        perda_ciclo * RECUPERACAO_PERCENTUAL,
-        2
-    )
-
-    entrada_base = obter_entrada_base()
-
+def aplicar_loss_ciclo(banca, perda_ciclo):
     with estado_lock:
-
-        ciclo_atual = int(
-            estado_frentes[banca]["ciclo_gestao"]
-        )
-
-        for nome_banca in BANCAS:
-
-            dados_banca = estado_frentes[nome_banca]
-
-            dados_banca["prejuizo_acumulado"] = round(
-                float(dados_banca["prejuizo_acumulado"])
-                + parcela,
-                2
-            )
-
-            dados_banca["em_recuperacao"] = (
-                dados_banca["prejuizo_acumulado"] > 0
-            )
-
-            dados_banca["entrada_atual"] = round(
-                entrada_base
-                + dados_banca["prejuizo_acumulado"],
-                2
-            )
-
-        # A banca que sofreu o LOSS avança de ciclo sem limite.
         dados = estado_frentes[banca]
-        dados["ciclo_gestao"] = ciclo_atual + 1
-
-        return {
-            "ciclo": dados["ciclo_gestao"],
-            "entrada": dados["entrada_atual"],
-            "prejuizo": dados["prejuizo_acumulado"],
-            "acrescimo": parcela,
-            "parcela_por_banca": parcela,
-            "reset_limite": False,
-        }
+        dados["entrada_atual"] = round(float(dados["entrada_atual"]) * 2, 2)
+        dados["ciclo_gestao"] += 1
+        dados["prejuizo_acumulado"] = 0.0
+        dados["em_recuperacao"] = False
+        return {"ciclo": dados["ciclo_gestao"], "entrada": dados["entrada_atual"],
+                "prejuizo": 0.0, "acrescimo": 0.0,
+                "parcela_por_banca": 0.0, "reset_limite": False}
 
 
-# ============================================================
-# WIN DURANTE RECUPERAÇÃO
-# ============================================================
-
-def aplicar_win_recuperacao(
-    banca,
-    lucro
-):
-
-    # Resultado líquido do sinal: WIN menos os LOSS anteriores.
-    # Valores negativos também preservam perdas de ciclos interrompidos.
-    lucro = round(float(lucro), 2)
-
+def aplicar_win_recuperacao(banca, lucro):
     with estado_lock:
-
         dados = estado_frentes[banca]
-
-        dados["prejuizo_acumulado"] = round(
-            max(
-                0.0,
-                float(
-                    dados["prejuizo_acumulado"]
-                )
-                - lucro
-            ),
-            2
-        )
-
-        restante = round(
-            float(
-                dados["prejuizo_acumulado"]
-            ),
-            2
-        )
-
-        if restante <= 0:
-
-            dados["ciclo_gestao"] = 1
-            dados["entrada_atual"] = round(
-                obter_entrada_base(), 2
-            )
-            dados["prejuizo_acumulado"] = 0.0
-            dados["em_recuperacao"] = False
-
-            return {
-                "recuperado": True,
-                "restante": 0.0,
-            }
-
-        dados["em_recuperacao"] = True
-        dados["entrada_atual"] = round(
-            obter_entrada_base()
-            + restante,
-            2
-        )
-
-    return {
-        "recuperado": False,
-        "restante": restante,
-    }
+        dados["entrada_atual"] = round(max(ENTRADA_MINIMA,
+                                           float(dados["entrada_atual"]) / 2), 2)
+        dados["prejuizo_acumulado"] = 0.0
+        dados["em_recuperacao"] = False
+        dados["ciclo_gestao"] = 1
+        return {"recuperado": True, "restante": 0.0}
 
 
 # ============================================================
@@ -1692,10 +1589,7 @@ def ciclo(
                 2
             )
 
-        with estado_lock:
-            quantidade_gales = estado_frentes[banca]["gales_sinal"]
-            numero_sinal = estado_frentes[banca]["numero_sinal"]
-        log.info("SEQUENCIA GLOBAL | sinal=%s | %s | gales=%s", numero_sinal, banca, quantidade_gales)
+        quantidade_gales = GALES_POR_CICLO
 
         valores = valores_do_ciclo(
             entrada_atual,
@@ -2059,13 +1953,7 @@ def reservar_banca(
 
             if not dados["ocupada"]:
 
-                global contador_sinais
-                numero_sinal = contador_sinais + 1
-                dados["numero_sinal"] = numero_sinal
-                dados["gales_sinal"] = (numero_sinal - 1) % 4
-                dados["entrada_atual"] = round(
-                    obter_entrada_base() + float(dados["prejuizo_acumulado"]), 2
-                )
+                # Entrada própria preservada para esta banca.
 
                 dados["ocupada"] = True
                 dados["ativo"] = ativo
@@ -2077,8 +1965,6 @@ def reservar_banca(
                 ativos_em_uso.add(
                     ativo
                 )
-                contador_sinais = numero_sinal
-
                 return banca
 
     return None

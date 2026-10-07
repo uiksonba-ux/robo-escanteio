@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V14-DIGITAL-BASE2-G1-X2-SEMREC-5B-PRACTICE"
+VERSAO = "IQ-V15-DIGITAL-0.5PCT-G5-X2-REC20-5B-PRACTICE"
 
 app = Flask(__name__)
 
@@ -160,7 +160,7 @@ MULTIPLICADOR_GALE = env_float(
     1.0
 )
 
-# Até 5 gales suportados; configuração atual: 2.
+# Até 5 gales suportados; configuração atual: 5.
 GALES_POR_CICLO = env_int(
     "MAX_GALES",
     1,

@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V13-DIGITAL-BASE2-G1-X2-REC20-5B-INFINITO-PRACTICE"
+VERSAO = "IQ-V14-DIGITAL-BASE2-G1-X2-SEMREC-5B-PRACTICE"
 
 app = Flask(__name__)
 
@@ -170,7 +170,7 @@ GALES_POR_CICLO = env_int(
 
 RECUPERACAO_PERCENTUAL = env_float(
     "RECUPERACAO_PERCENTUAL",
-    0.20,
+    0.0,
     0.0
 )
 

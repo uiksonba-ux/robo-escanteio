@@ -158,11 +158,12 @@ MULTIPLICADOR_GALE = env_float(
 )
 
 # Até 5 gales suportados; configuração atual: 5.
-GALES_POR_CICLO = 2
+GALES_POR_CICLO = 0
 
 RECUPERACAO_PERCENTUAL = 0.0
 
-QTD_BANCAS = 10
+QTD_BANCAS = 3
+PERCENTUAL_ENTRADA = 0.30
 
 
 # ============================================================
@@ -270,6 +271,7 @@ ativos_em_uso = set()
 bloqueados = {}
 ativos_validos = set()
 contador_sinais = 0
+reservas_pendentes = {}  # Reservas ainda não enviadas à corretora
 
 
 # ============================================================
@@ -329,8 +331,7 @@ estado_frentes = {
 
         "ciclo_gestao": 1,
 
-        "entrada_atual":
-            obter_entrada_base(),
+        "entrada_atual": 0.0,
 
         "prejuizo_acumulado": 0.0,
 
@@ -454,8 +455,8 @@ def conectar():
                 "🤖 ROBÔ V10 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
                 f"💰 Saldo: {saldo}\n"
-                f"💵 Entrada base: {entrada:.2f}\n\n"
-                f"🏦 {QTD_BANCAS} BANCAS INDEPENDENTES\n"
+                f"💵 Entrada: 30% do saldo disponível\n\n"
+                f"🏦 {QTD_BANCAS} BANCAS (saldo compartilhado)\n"
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
                 f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
@@ -1495,7 +1496,7 @@ def resetar_gestao(
 def aplicar_loss_ciclo(banca, perda_ciclo):
     with estado_lock:
         dados = estado_frentes[banca]
-        dados["entrada_atual"] = round(float(dados["entrada_atual"]) * 2, 2)
+        dados["entrada_atual"] = 0.0  # Recalcular no próximo sinal
         dados["ciclo_gestao"] += 1
         dados["prejuizo_acumulado"] = 0.0
         dados["em_recuperacao"] = False
@@ -1507,8 +1508,7 @@ def aplicar_loss_ciclo(banca, perda_ciclo):
 def aplicar_win_recuperacao(banca, lucro):
     with estado_lock:
         dados = estado_frentes[banca]
-        dados["entrada_atual"] = round(max(ENTRADA_MINIMA,
-                                           float(dados["entrada_atual"]) / 2), 2)
+        dados["entrada_atual"] = 0.0  # Recalcular no próximo sinal
         dados["prejuizo_acumulado"] = 0.0
         dados["em_recuperacao"] = False
         dados["ciclo_gestao"] = 1
@@ -1544,6 +1544,24 @@ def liberar_banca(
 # ============================================================
 # CICLO DA OPERAÇÃO
 # ============================================================
+
+def reservar_entrada_percentual(banca):
+    """Reserva 30% do saldo PRACTICE disponível, descontando reservas pendentes."""
+    if not garantir_practice():
+        return None
+    with estado_lock:
+        with api_lock:
+            saldo = float(api.get_balance())
+        disponivel = max(0.0, saldo - sum(reservas_pendentes.values()))
+        valor = round(disponivel * PERCENTUAL_ENTRADA, 2)
+        if valor < ENTRADA_MINIMA or valor > disponivel:
+            log.warning("%s | SALDO INSUFICIENTE | disponivel=%.2f", banca, disponivel)
+            return None
+        reservas_pendentes[banca] = valor
+        estado_frentes[banca]["entrada_atual"] = valor
+        log.info("RESERVA | %s | saldo_disponivel=%.2f | 30%%=%.2f", banca, disponivel, valor)
+        return valor
+
 
 def ciclo(
     banca,
@@ -1589,6 +1607,10 @@ def ciclo(
                 2
             )
 
+        entrada_reservada = reservar_entrada_percentual(banca)
+        if entrada_reservada is None:
+            return
+        entrada_atual = entrada_reservada
         quantidade_gales = GALES_POR_CICLO
 
         valores = valores_do_ciclo(
@@ -1625,6 +1647,9 @@ def ciclo(
                 direcao,
                 expiracao
             )
+
+            with estado_lock:
+                reservas_pendentes.pop(banca, None)
 
             if not ok:
 
@@ -1912,6 +1937,8 @@ def ciclo(
     finally:
 
         try:
+            with estado_lock:
+                reservas_pendentes.pop(banca, None)
             if perdas_deste_sinal > 0 and not gestao_contabilizada:
                 rec = aplicar_win_recuperacao(banca, -perdas_deste_sinal)
                 log.warning(

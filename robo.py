@@ -226,6 +226,8 @@ BANCAS = [
 # ATIVOS
 # ============================================================
 
+# Quatro ativos OTC removidos após logs da biblioteca: "not found on consts".
+# Não se cria mapeamento de IDs sem confirmação da corretora.
 ATIVOS = [
 
     "EURUSD",
@@ -246,14 +248,10 @@ ATIVOS = [
     "GBPUSD-OTC",
     "EURGBP-OTC",
     "USDJPY-OTC",
-    "AUDUSD-OTC",
     "USDCHF-OTC",
-    "USDCAD-OTC",
     "EURJPY-OTC",
     "GBPJPY-OTC",
     "AUDCAD-OTC",
-    "AUDJPY-OTC",
-    "EURCAD-OTC",
     "NZDUSD-OTC",
 ]
 

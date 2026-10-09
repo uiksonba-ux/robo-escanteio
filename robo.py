@@ -160,10 +160,10 @@ MULTIPLICADOR_GALE = env_float(
 # Até 5 gales suportados; configuração atual: 5.
 GALES_POR_CICLO = 2
 
-RECUPERACAO_PERCENTUAL = 1.0
+RECUPERACAO_PERCENTUAL = 0.25
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 
-QTD_BANCAS = 10
+QTD_BANCAS = 6
 PERCENTUAL_ENTRADA = 0.0
 
 
@@ -273,6 +273,7 @@ bloqueados = {}
 ativos_validos = set()
 contador_sinais = 0
 reservas_pendentes = {}  # Reservas ainda não enviadas à corretora
+pares_finalizados = {}  # ativo -> bancas do par que concluíram o ciclo
 
 
 # ============================================================
@@ -457,7 +458,7 @@ def conectar():
                 "🤖 ROBÔ V10 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
                 f"💰 Saldo: {saldo}\n"
-                f"💵 Entrada inicial R$2; recuperação individual de 100%\n\n"
+                f"💵 Entrada inicial R$2; recuperação individual de 25%\n\n"
                 f"🏦 {QTD_BANCAS} BANCAS (saldo compartilhado)\n"
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
@@ -1521,7 +1522,7 @@ def calcular_entrada_recuperacao(prejuizo):
         return ENTRADA_BASE
     # Arredondamento para cima: objetivo de recuperar prejuízo + lucro-base estimado.
     import math
-    alvo = prejuizo + ENTRADA_BASE * PAYOUT_RECUPERACAO
+    alvo = prejuizo * RECUPERACAO_PERCENTUAL + ENTRADA_BASE * PAYOUT_RECUPERACAO
     return max(ENTRADA_BASE, math.ceil((alvo / PAYOUT_RECUPERACAO) * 100) / 100)
 
 
@@ -1553,26 +1554,24 @@ def aplicar_win_recuperacao(banca, lucro):
 # LIBERAR BANCA
 # ============================================================
 
-def liberar_banca(
-    banca,
-    ativo
-):
-
+def liberar_banca(banca, ativo):
+    """Só libera o par quando ambas as operações (inclusive gales) terminarem."""
     with estado_lock:
-
-        ativos_em_uso.discard(
-            ativo
-        )
-
-        dados = estado_frentes[banca]
-
-        dados["ocupada"] = False
-        dados["ativo"] = None
-        dados["direcao"] = None
-        dados["score"] = None
-        dados["timeframe"] = None
-        dados["expiracao"] = None
-        dados["order_id"] = None
+        concluidas = pares_finalizados.setdefault(ativo, set())
+        concluidas.add(banca)
+        if len(concluidas) < 2:
+            log.info("PAR AGUARDANDO | %s | finalizada=%s", ativo, banca)
+            return
+        for nome in ("BANCA " + str(i) for i in range(1, 7)):
+            dados = estado_frentes[nome]
+            if dados["ativo"] != ativo:
+                continue
+            dados.update({"ocupada": False, "ativo": None, "direcao": None,
+                          "score": None, "timeframe": None, "expiracao": None,
+                          "order_id": None})
+        ativos_em_uso.discard(ativo)
+        pares_finalizados.pop(ativo, None)
+        log.info("PAR LIBERADO | %s | duas bancas concluídas", ativo)
 
 
 # ============================================================
@@ -1949,7 +1948,7 @@ def ciclo(
                     f"{quantidade_gales}\n"
                     f"💸 LOSS do ciclo: "
                     f"{perdas_deste_sinal:.2f}\n"
-                    f"➗ Parcela para cada banca "
+                    f"♻️ Recuperação da própria banca "
                     f"({RECUPERACAO_PERCENTUAL * 100:g}%): "
                     f"{gestao['parcela_por_banca']:.2f}\n"
                     f"➡️ Próximo ciclo: "
@@ -1993,103 +1992,41 @@ def ciclo(
 # RESERVAR BANCA
 # ============================================================
 
-def reservar_banca(
-    ativo,
-    direcao,
-    score,
-    timeframe,
-    expiracao
-):
-
+def reservar_banca(ativo, direcao, score, timeframe, expiracao):
+    """Reserva um par: 1/4, 2/5 ou 3/6, sempre no mesmo sinal."""
     with estado_lock:
-
         if ativo in ativos_em_uso:
             return None
-
-        for banca in BANCAS:
-
-            dados = estado_frentes[
-                banca
-            ]
-
-            if not dados["ocupada"]:
-
-                # Entrada própria preservada para esta banca.
-
-                dados["ocupada"] = True
-                dados["ativo"] = ativo
-                dados["direcao"] = direcao
-                dados["score"] = score
-                dados["timeframe"] = timeframe
-                dados["expiracao"] = expiracao
-
-                ativos_em_uso.add(
-                    ativo
-                )
-                return banca
-
+        for numero in range(1, 4):
+            normal, contraria = f"BANCA {numero}", f"BANCA {numero + 3}"
+            if estado_frentes[normal]["ocupada"] or estado_frentes[contraria]["ocupada"]:
+                continue
+            oposta = {"call": "put", "put": "call"}.get(direcao.lower())
+            if oposta is None:
+                return None
+            for banca, lado in ((normal, direcao), (contraria, oposta)):
+                estado_frentes[banca].update({
+                    "ocupada": True, "ativo": ativo, "direcao": lado,
+                    "score": score, "timeframe": timeframe, "expiracao": expiracao
+                })
+            ativos_em_uso.add(ativo)
+            pares_finalizados[ativo] = set()
+            return ((normal, direcao), (contraria, oposta))
     return None
 
 
-# ============================================================
-# DISPARAR SINAL
-# ============================================================
-
-def disparar_sinal(
-    ativo,
-    direcao,
-    score,
-    timeframe,
-    expiracao
-):
-
-    banca = reservar_banca(
-        ativo,
-        direcao,
-        score,
-        timeframe,
-        expiracao
-    )
-
-    if banca is None:
+def disparar_sinal(ativo, direcao, score, timeframe, expiracao):
+    par = reservar_banca(ativo, direcao, score, timeframe, expiracao)
+    if par is None:
         return False
-
-    log.info(
-        "SINAL RESERVADO | "
-        "%s | %s | M%s | "
-        "Digital M%s | %s | score=%s",
-
-        banca,
-        ativo,
-        timeframe,
-        expiracao,
-        direcao.upper(),
-        score
-    )
-
-    thread = threading.Thread(
-
-        target=ciclo,
-
-        args=(
-            banca,
-            ativo,
-            direcao,
-            score,
-            timeframe,
-            expiracao,
-        ),
-
-        daemon=True,
-
-        name=(
-            f"operacao-{banca}-"
-            f"M{timeframe}-{ativo}"
+    log.info("SINAL PAREADO | %s | %s | %s/%s | M%s",
+             ativo, par[0][0], par[0][1].upper(), par[1][1].upper(), timeframe)
+    for banca, lado in par:
+        thread = threading.Thread(
+            target=ciclo, args=(banca, ativo, lado, score, timeframe, expiracao),
+            daemon=True, name=f"operacao-{banca}-M{timeframe}-{ativo}"
         )
-    )
-
-    thread.start()
-
+        thread.start()
     return True
 
 
@@ -2148,7 +2085,7 @@ def scanner_timeframe(
                         ][
                             "ocupada"
                         ]
-                        for banca in BANCAS
+                        for banca in BANCAS[:3]
                     )
 
                 if not existe_banca_livre:
@@ -2494,7 +2431,7 @@ def home():
                 MULTIPLICADOR_GALE,
 
             "gales_por_ciclo":
-                "global por sinal: 0, 1, 2, 3 (repetição)",
+                GALES_POR_CICLO,
 
             "ciclos":
                 "ilimitados",
@@ -2504,9 +2441,8 @@ def home():
 
             "regra_recuperacao":
                 (
-                    f"{RECUPERACAO_PERCENTUAL * 100:g}% de cada LOSS completo "
-                    "é distribuído para cada banca; a parcela acumulada "
-                    "é adicionada à ENTRADA_BASE da própria banca"
+                    f"Meta de {RECUPERACAO_PERCENTUAL * 100:g}% do déficit "
+                    "da própria banca na próxima entrada, calculada pelo payout estimado"
                 ),
 
             "reset":
@@ -2534,8 +2470,8 @@ def home():
 
         "distribuicao":
             (
-                "primeiro sinal aprovado -> "
-                "primeira banca livre"
+                "até 3 sinais simultâneos; pares 1/4, 2/5, 3/6; "
+                "CALL/PUT opostos; libera apenas após ambos concluírem"
             ),
 
         "estatisticas":
@@ -2585,7 +2521,7 @@ def health():
             MULTIPLICADOR_GALE,
 
         "gales_por_ciclo":
-            "global por sinal: 0, 1, 2, 3 (repetição)",
+            GALES_POR_CICLO,
 
         "ciclos":
             "ilimitados",

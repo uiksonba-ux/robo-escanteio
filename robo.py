@@ -158,9 +158,10 @@ MULTIPLICADOR_GALE = env_float(
 )
 
 # Até 5 gales suportados; configuração atual: 5.
-GALES_POR_CICLO = 5
+GALES_POR_CICLO = 2
 
-RECUPERACAO_PERCENTUAL = 0.0
+RECUPERACAO_PERCENTUAL = 1.0
+PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 
 QTD_BANCAS = 3
 PERCENTUAL_ENTRADA = 0.0
@@ -456,7 +457,7 @@ def conectar():
                 "🤖 ROBÔ V10 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
                 f"💰 Saldo: {saldo}\n"
-                f"💵 Entrada fixa: R$5 por banca\n\n"
+                f"💵 Entrada inicial R$5; recuperação individual de 100%\n\n"
                 f"🏦 {QTD_BANCAS} BANCAS (saldo compartilhado)\n"
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
@@ -1503,26 +1504,50 @@ def resetar_gestao(
 def aplicar_loss_ciclo(banca, perda_ciclo):
     with estado_lock:
         dados = estado_frentes[banca]
-        dados["entrada_atual"] = ENTRADA_BASE
         dados["gales_reativos"] += 1
         dados["ciclo_gestao"] += 1
-        dados["prejuizo_acumulado"] = 0.0
-        dados["em_recuperacao"] = False
+        dados["prejuizo_acumulado"] = round(
+            dados["prejuizo_acumulado"] + max(0.0, float(perda_ciclo)), 2
+        )
+        dados["em_recuperacao"] = dados["prejuizo_acumulado"] > 0
+        dados["entrada_atual"] = calcular_entrada_recuperacao(dados["prejuizo_acumulado"])
         return {"ciclo": dados["ciclo_gestao"], "entrada": dados["entrada_atual"],
-                "prejuizo": 0.0, "acrescimo": 0.0,
-                "parcela_por_banca": 0.0, "reset_limite": False}
+                "prejuizo": dados["prejuizo_acumulado"], "acrescimo": 0.0,
+                "parcela_por_banca": dados["prejuizo_acumulado"], "reset_limite": False}
+
+
+def calcular_entrada_recuperacao(prejuizo):
+    if prejuizo <= 0:
+        return ENTRADA_BASE
+    # Arredondamento para cima: objetivo de recuperar prejuízo + lucro-base estimado.
+    import math
+    alvo = prejuizo + ENTRADA_BASE * PAYOUT_RECUPERACAO
+    return max(ENTRADA_BASE, math.ceil((alvo / PAYOUT_RECUPERACAO) * 100) / 100)
+
+
+def registrar_perdas_interrompidas(banca, perdas):
+    with estado_lock:
+        dados = estado_frentes[banca]
+        dados["prejuizo_acumulado"] = round(dados["prejuizo_acumulado"] + perdas, 2)
+        dados["em_recuperacao"] = True
+        dados["entrada_atual"] = calcular_entrada_recuperacao(dados["prejuizo_acumulado"])
+        return {"restante": dados["prejuizo_acumulado"]}
 
 
 def aplicar_win_recuperacao(banca, lucro):
     with estado_lock:
         dados = estado_frentes[banca]
-        dados["entrada_atual"] = ENTRADA_BASE
         dados["gales_reativos"] = max(0, dados["gales_reativos"] - 1)
-        dados["prejuizo_acumulado"] = 0.0
-        dados["em_recuperacao"] = False
-        dados["ciclo_gestao"] = 1
-        return {"recuperado": True, "restante": 0.0}
-
+        # Lucro negativo do ciclo aumenta o déficit, mesmo quando houve WIN no último gale.
+        dados["prejuizo_acumulado"] = round(
+            max(0.0, dados["prejuizo_acumulado"] - float(lucro)), 2
+        )
+        dados["em_recuperacao"] = dados["prejuizo_acumulado"] > 0
+        dados["entrada_atual"] = calcular_entrada_recuperacao(dados["prejuizo_acumulado"])
+        if not dados["em_recuperacao"]:
+            dados["ciclo_gestao"] = 1
+        return {"recuperado": not dados["em_recuperacao"],
+                "restante": dados["prejuizo_acumulado"]}
 
 # ============================================================
 # LIBERAR BANCA
@@ -1555,19 +1580,20 @@ def liberar_banca(
 # ============================================================
 
 def reservar_entrada_percentual(banca):
-    """Reserva entrada fixa R$5 descontando reservas simultâneas."""
+    """Reserva entrada ajustada ao prejuízo desta banca, sem usar saldo de outras reservas."""
     if not garantir_practice():
         return None
     with estado_lock:
+        valor = calcular_entrada_recuperacao(estado_frentes[banca]["prejuizo_acumulado"])
         with api_lock:
             saldo = float(api.get_balance())
         disponivel = saldo - sum(reservas_pendentes.values())
-        if disponivel < ENTRADA_BASE:
-            log.warning("%s | SALDO INSUFICIENTE | disponivel=%.2f", banca, disponivel)
+        if disponivel < valor:
+            log.warning("%s | RECUPERAÇÃO BLOQUEADA POR SALDO | necessário=%.2f | disponível=%.2f", banca, valor, disponivel)
             return None
-        reservas_pendentes[banca] = ENTRADA_BASE
-        estado_frentes[banca]["entrada_atual"] = ENTRADA_BASE
-        return ENTRADA_BASE
+        reservas_pendentes[banca] = valor
+        estado_frentes[banca]["entrada_atual"] = valor
+        return valor
 
 
 def ciclo(
@@ -1948,7 +1974,7 @@ def ciclo(
             with estado_lock:
                 reservas_pendentes.pop(banca, None)
             if perdas_deste_sinal > 0 and not gestao_contabilizada:
-                rec = aplicar_win_recuperacao(banca, -perdas_deste_sinal)
+                rec = registrar_perdas_interrompidas(banca, perdas_deste_sinal)
                 log.warning(
                     "%s | CICLO INTERROMPIDO | perda confirmada=%.2f | "
                     "prejuizo restante=%.2f",

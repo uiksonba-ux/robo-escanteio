@@ -1170,6 +1170,30 @@ def executar_ordem(
     if direcao not in ("call", "put"):
         return (False, f"direcao_invalida:{direcao}")
 
+    # Consulta a disponibilidade REAL do mercado digital antes da tentativa.
+    # Nunca troca silenciosamente para outro mercado ou para conta REAL.
+    try:
+        with api_lock:
+            horarios = api.get_all_open_time()
+        digitais = horarios.get("digital", {}) if isinstance(horarios, dict) else {}
+        mercado = digitais.get(ativo)
+        if not isinstance(mercado, dict) or not mercado.get("open", False):
+            motivo = "mercado_digital_fechado_ou_indisponivel"
+            log.warning("DIGITAL INDISPONIVEL | %s | %s | exp=%s", banca, ativo, expiracao)
+            bloquear(ativo, expiracao, motivo)
+            return (False, motivo)
+    except Exception as e:
+        motivo = "falha_consulta_mercado_digital"
+        log.warning("CONSULTA DIGITAL FALHOU | %s | %s | %s", banca, ativo, e)
+        bloquear(ativo, expiracao, motivo)
+        return (False, motivo)
+
+    # A API digital suporta somente as durações aceitas pela biblioteca.
+    if expiracao not in (1, 5, 15):
+        motivo = f"expiracao_digital_invalida:{expiracao}"
+        log.warning("EXPIRACAO DIGITAL INVALIDA | %s | %s", ativo, expiracao)
+        return (False, motivo)
+
     log.info(
         "BUY DIGITAL V2 | %s | %s | M%s | %s | %.2f",
         banca, ativo, expiracao, direcao.upper(), valor

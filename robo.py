@@ -1178,6 +1178,13 @@ def executar_ordem(
         log.warning("EXPIRACAO DIGITAL INVALIDA | %s | %s", ativo, expiracao)
         return (False, motivo)
 
+    # Diagnóstico seguro: não envia ordem adicional.
+    # Registra contexto mínimo para distinguir instrumento inválido de rejeição.
+    log.info(
+        "DIAGNOSTICO DIGITAL | banca=%s | ativo=%s | direcao=%s | expiracao=%s | valor=%.2f | conta=PRACTICE",
+        banca, ativo, direcao, expiracao, valor
+    )
+
     log.info(
         "BUY DIGITAL V2 | %s | %s | M%s | %s | %.2f",
         banca, ativo, expiracao, direcao.upper(), valor
@@ -1204,6 +1211,7 @@ def executar_ordem(
                 expiracao,
             )
 
+        log.info("DIAGNOSTICO RESPOSTA | ativo=%s | expiracao=%s | tipo=%s", ativo, expiracao, type(resposta).__name__)
         log.info(
             "RESPOSTA buy_digital_spot_v2 | %s | %s",
             ativo, resposta

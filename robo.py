@@ -157,8 +157,8 @@ MULTIPLICADOR_GALE = env_float(
     1.0
 )
 
-# Até 5 gales suportados; configuração atual: 5.
-GALES_POR_CICLO = 2
+# Cinco gales por ciclo; aumento global de R$1 somente após LOSS completo.
+GALES_POR_CICLO = 5
 
 RECUPERACAO_PERCENTUAL = 0.0
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
@@ -183,7 +183,7 @@ def agora_brasil():
 # ============================================================
 
 def obter_entrada_base(saldo=None):
-    return round(max(ENTRADA_MINIMA, ENTRADA_BASE + vitorias_progressao - perdas_progressao), 2)
+    return round(max(ENTRADA_MINIMA, ENTRADA_BASE + perdas_progressao), 2)
 
 
 # ============================================================
@@ -464,7 +464,7 @@ def conectar():
                 f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
                 f"🛡 {GALES_POR_CICLO} GALES POR CICLO\n"
                 "♾️ CICLOS ILIMITADOS\n"
-                "📈 Progressão global +1 WIN / -1 LOSS\n\n"
+                "📈 Progressão global +R$1 por LOSS de ciclo; WIN mantém entrada\n\n"
                 f"🔥 Score mínimo: {SCORE_MIN}\n"
                 f"↔️ Diferença mínima: {DIFERENCA_MINIMA}"
             )
@@ -1526,7 +1526,7 @@ def aplicar_loss_ciclo(banca, perda_ciclo):
             dados["entrada_atual"] = nova
         log.info("PROGRESSAO GLOBAL | LOSS %s | W=%s L=%s | entrada=%.2f", banca, vitorias_progressao, perdas_progressao, nova)
         return {"ciclo": estado_frentes[banca]["ciclo_gestao"], "entrada": nova,
-                "prejuizo": 0.0, "acrescimo": -1.0, "parcela_por_banca": 0.0, "reset_limite": False}
+                "prejuizo": 0.0, "acrescimo": 1.0, "parcela_por_banca": 0.0, "reset_limite": False}
 
 def calcular_entrada_recuperacao(prejuizo):
     return obter_entrada_base()
@@ -1538,6 +1538,7 @@ def aplicar_win_recuperacao(banca, lucro):
     global vitorias_progressao
     with estado_lock:
         vitorias_progressao += 1
+        # WIN não reduz nem aumenta a entrada global.
         nova = obter_entrada_base()
         for dados in estado_frentes.values():
             dados["entrada_atual"] = nova

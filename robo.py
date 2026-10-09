@@ -16,7 +16,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-V19-10B-20X2-5X3-G2-REC10-PRACTICE"
+VERSAO = "IQ-V19-10B-10X2-10X3-ALTERNADOS-G2-REC10-PRACTICE"
 
 app = Flask(__name__)
 
@@ -1659,7 +1659,7 @@ def ciclo(
             ciclo_atual,
             entrada_atual,
             quantidade_gales,
-            "global-20x2-5x3",
+            "global-10x2-10x3-alternados",
             em_recuperacao,
             prejuizo_antes,
             valores
@@ -1670,8 +1670,8 @@ def ciclo(
                 # A posição global avança somente se a primeira ordem for aceita.
                 with contador_entrada_lock:
                     with estado_lock:
-                        posicao = entradas_globais_aceitas % 25
-                    multiplicador_ciclo = 2.0 if posicao < 20 else 3.0
+                        posicao = entradas_globais_aceitas % 20
+                    multiplicador_ciclo = 2.0 if posicao % 2 == 0 else 3.0
                     valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)
                     valor = valores[0]
                     ok, order_id = executar_ordem(banca, ativo, valor, direcao, expiracao)
@@ -2431,7 +2431,7 @@ def home():
 
             "regra_recuperacao":
                 (
-                    "Recuperação de 10% por banca; 20 entradas globais X2, 5 X3"
+                    "Recuperação de 10% por banca; 10 entradas X2 e 10 X3 alternadas a cada 20 ciclos globais"
                 ),
 
             "reset":

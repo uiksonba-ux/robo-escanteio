@@ -148,7 +148,7 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_BASE = 5.0
+ENTRADA_BASE = 2.0
 ENTRADA_MINIMA = 2.0
 
 MULTIPLICADOR_GALE = env_float(
@@ -457,7 +457,7 @@ def conectar():
                 "🤖 ROBÔ V10 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
                 f"💰 Saldo: {saldo}\n"
-                f"💵 Entrada inicial R$5; recuperação individual de 100%\n\n"
+                f"💵 Entrada inicial R$2; recuperação individual de 100%\n\n"
                 f"🏦 {QTD_BANCAS} BANCAS (saldo compartilhado)\n"
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"

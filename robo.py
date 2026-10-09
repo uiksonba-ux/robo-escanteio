@@ -148,7 +148,7 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_BASE = env_float("ENTRADA_BASE", 2.0, 2.0)
+ENTRADA_BASE = 5.0
 ENTRADA_MINIMA = 2.0
 
 MULTIPLICADOR_GALE = env_float(
@@ -158,12 +158,12 @@ MULTIPLICADOR_GALE = env_float(
 )
 
 # Até 5 gales suportados; configuração atual: 5.
-GALES_POR_CICLO = 0
+GALES_POR_CICLO = 5
 
 RECUPERACAO_PERCENTUAL = 0.0
 
 QTD_BANCAS = 3
-PERCENTUAL_ENTRADA = 0.30
+PERCENTUAL_ENTRADA = 0.0
 
 
 # ============================================================
@@ -331,7 +331,8 @@ estado_frentes = {
 
         "ciclo_gestao": 1,
 
-        "entrada_atual": 0.0,
+        "entrada_atual": ENTRADA_BASE,
+        "gales_reativos": GALES_POR_CICLO,
 
         "prejuizo_acumulado": 0.0,
 
@@ -455,7 +456,7 @@ def conectar():
                 "🤖 ROBÔ V10 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
                 f"💰 Saldo: {saldo}\n"
-                f"💵 Entrada: 30% do saldo disponível\n\n"
+                f"💵 Entrada fixa: R$5 por banca\n\n"
                 f"🏦 {QTD_BANCAS} BANCAS (saldo compartilhado)\n"
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
@@ -1158,6 +1159,11 @@ def executar_ordem(
     direcao = str(direcao).strip().lower()
     valor = round(float(valor), 2)
     expiracao = int(expiracao)
+    with api_lock:
+        saldo_disponivel = float(api.get_balance())
+    if valor > saldo_disponivel or valor < ENTRADA_MINIMA:
+        log.warning("%s | ORDEM BLOQUEADA POR SALDO | valor=%.2f | saldo=%.2f", banca, valor, saldo_disponivel)
+        return (False, "saldo_insuficiente")
 
     if direcao not in ("call", "put"):
         return (False, f"direcao_invalida:{direcao}")
@@ -1469,6 +1475,7 @@ def resetar_gestao(
         dados = estado_frentes[banca]
 
         dados["ciclo_gestao"] = 1
+        dados["gales_reativos"] = GALES_POR_CICLO
 
         dados["entrada_atual"] = round(
             entrada_base,
@@ -1496,7 +1503,8 @@ def resetar_gestao(
 def aplicar_loss_ciclo(banca, perda_ciclo):
     with estado_lock:
         dados = estado_frentes[banca]
-        dados["entrada_atual"] = 0.0  # Recalcular no próximo sinal
+        dados["entrada_atual"] = ENTRADA_BASE
+        dados["gales_reativos"] += 1
         dados["ciclo_gestao"] += 1
         dados["prejuizo_acumulado"] = 0.0
         dados["em_recuperacao"] = False
@@ -1508,7 +1516,8 @@ def aplicar_loss_ciclo(banca, perda_ciclo):
 def aplicar_win_recuperacao(banca, lucro):
     with estado_lock:
         dados = estado_frentes[banca]
-        dados["entrada_atual"] = 0.0  # Recalcular no próximo sinal
+        dados["entrada_atual"] = ENTRADA_BASE
+        dados["gales_reativos"] = max(0, dados["gales_reativos"] - 1)
         dados["prejuizo_acumulado"] = 0.0
         dados["em_recuperacao"] = False
         dados["ciclo_gestao"] = 1
@@ -1546,21 +1555,19 @@ def liberar_banca(
 # ============================================================
 
 def reservar_entrada_percentual(banca):
-    """Reserva 30% do saldo PRACTICE disponível, descontando reservas pendentes."""
+    """Reserva entrada fixa R$5 descontando reservas simultâneas."""
     if not garantir_practice():
         return None
     with estado_lock:
         with api_lock:
             saldo = float(api.get_balance())
-        disponivel = max(0.0, saldo - sum(reservas_pendentes.values()))
-        valor = round(disponivel * PERCENTUAL_ENTRADA, 2)
-        if valor < ENTRADA_MINIMA or valor > disponivel:
+        disponivel = saldo - sum(reservas_pendentes.values())
+        if disponivel < ENTRADA_BASE:
             log.warning("%s | SALDO INSUFICIENTE | disponivel=%.2f", banca, disponivel)
             return None
-        reservas_pendentes[banca] = valor
-        estado_frentes[banca]["entrada_atual"] = valor
-        log.info("RESERVA | %s | saldo_disponivel=%.2f | 30%%=%.2f", banca, disponivel, valor)
-        return valor
+        reservas_pendentes[banca] = ENTRADA_BASE
+        estado_frentes[banca]["entrada_atual"] = ENTRADA_BASE
+        return ENTRADA_BASE
 
 
 def ciclo(
@@ -1611,7 +1618,8 @@ def ciclo(
         if entrada_reservada is None:
             return
         entrada_atual = entrada_reservada
-        quantidade_gales = GALES_POR_CICLO
+        with estado_lock:
+            quantidade_gales = estado_frentes[banca]["gales_reativos"]
 
         valores = valores_do_ciclo(
             entrada_atual,

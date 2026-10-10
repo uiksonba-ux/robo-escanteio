@@ -467,7 +467,7 @@ def conectar():
                 f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
                 f"🛡 {GALES_POR_CICLO} GALES POR CICLO\n"
                 "♾️ CICLOS ILIMITADOS\n"
-                "📈 Alternância global X2/X3 a cada entrada aceita; 10 de cada em 20\n\n"
+                "📈 Multiplicador X2 fixo em todas as entradas\n\n"
                 f"🔥 Score mínimo: {SCORE_MIN}\n"
                 f"↔️ Diferença mínima: {DIFERENCA_MINIMA}"
             )
@@ -1670,7 +1670,7 @@ def ciclo(
             ciclo_atual,
             entrada_atual,
             quantidade_gales,
-            "global-10x2-10x3-alternados",
+            "X2-fixo",
             em_recuperacao,
             prejuizo_antes,
             valores
@@ -1681,8 +1681,8 @@ def ciclo(
                 # A posição global avança somente se a primeira ordem for aceita.
                 with contador_entrada_lock:
                     with estado_lock:
-                        posicao = entradas_globais_aceitas % 20
-                    multiplicador_ciclo = 2.0 if posicao % 2 == 0 else 3.0
+                        posicao = entradas_globais_aceitas
+                    multiplicador_ciclo = 2.0
                     valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)
                     valor = valores[0]
                     ok, order_id = executar_ordem(banca, ativo, valor, direcao, expiracao)

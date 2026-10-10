@@ -274,6 +274,9 @@ reservas_pendentes = {}  # Reservas ainda não enviadas à corretora
 vitorias_progressao = 0
 perdas_progressao = 0
 entradas_globais_aceitas = 0
+entradas_normais_desde_reset = 0
+wins_base_ponderada = 0
+losses_base_ponderada = 0
 contador_entrada_lock = threading.Lock()
 
 
@@ -1370,7 +1373,9 @@ def taxa(
 
 def taxa_ponderada(wins, losses):
     """Assertividade global para gestao: base 81% com peso de 50 operacoes."""
-    return round((40.5 + wins) / (50 + wins + losses) * 100, 2)
+    wins_janela = max(0, wins - wins_base_ponderada)
+    losses_janela = max(0, losses - losses_base_ponderada)
+    return round((40.5 + wins_janela) / (50 + wins_janela + losses_janela) * 100, 2)
 
 
 def registrar_win(
@@ -1703,6 +1708,12 @@ def ciclo(
                     if ok:
                         with estado_lock:
                             globals()["entradas_globais_aceitas"] += 1
+                            globals()["entradas_normais_desde_reset"] += 1
+                            if entradas_normais_desde_reset >= 200:
+                                globals()["wins_base_ponderada"] = stats["wins"]
+                                globals()["losses_base_ponderada"] = stats["losses"]
+                                globals()["entradas_normais_desde_reset"] = 0
+                                log.info("ASSERTIVIDADE PONDERADA REINICIADA | 200 entradas normais | base 81%%/50 operacoes")
                             dados = estado_frentes[banca]
                             if dados["entradas_recuperacao_restantes"] > 0:
                                 dados["entradas_recuperacao_restantes"] -= 1

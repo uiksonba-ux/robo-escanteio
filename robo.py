@@ -465,7 +465,7 @@ def conectar():
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
                 f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
-                "🛡 1 a 5 GALES POR CICLO (conforme assertividade)\n"
+                "🛡 0 a 5 GALES POR CICLO (conforme assertividade)\n"
                 "♾️ CICLOS ILIMITADOS\n"
                 "📈 Multiplicador X2 fixo em todas as entradas\n\n"
                 f"🔥 Score mínimo: {SCORE_MIN}\n"
@@ -1650,10 +1650,10 @@ def ciclo(
             acertos = stats["wins"]
             erros = stats["losses"]
             assertividade_atual = taxa(acertos, erros)
-            quantidade_gales = (1 if assertividade_atual >= 91 else
-                                2 if assertividade_atual >= 90 else
-                                3 if assertividade_atual >= 89 else
-                                4 if assertividade_atual >= 88 else 5)
+            quantidade_gales = (0 if assertividade_atual >= 80 else
+                                2 if assertividade_atual >= 78 else
+                                3 if assertividade_atual >= 76 else
+                                4 if assertividade_atual >= 74 else 5)
 
         multiplicador_ciclo = 2.0
         valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)

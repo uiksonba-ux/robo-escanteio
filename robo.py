@@ -1647,7 +1647,13 @@ def ciclo(
             return
         entrada_atual = entrada_reservada
         with estado_lock:
-            quantidade_gales = GALES_POR_CICLO
+            acertos = stats["wins"]
+            erros = stats["losses"]
+            assertividade_atual = taxa(acertos, erros)
+            quantidade_gales = (1 if assertividade_atual >= 95 else
+                                2 if assertividade_atual >= 92 else
+                                3 if assertividade_atual >= 90 else
+                                4 if assertividade_atual >= 88 else 5)
 
         multiplicador_ciclo = 2.0
         valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)

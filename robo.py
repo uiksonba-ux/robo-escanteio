@@ -148,8 +148,8 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_BASE = 5.0
-ENTRADA_MINIMA = 5.0
+ENTRADA_BASE = 2.0
+ENTRADA_MINIMA = 2.0
 
 MULTIPLICADOR_GALE = env_float(
     "MULTIPLICADOR_GALE",
@@ -160,7 +160,7 @@ MULTIPLICADOR_GALE = env_float(
 # Cinco gales por ciclo; aumento global de R$1 somente após LOSS completo.
 GALES_POR_CICLO = 2
 
-RECUPERACAO_PERCENTUAL = 0.10
+RECUPERACAO_PERCENTUAL = 1.00
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 
 QTD_BANCAS = 10
@@ -460,7 +460,7 @@ def conectar():
                 "🤖 ROBÔ V10 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
                 f"💰 Saldo: {saldo}\n"
-                f"💵 Entrada inicial R$5; multiplicador X2 fixo; recuperação 10% por banca\n\n"
+                f"💵 Entrada inicial R$2; multiplicador X2 fixo; recuperação 100% por banca\n\n"
                 f"🏦 {QTD_BANCAS} BANCAS (saldo compartilhado)\n"
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"

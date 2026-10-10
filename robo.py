@@ -1367,6 +1367,11 @@ def taxa(
     )
 
 
+def taxa_ponderada(wins, losses):
+    """Assertividade global para gestao: base 81% com peso de 50 operacoes."""
+    return round((40.5 + wins) / (50 + wins + losses) * 100, 2)
+
+
 def registrar_win(
     banca,
     nivel
@@ -1651,7 +1656,7 @@ def ciclo(
             erros = stats["losses"]
             # Referencia inicial ponderada: 50 operacoes equivalentes a 81%.
             # Nao altera nem falsifica os resultados reais registrados.
-            assertividade_atual = round((40.5 + acertos) / (50 + acertos + erros) * 100, 2)
+            assertividade_atual = taxa_ponderada(acertos, erros)
             quantidade_gales = (0 if assertividade_atual >= 82 else
                                 1 if assertividade_atual >= 80 else
                                 2 if assertividade_atual >= 78 else
@@ -1889,7 +1894,7 @@ def ciclo(
                     f"{texto_recuperacao}\n"
                     f"📊 {w} WIN / {l} LOSS\n"
                     f"🎯 Assertividade: "
-                    f"{taxa(w, l)}%"
+                    f"{taxa_ponderada(w, l)}% (ponderada)"
                 )
 
                 return
@@ -1980,7 +1985,7 @@ def ciclo(
                     f"{saldo_atual}\n"
                     f"📊 {w} WIN / {l} LOSS\n"
                     f"🎯 Assertividade: "
-                    f"{taxa(w, l)}%"
+                    f"{taxa_ponderada(w, l)}% (ponderada)"
                 )
 
                 return
@@ -2370,7 +2375,7 @@ def home():
             **stats,
 
             "assertividade":
-                taxa(
+                taxa_ponderada(
                     stats["wins"],
                     stats["losses"]
                 ),

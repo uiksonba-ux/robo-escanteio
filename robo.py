@@ -1650,9 +1650,9 @@ def ciclo(
             acertos = stats["wins"]
             erros = stats["losses"]
             assertividade_atual = taxa(acertos, erros)
-            quantidade_gales = (1 if assertividade_atual >= 95 else
-                                2 if assertividade_atual >= 92 else
-                                3 if assertividade_atual >= 90 else
+            quantidade_gales = (1 if assertividade_atual >= 91 else
+                                2 if assertividade_atual >= 90 else
+                                3 if assertividade_atual >= 89 else
                                 4 if assertividade_atual >= 88 else 5)
 
         multiplicador_ciclo = 2.0

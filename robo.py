@@ -1372,8 +1372,9 @@ def taxa(
 
 
 def taxa_ponderada(wins, losses):
-    """Assertividade real das ordens finalizadas, sem peso inicial ficticio."""
-    return taxa(wins, losses)
+    """Taxa real das ordens desde o ultimo reset de 100 entradas iniciais."""
+    return taxa(max(0, wins - wins_base_ponderada),
+                max(0, losses - losses_base_ponderada))
 
 
 def registrar_win(
@@ -1703,11 +1704,11 @@ def ciclo(
                         with estado_lock:
                             globals()["entradas_globais_aceitas"] += 1
                             globals()["entradas_normais_desde_reset"] += 1
-                            if entradas_normais_desde_reset >= 200:
+                            if entradas_normais_desde_reset >= 100:
                                 globals()["wins_base_ponderada"] = stats["wins"]
                                 globals()["losses_base_ponderada"] = stats["losses"]
                                 globals()["entradas_normais_desde_reset"] = 0
-                                log.info("ASSERTIVIDADE PONDERADA REINICIADA | 200 entradas normais | taxa real sem peso%/50 operacoes")
+                                log.info("ASSERTIVIDADE REAL REINICIADA | 100 entradas iniciais aceitas | historico preservado")
                             dados = estado_frentes[banca]
                             if dados["entradas_recuperacao_restantes"] > 0:
                                 dados["entradas_recuperacao_restantes"] -= 1

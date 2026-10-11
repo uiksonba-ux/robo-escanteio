@@ -469,7 +469,7 @@ def conectar():
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
                 f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
-                "🛡 0 a 5 GALES POR CICLO (assertividade ponderada; base 92%)\n"
+                "🛡 0 a 5 GALES POR CICLO (assertividade ponderada; base 81%)\n"
                 "♾️ CICLOS ILIMITADOS\n"
                 "📈 Multiplicador X2 fixo em todas as entradas\n\n"
                 f"🔥 Score mínimo: {SCORE_MIN}\n"
@@ -1372,10 +1372,10 @@ def taxa(
 
 
 def taxa_ponderada(wins, losses):
-    """Assertividade global para gestao: base 92% com peso de 50 operacoes."""
+    """Assertividade global para gestao: base 81% com peso de 50 operacoes."""
     wins_janela = max(0, wins - wins_base_ponderada)
     losses_janela = max(0, losses - losses_base_ponderada)
-    return round((46.0 + wins_janela) / (50 + wins_janela + losses_janela) * 100, 2)
+    return round((40.5 + wins_janela) / (50 + wins_janela + losses_janela) * 100, 2)
 
 
 def registrar_win(
@@ -1665,7 +1665,7 @@ def ciclo(
         with estado_lock:
             acertos = stats["wins"]
             erros = stats["losses"]
-            # Referencia inicial ponderada: 50 operacoes equivalentes a 92%.
+            # Referencia inicial ponderada: 50 operacoes equivalentes a 81%.
             # Nao altera nem falsifica os resultados reais registrados.
             assertividade_atual = taxa_ponderada(acertos, erros)
             quantidade_gales = (0 if assertividade_atual >= 92 else
@@ -1713,7 +1713,7 @@ def ciclo(
                                 globals()["wins_base_ponderada"] = stats["wins"]
                                 globals()["losses_base_ponderada"] = stats["losses"]
                                 globals()["entradas_normais_desde_reset"] = 0
-                                log.info("ASSERTIVIDADE PONDERADA REINICIADA | 200 entradas normais | base 92%%/50 operacoes")
+                                log.info("ASSERTIVIDADE PONDERADA REINICIADA | 200 entradas normais | base 81%%/50 operacoes")
                             dados = estado_frentes[banca]
                             if dados["entradas_recuperacao_restantes"] > 0:
                                 dados["entradas_recuperacao_restantes"] -= 1

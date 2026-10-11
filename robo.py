@@ -469,7 +469,7 @@ def conectar():
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
                 f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
-                "🛡 0 a 5 GALES POR CICLO (assertividade ponderada; base 100%)\n"
+                "🛡 0 a 5 GALES POR CICLO (assertividade ponderada; taxa real sem peso)\n"
                 "♾️ CICLOS ILIMITADOS\n"
                 "📈 Multiplicador X2 fixo em todas as entradas\n\n"
                 f"🔥 Score mínimo: {SCORE_MIN}\n"
@@ -1372,10 +1372,8 @@ def taxa(
 
 
 def taxa_ponderada(wins, losses):
-    """Assertividade global para gestao: base 100% com peso de 50 operacoes."""
-    wins_janela = max(0, wins - wins_base_ponderada)
-    losses_janela = max(0, losses - losses_base_ponderada)
-    return round((50.0 + wins_janela) / (50 + wins_janela + losses_janela) * 100, 2)
+    """Assertividade real das ordens finalizadas, sem peso inicial ficticio."""
+    return taxa(wins, losses)
 
 
 def registrar_win(
@@ -1542,7 +1540,7 @@ def aplicar_loss_ciclo(banca, perda_ciclo):
         dados["prejuizo_acumulado"] = round(dados["prejuizo_acumulado"] + perda_ciclo, 2)
         dados["em_recuperacao"] = True
         dados["entradas_recuperacao_restantes"] = 10
-        if ENTRADA_BASE + dados["prejuizo_acumulado"] * RECUPERACAO_PERCENTUAL > 5:
+        if dados["prejuizo_acumulado"] > 0:
             dados["recuperacao_estendida"] = True
         dados["ciclo_gestao"] += 1
         restante = dados["prejuizo_acumulado"]
@@ -1554,7 +1552,7 @@ def aplicar_loss_ciclo(banca, perda_ciclo):
 
 def calcular_entrada_recuperacao(prejuizo):
     alvo = max(0.0, prejuizo) * RECUPERACAO_PERCENTUAL
-    return round(min(5.0, ENTRADA_BASE + alvo), 2)
+    return round(ENTRADA_BASE + alvo, 2)
 
 def registrar_perdas_interrompidas(banca, perdas):
     with estado_lock:
@@ -1562,7 +1560,7 @@ def registrar_perdas_interrompidas(banca, perdas):
         dados["prejuizo_acumulado"] = round(dados["prejuizo_acumulado"] + perdas, 2)
         dados["em_recuperacao"] = dados["prejuizo_acumulado"] > 0
         dados["entradas_recuperacao_restantes"] = 10
-        if ENTRADA_BASE + dados["prejuizo_acumulado"] * RECUPERACAO_PERCENTUAL > 5:
+        if dados["prejuizo_acumulado"] > 0:
             dados["recuperacao_estendida"] = True
         return {"restante": dados["prejuizo_acumulado"]}
 
@@ -1665,14 +1663,10 @@ def ciclo(
         with estado_lock:
             acertos = stats["wins"]
             erros = stats["losses"]
-            # Referencia inicial ponderada: 50 operacoes equivalentes a 81%.
+            # Referencia inicial ponderada: sem peso inicial; taxa real das ordens.
             # Nao altera nem falsifica os resultados reais registrados.
             assertividade_atual = taxa_ponderada(acertos, erros)
-            quantidade_gales = (0 if assertividade_atual >= 82 else
-                                1 if assertividade_atual >= 80 else
-                                2 if assertividade_atual >= 78 else
-                                3 if assertividade_atual >= 76 else
-                                4 if assertividade_atual >= 74 else 5)
+            quantidade_gales = 2 if (acertos + erros > 0 and assertividade_atual <= 50.0) else 0
 
         multiplicador_ciclo = 2.0
         valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)
@@ -1713,7 +1707,7 @@ def ciclo(
                                 globals()["wins_base_ponderada"] = stats["wins"]
                                 globals()["losses_base_ponderada"] = stats["losses"]
                                 globals()["entradas_normais_desde_reset"] = 0
-                                log.info("ASSERTIVIDADE PONDERADA REINICIADA | 200 entradas normais | base 100%%/50 operacoes")
+                                log.info("ASSERTIVIDADE PONDERADA REINICIADA | 200 entradas normais | taxa real sem peso%/50 operacoes")
                             dados = estado_frentes[banca]
                             if dados["entradas_recuperacao_restantes"] > 0:
                                 dados["entradas_recuperacao_restantes"] -= 1
@@ -1911,7 +1905,7 @@ def ciclo(
                     f"{texto_recuperacao}\n"
                     f"📊 {w} WIN / {l} LOSS\n"
                     f"🎯 Assertividade: "
-                    f"{taxa_ponderada(w, l)}% (ponderada)"
+                    f"{taxa_ponderada(w, l)}% (real)"
                 )
 
                 return
@@ -2002,7 +1996,7 @@ def ciclo(
                     f"{saldo_atual}\n"
                     f"📊 {w} WIN / {l} LOSS\n"
                     f"🎯 Assertividade: "
-                    f"{taxa_ponderada(w, l)}% (ponderada)"
+                    f"{taxa_ponderada(w, l)}% (real)"
                 )
 
                 return

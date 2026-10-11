@@ -157,7 +157,7 @@ MULTIPLICADOR_GALE = env_float(
     1.0
 )
 
-# Cinco gales por ciclo; aumento global de R$1 somente após LOSS completo.
+# Limite de 2 gales; a quantidade efetiva depende da taxa real.
 GALES_POR_CICLO = 2
 
 RECUPERACAO_PERCENTUAL = 1.00
@@ -469,7 +469,7 @@ def conectar():
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
                 f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
-                "🛡 0 a 5 GALES POR CICLO (assertividade ponderada; taxa real sem peso)\n"
+                "🛡 0 GALES acima de 50% | 2 GALES com 50% ou menos (taxa real, sem peso inicial)\n"
                 "♾️ CICLOS ILIMITADOS\n"
                 "📈 Multiplicador X2 fixo em todas as entradas\n\n"
                 f"🔥 Score mínimo: {SCORE_MIN}\n"
@@ -1663,7 +1663,7 @@ def ciclo(
         with estado_lock:
             acertos = stats["wins"]
             erros = stats["losses"]
-            # Referencia inicial ponderada: sem peso inicial; taxa real das ordens.
+            # Taxa real das ordens, sem referencia ou peso inicial.
             # Nao altera nem falsifica os resultados reais registrados.
             assertividade_atual = taxa_ponderada(acertos, erros)
             quantidade_gales = 2 if (acertos + erros > 0 and assertividade_atual <= 50.0) else 0

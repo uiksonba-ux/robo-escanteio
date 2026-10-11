@@ -1668,11 +1668,11 @@ def ciclo(
             # Referencia inicial ponderada: 50 operacoes equivalentes a 81%.
             # Nao altera nem falsifica os resultados reais registrados.
             assertividade_atual = taxa_ponderada(acertos, erros)
-            quantidade_gales = (0 if assertividade_atual >= 92 else
-                                1 if assertividade_atual >= 90 else
-                                2 if assertividade_atual >= 88 else
-                                3 if assertividade_atual >= 86 else
-                                4 if assertividade_atual >= 84 else 5)
+            quantidade_gales = (0 if assertividade_atual >= 82 else
+                                1 if assertividade_atual >= 80 else
+                                2 if assertividade_atual >= 78 else
+                                3 if assertividade_atual >= 76 else
+                                4 if assertividade_atual >= 74 else 5)
 
         multiplicador_ciclo = 2.0
         valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)

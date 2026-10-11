@@ -1553,7 +1553,7 @@ def aplicar_loss_ciclo(banca, perda_ciclo):
 
 def calcular_entrada_recuperacao(prejuizo):
     alvo = max(0.0, prejuizo) * RECUPERACAO_PERCENTUAL
-    return round(ENTRADA_BASE + alvo, 2)
+    return round(min(40.0, ENTRADA_BASE + alvo), 2)
 
 def registrar_perdas_interrompidas(banca, perdas):
     with estado_lock:

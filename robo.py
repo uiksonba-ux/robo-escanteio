@@ -1542,7 +1542,7 @@ def aplicar_loss_ciclo(banca, perda_ciclo):
         dados["prejuizo_acumulado"] = round(dados["prejuizo_acumulado"] + perda_ciclo, 2)
         dados["em_recuperacao"] = True
         dados["entradas_recuperacao_restantes"] = 10
-        if ENTRADA_BASE + dados["prejuizo_acumulado"] * RECUPERACAO_PERCENTUAL > 10:
+        if ENTRADA_BASE + dados["prejuizo_acumulado"] * RECUPERACAO_PERCENTUAL > 5:
             dados["recuperacao_estendida"] = True
         dados["ciclo_gestao"] += 1
         restante = dados["prejuizo_acumulado"]
@@ -1554,7 +1554,7 @@ def aplicar_loss_ciclo(banca, perda_ciclo):
 
 def calcular_entrada_recuperacao(prejuizo):
     alvo = max(0.0, prejuizo) * RECUPERACAO_PERCENTUAL
-    return round(min(10.0, ENTRADA_BASE + alvo), 2)
+    return round(min(5.0, ENTRADA_BASE + alvo), 2)
 
 def registrar_perdas_interrompidas(banca, perdas):
     with estado_lock:
@@ -1562,7 +1562,7 @@ def registrar_perdas_interrompidas(banca, perdas):
         dados["prejuizo_acumulado"] = round(dados["prejuizo_acumulado"] + perdas, 2)
         dados["em_recuperacao"] = dados["prejuizo_acumulado"] > 0
         dados["entradas_recuperacao_restantes"] = 10
-        if ENTRADA_BASE + dados["prejuizo_acumulado"] * RECUPERACAO_PERCENTUAL > 10:
+        if ENTRADA_BASE + dados["prejuizo_acumulado"] * RECUPERACAO_PERCENTUAL > 5:
             dados["recuperacao_estendida"] = True
         return {"restante": dados["prejuizo_acumulado"]}
 

@@ -464,7 +464,7 @@ def conectar():
                 "🤖 ROBÔ V10 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
                 f"💰 Saldo: {saldo}\n"
-                f"💵 Entrada inicial R$2; multiplicador X2 fixo; sem recuperação por banca\n\n"
+                f"💵 Entrada inicial: {PERCENTUAL_ENTRADA * 100:g}% do saldo total PRACTICE por banca; multiplicador X2 fixo; sem recuperação\n\n"
                 f"🏦 {QTD_BANCAS} BANCAS (saldo compartilhado)\n"
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"

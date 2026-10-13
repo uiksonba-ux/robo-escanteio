@@ -163,8 +163,8 @@ GALES_POR_CICLO = 2
 RECUPERACAO_PERCENTUAL = 0.00
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 
-QTD_BANCAS = 3
-PERCENTUAL_ENTRADA = 0.05
+QTD_BANCAS = 10
+PERCENTUAL_ENTRADA = 0.0
 
 
 # ============================================================
@@ -464,7 +464,7 @@ def conectar():
                 "🤖 ROBÔ V10 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
                 f"💰 Saldo: {saldo}\n"
-                f"💵 Entrada inicial: {PERCENTUAL_ENTRADA * 100:g}% do saldo total PRACTICE por banca; multiplicador X2 fixo; sem recuperação\n\n"
+                "💵 Sequência global R$2 a R$11 (+R$1); após a 10ª, volta a R$2; gale X2; sem recuperação\n\n"
                 f"🏦 {QTD_BANCAS} BANCAS (saldo compartilhado)\n"
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
@@ -1581,19 +1581,16 @@ def liberar_banca(banca, ativo):
 # ============================================================
 
 def reservar_entrada_percentual(banca):
-    """Reserva 5% do saldo total PRACTICE para cada entrada inicial, sem recuperacao."""
+    """Reserva minima provisoria; a posicao global e definida na ordem aceita."""
     if not garantir_practice():
         return None
     with estado_lock:
+        valor = 2.0
         with api_lock:
             saldo = float(api.get_balance())
-        valor = round(saldo * PERCENTUAL_ENTRADA, 2)
         disponivel = saldo - sum(reservas_pendentes.values())
-        if valor < ENTRADA_MINIMA:
-            log.warning("%s | ENTRADA ABAIXO DO MINIMO | calculada=%.2f | minimo=%.2f", banca, valor, ENTRADA_MINIMA)
-            return None
         if disponivel < valor:
-            log.warning("%s | ENTRADA BLOQUEADA POR SALDO | necessario=%.2f | disponivel=%.2f", banca, valor, disponivel)
+            log.warning("%s | SALDO INSUFICIENTE | disponivel=%.2f", banca, disponivel)
             return None
         reservas_pendentes[banca] = valor
         estado_frentes[banca]["entrada_atual"] = valor
@@ -1683,10 +1680,19 @@ def ciclo(
                 # A posição global avança somente se a primeira ordem for aceita.
                 with contador_entrada_lock:
                     with estado_lock:
-                        posicao = entradas_globais_aceitas
+                        posicao = entradas_globais_aceitas % 10
+                        entrada_atual = float(2 + posicao)
+                        reservas_pendentes[banca] = entrada_atual
+                        estado_frentes[banca]["entrada_atual"] = entrada_atual
+                        with api_lock:
+                            saldo_atual = float(api.get_balance())
+                        disponivel = saldo_atual - sum(v for k, v in reservas_pendentes.items() if k != banca)
                     multiplicador_ciclo = 2.0
                     valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)
                     valor = valores[0]
+                    if disponivel < valor:
+                        log.warning("%s | SALDO INSUFICIENTE PARA POSICAO %s | valor=%.2f disponivel=%.2f", banca, posicao + 1, valor, disponivel)
+                        return
                     ok, order_id = executar_ordem(banca, ativo, valor, direcao, expiracao)
                     if ok:
                         with estado_lock:

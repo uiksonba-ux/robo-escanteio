@@ -163,8 +163,8 @@ GALES_POR_CICLO = 2
 RECUPERACAO_PERCENTUAL = 0.00
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 
-QTD_BANCAS = 1
-PERCENTUAL_ENTRADA = 0.0
+QTD_BANCAS = 3
+PERCENTUAL_ENTRADA = 0.05
 
 
 # ============================================================
@@ -1581,14 +1581,17 @@ def liberar_banca(banca, ativo):
 # ============================================================
 
 def reservar_entrada_percentual(banca):
-    """Reserva somente a entrada fixa, sem recuperacao."""
+    """Reserva 5% do saldo total PRACTICE para cada entrada inicial, sem recuperacao."""
     if not garantir_practice():
         return None
     with estado_lock:
-        valor = ENTRADA_BASE
         with api_lock:
             saldo = float(api.get_balance())
+        valor = round(saldo * PERCENTUAL_ENTRADA, 2)
         disponivel = saldo - sum(reservas_pendentes.values())
+        if valor < ENTRADA_MINIMA:
+            log.warning("%s | ENTRADA ABAIXO DO MINIMO | calculada=%.2f | minimo=%.2f", banca, valor, ENTRADA_MINIMA)
+            return None
         if disponivel < valor:
             log.warning("%s | ENTRADA BLOQUEADA POR SALDO | necessario=%.2f | disponivel=%.2f", banca, valor, disponivel)
             return None
@@ -1651,7 +1654,8 @@ def ciclo(
             # Taxa real das ordens, sem referencia ou peso inicial.
             # Nao altera nem falsifica os resultados reais registrados.
             assertividade_atual = taxa_ponderada(acertos, erros)
-            quantidade_gales = 2 if (acertos + erros > 0 and assertividade_atual < 60.0) else 0
+            operacoes_janela = max(0, acertos - wins_base_ponderada) + max(0, erros - losses_base_ponderada)
+            quantidade_gales = 2 if (operacoes_janela > 0 and assertividade_atual < 60.0) else 0
 
         multiplicador_ciclo = 2.0
         valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)

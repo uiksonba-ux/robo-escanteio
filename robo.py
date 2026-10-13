@@ -322,6 +322,9 @@ estado_frentes = {
 
         "wins": 0,
         "losses": 0,
+        "wins_base_janela": 0,
+        "losses_base_janela": 0,
+        "entradas_janela": 0,
 
         "win_direto": 0,
         "win_g1": 0,
@@ -1657,12 +1660,11 @@ def ciclo(
             return
         entrada_atual = entrada_reservada
         with estado_lock:
-            acertos = stats["wins"]
-            erros = stats["losses"]
-            # Taxa real das ordens, sem referencia ou peso inicial.
-            # Nao altera nem falsifica os resultados reais registrados.
-            assertividade_atual = taxa_ponderada(acertos, erros)
-            operacoes_janela = max(0, acertos - wins_base_ponderada) + max(0, erros - losses_base_ponderada)
+            dados = estado_frentes[banca]
+            acertos = max(0, dados["wins"] - dados["wins_base_janela"])
+            erros = max(0, dados["losses"] - dados["losses_base_janela"])
+            operacoes_janela = acertos + erros
+            assertividade_atual = taxa(acertos, erros)
             quantidade_gales = 2 if (operacoes_janela > 0 and assertividade_atual < 60.0) else 0
 
         multiplicador_ciclo = 2.0
@@ -1707,12 +1709,13 @@ def ciclo(
                     if ok:
                         with estado_lock:
                             globals()["entradas_globais_aceitas"] += 1
-                            globals()["entradas_normais_desde_reset"] += 1
-                            if entradas_normais_desde_reset >= 100:
-                                globals()["wins_base_ponderada"] = stats["wins"]
-                                globals()["losses_base_ponderada"] = stats["losses"]
-                                globals()["entradas_normais_desde_reset"] = 0
-                                log.info("ASSERTIVIDADE REAL REINICIADA | 100 entradas iniciais aceitas | historico preservado")
+                            dados = estado_frentes[banca]
+                            dados["entradas_janela"] += 1
+                            if dados["entradas_janela"] >= 100:
+                                dados["wins_base_janela"] = dados["wins"]
+                                dados["losses_base_janela"] = dados["losses"]
+                                dados["entradas_janela"] = 0
+                                log.info("ASSERTIVIDADE REINICIADA | %s | 100 entradas aceitas | prejuizo preservado", banca)
                             dados = estado_frentes[banca]
                             if dados["entradas_recuperacao_restantes"] > 0:
                                 dados["entradas_recuperacao_restantes"] -= 1

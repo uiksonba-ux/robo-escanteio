@@ -1873,8 +1873,9 @@ def ciclo(
 
                 with estado_lock:
 
-                    w = stats["wins"]
-                    l = stats["losses"]
+                    dados_banca = estado_frentes[banca]
+                    w = max(0, dados_banca["wins"] - dados_banca["wins_base_janela"])
+                    l = max(0, dados_banca["losses"] - dados_banca["losses_base_janela"])
 
                 saldo_atual = (
                     texto_saldo()
@@ -1913,7 +1914,7 @@ def ciclo(
                     f"{texto_recuperacao}\n"
                     f"📊 {w} WIN / {l} LOSS\n"
                     f"🎯 Assertividade: "
-                    f"{taxa_ponderada(w, l)}% (real)"
+                    f"{taxa(w, l)}% (real da banca)"
                 )
 
                 return
@@ -1969,8 +1970,9 @@ def ciclo(
 
                 with estado_lock:
 
-                    w = stats["wins"]
-                    l = stats["losses"]
+                    dados_banca = estado_frentes[banca]
+                    w = max(0, dados_banca["wins"] - dados_banca["wins_base_janela"])
+                    l = max(0, dados_banca["losses"] - dados_banca["losses_base_janela"])
 
                 saldo_atual = (
                     texto_saldo()
@@ -2004,7 +2006,7 @@ def ciclo(
                     f"{saldo_atual}\n"
                     f"📊 {w} WIN / {l} LOSS\n"
                     f"🎯 Assertividade: "
-                    f"{taxa_ponderada(w, l)}% (real)"
+                    f"{taxa(w, l)}% (real da banca)"
                 )
 
                 return

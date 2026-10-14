@@ -1144,6 +1144,42 @@ def analisar(candles):
     }
 
 
+# Consulta de disponibilidade em thread daemon: a biblioteca não oficial
+# pode bloquear nesta chamada. Cache impede consultas concorrentes repetidas.
+_disponibilidade_lock = threading.Lock()
+_disponibilidade_cache = {"dados": None, "ate": 0.0, "consultando": False}
+
+def ativo_digital_disponivel(ativo):
+    agora = time.time()
+    with _disponibilidade_lock:
+        dados = _disponibilidade_cache["dados"]
+        if dados is not None and agora < _disponibilidade_cache["ate"]:
+            info = dados.get(ativo)
+            if isinstance(info, dict) and "open" in info:
+                return bool(info["open"])
+            return None
+        if not _disponibilidade_cache["consultando"]:
+            _disponibilidade_cache["consultando"] = True
+            def consultar():
+                try:
+                    # Sem api_lock: evita travar as operações caso a API bloqueie.
+                    resposta = api.get_all_open_time()
+                    digital = resposta.get("digital", {}) if isinstance(resposta, dict) else {}
+                    if not isinstance(digital, dict):
+                        digital = {}
+                    with _disponibilidade_lock:
+                        _disponibilidade_cache.update(dados=digital, ate=time.time() + 120)
+                    log.info("DISPONIBILIDADE DIGITAL | instrumentos=%s", len(digital))
+                except Exception as e:
+                    log.warning("DISPONIBILIDADE DIGITAL INDISPONIVEL | %s", e)
+                finally:
+                    with _disponibilidade_lock:
+                        _disponibilidade_cache["consultando"] = False
+            threading.Thread(target=consultar, daemon=True, name="consulta-digital").start()
+    # Sem confirmação de disponibilidade, não presumimos que esteja fechado.
+    return None
+
+
 # ============================================================
 # ORDEM DIGITAL
 # ============================================================
@@ -1179,9 +1215,14 @@ def executar_ordem(
     if direcao not in ("call", "put"):
         return (False, f"direcao_invalida:{direcao}")
 
-    # get_all_open_time() pode bloquear por mais de 30s na biblioteca não oficial.
-    # Evitamos esse bloqueio e validamos disponibilidade pelo retorno da ordem.
-    # Rejeições são bloqueadas temporariamente pela rotina já existente.
+    # Consulta assíncrona com cache: nunca bloqueia a thread de operações.
+    disponibilidade = ativo_digital_disponivel(ativo)
+    if disponibilidade is False:
+        log.info("DIGITAL FECHADO | %s | M%s | ordem ignorada", ativo, expiracao)
+        bloquear(ativo, expiracao, "instrumento digital fechado na IQ Option")
+        return (False, "instrumento_digital_fechado")
+    if disponibilidade is None:
+        log.info("DISPONIBILIDADE DIGITAL NAO CONFIRMADA | %s | validacao pela resposta da ordem", ativo)
     if expiracao not in (1, 5, 15):
         motivo = f"expiracao_digital_invalida:{expiracao}"
         log.warning("EXPIRACAO DIGITAL INVALIDA | %s | %s", ativo, expiracao)

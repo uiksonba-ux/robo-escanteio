@@ -468,7 +468,7 @@ def conectar():
                 "🤖 ROBÔ V10 ONLINE\n"
                 "🧪 CONTA: PRACTICE\n"
                 f"💰 Saldo: {saldo}\n"
-                f"💵 Entrada R${ENTRADA_BASE:.2f} + 100% do prejuízo pendente da banca; limite de R${LIMITE_RESET_ENTRADA:.2f} por ordem; acima disso reinicia a banca; 2 gales X2 abaixo de 60%; reset da taxa a cada 100 entradas\n\n"
+                f"💵 Entrada R${ENTRADA_BASE:.2f} + 100% do prejuízo pendente da banca; limite de R${LIMITE_RESET_ENTRADA:.2f} por ciclo (entrada + gales); acima disso reinicia a banca; 2 gales X2 abaixo de 60%; reset da taxa a cada 100 entradas\n\n"
                 f"🏦 {QTD_BANCAS} BANCAS (saldo compartilhado)\n"
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
@@ -1645,7 +1645,7 @@ def reservar_entrada_percentual(banca):
     with estado_lock:
         dados = estado_frentes[banca]
         valor = calcular_entrada_recuperacao(dados["prejuizo_acumulado"])
-        if valor > LIMITE_RESET_ENTRADA:
+        if sum(valores_do_ciclo(valor, 2 if (dados["wins"] - dados["wins_base_janela"] + dados["losses"] - dados["losses_base_janela"] > 0 and taxa(max(0, dados["wins"] - dados["wins_base_janela"]), max(0, dados["losses"] - dados["losses_base_janela"])) < 60.0) else 0, 2.0)) > LIMITE_RESET_ENTRADA:
             log.warning("%s | LIMITE DE ENTRADA | %.2f > %.2f | reiniciando banca", banca, valor, LIMITE_RESET_ENTRADA)
             resetar_gestao(banca, "limite de entrada de R$50 atingido")
             valor = ENTRADA_BASE
@@ -1718,6 +1718,16 @@ def ciclo(
 
         multiplicador_ciclo = 2.0
         valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)
+        if round(sum(valores), 2) > LIMITE_RESET_ENTRADA:
+            resetar_gestao(banca, "total do ciclo acima de R$50")
+            entrada_atual = ENTRADA_BASE
+            valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)
+            with estado_lock:
+                reservas_pendentes[banca] = entrada_atual
+                estado_frentes[banca]["entrada_atual"] = entrada_atual
+            ciclo_atual = 1
+            em_recuperacao = False
+            prejuizo_antes = 0.0
 
         log.info(
             "GESTÃO | %s | M%s | "
@@ -1751,9 +1761,14 @@ def ciclo(
                     multiplicador_ciclo = 2.0
                     valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)
                     valor = valores[0]
-                    if valor > LIMITE_RESET_ENTRADA:
-                        resetar_gestao(banca, "entrada inicial atingiu limite de R$50")
-                        return
+                    if round(sum(valores), 2) > LIMITE_RESET_ENTRADA:
+                        resetar_gestao(banca, "total do ciclo acima de R$50")
+                        entrada_atual = ENTRADA_BASE
+                        valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)
+                        valor = valores[0]
+                        with estado_lock:
+                            reservas_pendentes[banca] = valor
+                            estado_frentes[banca]["entrada_atual"] = valor
                     if disponivel < valor:
                         log.warning("%s | SALDO INSUFICIENTE | valor=%.2f disponivel=%.2f", banca, valor, disponivel)
                         return

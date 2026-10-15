@@ -148,8 +148,8 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_BASE = 2.0
-ENTRADA_MINIMA = 2.0
+ENTRADA_BASE = 5.0
+ENTRADA_MINIMA = 5.0
 LIMITE_RESET_ENTRADA = 50.0
 
 MULTIPLICADOR_GALE = env_float(
@@ -1645,8 +1645,8 @@ def reservar_entrada_percentual(banca):
     with estado_lock:
         dados = estado_frentes[banca]
         valor = calcular_entrada_recuperacao(dados["prejuizo_acumulado"])
-        if valor >= LIMITE_RESET_ENTRADA:
-            log.warning("%s | LIMITE DE ENTRADA | %.2f >= %.2f | reiniciando banca", banca, valor, LIMITE_RESET_ENTRADA)
+        if valor > LIMITE_RESET_ENTRADA:
+            log.warning("%s | LIMITE DE ENTRADA | %.2f > %.2f | reiniciando banca", banca, valor, LIMITE_RESET_ENTRADA)
             resetar_gestao(banca, "limite de entrada de R$50 atingido")
             valor = ENTRADA_BASE
         with api_lock:
@@ -1751,7 +1751,7 @@ def ciclo(
                     multiplicador_ciclo = 2.0
                     valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)
                     valor = valores[0]
-                    if valor >= LIMITE_RESET_ENTRADA:
+                    if valor > LIMITE_RESET_ENTRADA:
                         resetar_gestao(banca, "entrada inicial atingiu limite de R$50")
                         return
                     if disponivel < valor:
@@ -1773,8 +1773,8 @@ def ciclo(
                                 dados["entradas_recuperacao_restantes"] -= 1
             else:
                 valor = valores[nivel]
-                if valor >= LIMITE_RESET_ENTRADA:
-                    log.warning("%s | GALE BLOQUEADO | %.2f >= %.2f", banca, valor, LIMITE_RESET_ENTRADA)
+                if valor > LIMITE_RESET_ENTRADA:
+                    log.warning("%s | GALE BLOQUEADO | %.2f > %.2f", banca, valor, LIMITE_RESET_ENTRADA)
                     resetar_gestao(banca, "gale atingiu limite de entrada de R$50")
                     return
                 ok, order_id = executar_ordem(banca, ativo, valor, direcao, expiracao)

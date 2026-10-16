@@ -1134,6 +1134,25 @@ def analisar(candles):
 _disponibilidade_lock = threading.Lock()
 _disponibilidade_cache = {"dados": None, "ate": 0.0, "consultando": False}
 
+def listar_ativos_otc():
+    """Lista todos os OTC digitais abertos informados pela corretora.
+    Usa a lista OTC conhecida apenas enquanto a consulta estiver indisponível.
+    """
+    with _disponibilidade_lock:
+        dados = _disponibilidade_cache["dados"]
+        valido = dados is not None and time.time() < _disponibilidade_cache["ate"]
+    if valido:
+        return sorted(
+            ativo for ativo, info in dados.items()
+            if ativo.upper().endswith("-OTC")
+            and isinstance(info, dict)
+            and info.get("open") is True
+        )
+    # Aciona a atualização assíncrona da lista de disponibilidade.
+    ativo_digital_disponivel(ATIVOS[0])
+    return list(ATIVOS)
+
+
 def ativo_digital_disponivel(ativo):
     agora = time.time()
     with _disponibilidade_lock:
@@ -2160,7 +2179,7 @@ def scanner_timeframe(
                 expiracao
             )
 
-            for ativo in ATIVOS:
+            for ativo in listar_ativos_otc():
 
                 with estado_lock:
 

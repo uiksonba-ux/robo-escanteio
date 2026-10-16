@@ -1135,8 +1135,8 @@ _disponibilidade_lock = threading.Lock()
 _disponibilidade_cache = {"dados": None, "ate": 0.0, "consultando": False}
 
 def listar_ativos_otc():
-    """Lista todos os OTC digitais abertos informados pela corretora.
-    Usa a lista OTC conhecida apenas enquanto a consulta estiver indisponível.
+    """Retorna todos os instrumentos digitais OTC abertos, de qualquer categoria.
+    Inclui ações (como Google/Amazon), índices e moedas quando publicados pela API.
     """
     with _disponibilidade_lock:
         dados = _disponibilidade_cache["dados"]
@@ -1144,14 +1144,13 @@ def listar_ativos_otc():
     if valido:
         return sorted(
             ativo for ativo, info in dados.items()
-            if ativo.upper().endswith("-OTC")
+            if isinstance(ativo, str)
+            and "OTC" in ativo.upper()
             and isinstance(info, dict)
             and info.get("open") is True
         )
-    # Aciona a atualização assíncrona da lista de disponibilidade.
     ativo_digital_disponivel(ATIVOS[0])
     return list(ATIVOS)
-
 
 def ativo_digital_disponivel(ativo):
     agora = time.time()

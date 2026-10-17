@@ -148,13 +148,13 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_BASE = 2.0
-ENTRADA_MINIMA = 2.0
+ENTRADA_BASE = 7.0
+ENTRADA_MINIMA = 7.0
 LIMITE_RESET_ENTRADA = 50.0
 
 MULTIPLICADOR_GALE = env_float(
     "MULTIPLICADOR_GALE",
-    3.0,
+    2.0,
     1.0
 )
 

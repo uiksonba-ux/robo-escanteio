@@ -154,7 +154,7 @@ LIMITE_RESET_ENTRADA = 50.0
 
 MULTIPLICADOR_GALE = env_float(
     "MULTIPLICADOR_GALE",
-    2.0,
+    3.0,
     1.0
 )
 
@@ -460,7 +460,7 @@ def conectar():
                 f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
                 "🛡 0 GALES com 60% ou mais | 2 GALES abaixo de 60% (taxa real, sem peso inicial)\n"
                 "♾️ CICLOS ILIMITADOS\n"
-                "📈 Multiplicador X2 fixo em todas as entradas\n\n"
+                "📈 Multiplicador configurável nos gales\n\n"
                 f"🔥 Score mínimo: {SCORE_MIN}\n"
                 f"↔️ Diferença mínima: {DIFERENCA_MINIMA}"
             )
@@ -1719,7 +1719,7 @@ def ciclo(
             assertividade_atual = taxa(acertos, erros)
             quantidade_gales = 2 if (operacoes_janela > 0 and assertividade_atual < 60.0) else 0
 
-        multiplicador_ciclo = 2.0
+        multiplicador_ciclo = MULTIPLICADOR_GALE
         valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)
         if round(sum(valores), 2) > LIMITE_RESET_ENTRADA:
             resetar_gestao(banca, "total do ciclo acima de R$50")
@@ -1761,7 +1761,7 @@ def ciclo(
                         with api_lock:
                             saldo_atual = float(api.get_balance())
                         disponivel = saldo_atual - sum(v for k, v in reservas_pendentes.items() if k != banca)
-                    multiplicador_ciclo = 2.0
+                    multiplicador_ciclo = MULTIPLICADOR_GALE
                     valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)
                     valor = valores[0]
                     if round(sum(valores), 2) > LIMITE_RESET_ENTRADA:

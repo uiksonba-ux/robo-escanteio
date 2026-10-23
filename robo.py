@@ -152,11 +152,11 @@ ENTRADA_BASE = 2.0
 ENTRADA_MINIMA = 2.0
 LIMITE_RESET_ENTRADA = 50.0
 
-MULTIPLICADOR_GALE = 1.5  # fixo para preservar a estratégia solicitada
+MULTIPLICADOR_GALE = 2.0  # multiplicador fixo da progressão
 
 # Quantidade inicial de gales: começa em zero e ajusta por resultado concluído.
 # Após WIN: +1; após LOSS completo: -1, sem ficar abaixo de zero.
-GALES_POR_CICLO = 10
+GALES_POR_CICLO = 0
 
 RECUPERACAO_PERCENTUAL = 0.50
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
@@ -1491,7 +1491,7 @@ def valores_do_ciclo(
         multiplicador = MULTIPLICADOR_GALE
 
     if quantidade_gales is None:
-        quantidade_gales = max(0, int(dados["gales_reativos"]))
+        quantidade_gales = GALES_POR_CICLO
 
     return [
 

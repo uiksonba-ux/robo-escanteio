@@ -1912,8 +1912,8 @@ def ciclo(
                 with estado_lock:
 
                     dados_banca = estado_frentes[banca]
-                    w = max(0, dados_banca["wins"] - dados_banca["wins_base_janela"])
-                    l = max(0, dados_banca["losses"] - dados_banca["losses_base_janela"])
+                    w = max(0, stats["wins"] - wins_base_ponderada)
+                    l = max(0, stats["losses"] - losses_base_ponderada)
 
                 saldo_atual = (
                     texto_saldo()
@@ -1950,10 +1950,10 @@ def ciclo(
                     f"💰 Saldo atual PRACTICE: "
                     f"{saldo_atual}\n"
                     f"{texto_recuperacao}\n"
-                    f"📊 {w} WIN / {l} LOSS\n"
+                    f"📊 Global (10 bancas): {w} WIN / {l} LOSS\n"
                     f"🛡 Gales na próxima: {rec['gales']}\n"
                     f"🎯 Assertividade: "
-                    f"{taxa(w, l)}% (real da banca)"
+                    f"{taxa(w, l)}% (compartilhada)"
                 )
 
                 return
@@ -2010,8 +2010,8 @@ def ciclo(
                 with estado_lock:
 
                     dados_banca = estado_frentes[banca]
-                    w = max(0, dados_banca["wins"] - dados_banca["wins_base_janela"])
-                    l = max(0, dados_banca["losses"] - dados_banca["losses_base_janela"])
+                    w = max(0, stats["wins"] - wins_base_ponderada)
+                    l = max(0, stats["losses"] - losses_base_ponderada)
 
                 saldo_atual = (
                     texto_saldo()
@@ -2041,9 +2041,9 @@ def ciclo(
                     "♾️ Ciclos: ILIMITADOS\n"
                     f"💰 Saldo PRACTICE: "
                     f"{saldo_atual}\n"
-                    f"📊 {w} WIN / {l} LOSS\n"
+                    f"📊 Global (10 bancas): {w} WIN / {l} LOSS\n"
                     f"🎯 Assertividade: "
-                    f"{taxa(w, l)}% (real da banca)"
+                    f"{taxa(w, l)}% (compartilhada)"
                 )
 
                 return

@@ -154,9 +154,9 @@ LIMITE_RESET_ENTRADA = 50.0
 
 MULTIPLICADOR_GALE = 2.0  # multiplicador fixo da progressão
 
-# Quantidade inicial de gales: começa em zero e ajusta por resultado concluído.
+# Quantidade inicial de gales: começa em dois e ajusta por resultado concluído.
 # Após WIN: -1; após LOSS completo: +1, sem ficar abaixo de zero.
-GALES_POR_CICLO = 0
+GALES_POR_CICLO = 2
 
 RECUPERACAO_PERCENTUAL = 0.50
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)

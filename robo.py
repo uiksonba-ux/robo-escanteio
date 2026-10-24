@@ -455,9 +455,9 @@ def conectar():
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
                 f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
-                f"🛡 Gales iniciais: {GALES_POR_CICLO}; WIN -1, LOSS completo -1; mínimo 0, sem teto\n"
+                f"🛡 Gales iniciais: {GALES_POR_CICLO}; WIN -1, LOSS completo +1; mínimo 0, sem teto\n"
                 "♾️ CICLOS ILIMITADOS\n"
-                "📈 Multiplicador fixo nesta versão: X1,5\n\n"
+                f"📈 Multiplicador fixo nesta versão: X{MULTIPLICADOR_GALE:g}\n\n"
                 f"🔥 Score mínimo: {SCORE_MIN}\n"
                 f"↔️ Diferença mínima: {DIFERENCA_MINIMA}"
             )
@@ -1478,7 +1478,7 @@ def registrar_loss(
 
 
 # ============================================================
-# GALE CONFIGURÁVEL PELO RENDER
+# GALE FIXO X2
 # ============================================================
 
 def valores_do_ciclo(
@@ -1538,7 +1538,7 @@ def sincronizacao_antiga_desativada(banca):
 
 
 # ============================================================
-# RESET DA GESTÃO
+# GESTÃO INDEPENDENTE POR BANCA
 # ============================================================
 
 def aplicar_loss_ciclo(banca, perda_ciclo):
@@ -1570,14 +1570,13 @@ def calcular_entrada_recuperacao(prejuizo):
 
 
 def registrar_perdas_interrompidas(banca, perdas):
+    """Preserva perdas confirmadas sem tratar interrupção como LOSS completo."""
     with estado_lock:
         dados = estado_frentes[banca]
         dados["prejuizo_acumulado"] = round(
             dados["prejuizo_acumulado"] + max(0.0, float(perdas)), 2
         )
         dados["em_recuperacao"] = dados["prejuizo_acumulado"] > 0
-        dados["gales_reativos"] = max(0, int(dados["gales_reativos"])) + 1
-        dados["ciclo_gestao"] += 1
         dados["entrada_atual"] = calcular_entrada_recuperacao(dados["prejuizo_acumulado"])
         return {"restante": dados["prejuizo_acumulado"], "gales": dados["gales_reativos"]}
 
@@ -1609,6 +1608,7 @@ def aplicar_win_recuperacao(banca, lucro):
                 "restante": dados["prejuizo_acumulado"],
                 "gales": dados["gales_reativos"]}
 
+# ============================================================
 # LIBERAR BANCA
 # ============================================================
 
@@ -2489,7 +2489,7 @@ def home():
 
             "gales_por_banca": {
                 nome: dados["gales_reativos"]
-                for nome, dados in estado_frentes.items()
+                for nome, dados in frentes.items()
             },
 
             "ciclos":
@@ -2504,7 +2504,7 @@ def home():
 
             "regra_recuperacao":
                 (
-                    "Recuperação de 50% do prejuízo acumulado independente por banca; WIN -1 gale, LOSS +1 gale (mínimo 0), início 10, sem teto"
+                    f"Recuperação de 50% do prejuízo acumulado independente por banca; WIN -1 gale, LOSS completo +1 gale (mínimo 0), início {GALES_POR_CICLO}, sem teto"
                 ),
 
             "reset":
@@ -2585,7 +2585,7 @@ def health():
             GALES_POR_CICLO,
 
         "regra_gales":
-            "WIN -1; LOSS completo -1; mínimo 0; sem teto",
+            "WIN -1; LOSS completo +1; mínimo 0; sem teto",
 
         "ciclos":
             "ilimitados",
@@ -2709,3 +2709,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+

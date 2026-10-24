@@ -154,9 +154,9 @@ LIMITE_RESET_ENTRADA = 50.0
 
 MULTIPLICADOR_GALE = 2.0  # multiplicador fixo da progressão
 
-# Quantidade inicial de gales: começa em zero e ajusta por resultado concluído.
+# Quantidade inicial de gales: começa em dois e ajusta por resultado concluído.
 # Após WIN: -1; após LOSS completo: +1, sem ficar abaixo de zero.
-GALES_POR_CICLO = 0
+GALES_POR_CICLO = 2
 
 RECUPERACAO_PERCENTUAL = 0.50
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
@@ -256,6 +256,8 @@ contador_sinais = 0
 reservas_pendentes = {}  # Reservas ainda não enviadas à corretora
 vitorias_progressao = 0
 perdas_progressao = 0
+# Gale único compartilhado entre todas as 10 bancas.
+gales_compartilhados = GALES_POR_CICLO
 entradas_globais_aceitas = 0
 entradas_normais_desde_reset = 0
 wins_base_ponderada = 0
@@ -335,6 +337,16 @@ estado_frentes = {
 
     for banca in BANCAS
 }
+
+
+def atualizar_gales_compartilhados(delta):
+    """Atualiza a progressão global para as próximas entradas de todas as bancas."""
+    global gales_compartilhados
+    with estado_lock:
+        gales_compartilhados = max(0, int(gales_compartilhados) + int(delta))
+        for dados_banca in estado_frentes.values():
+            dados_banca["gales_reativos"] = gales_compartilhados
+        return gales_compartilhados
 
 
 # ============================================================
@@ -1538,7 +1550,7 @@ def sincronizacao_antiga_desativada(banca):
 
 
 # ============================================================
-# GESTÃO INDEPENDENTE POR BANCA
+# GESTÃO: GALES E ASSERTIVIDADE GLOBAIS; RECUPERAÇÃO POR BANCA
 # ============================================================
 
 def aplicar_loss_ciclo(banca, perda_ciclo):
@@ -1552,7 +1564,7 @@ def aplicar_loss_ciclo(banca, perda_ciclo):
         )
         dados["em_recuperacao"] = dados["prejuizo_acumulado"] > 0
         dados["ciclo_gestao"] += 1
-        dados["gales_reativos"] = max(0, int(dados["gales_reativos"])) + 1
+        dados["gales_reativos"] = atualizar_gales_compartilhados(+1)
         entrada = calcular_entrada_recuperacao(dados["prejuizo_acumulado"])
         dados["entrada_atual"] = entrada
         return {"ciclo": dados["ciclo_gestao"], "entrada": entrada,
@@ -1596,7 +1608,7 @@ def aplicar_win_recuperacao(banca, lucro):
                 max(0.0, dados["prejuizo_acumulado"] - lucro), 2
             )
         dados["em_recuperacao"] = dados["prejuizo_acumulado"] > 0
-        dados["gales_reativos"] = max(0, int(dados["gales_reativos"]) - 1)
+        dados["gales_reativos"] = atualizar_gales_compartilhados(-1)
         if not dados["em_recuperacao"]:
             dados["ciclo_gestao"] = 1
             dados["entradas_recuperacao_restantes"] = 0
@@ -1691,11 +1703,11 @@ def ciclo(
         entrada_atual = entrada_reservada
         with estado_lock:
             dados = estado_frentes[banca]
-            acertos = max(0, dados["wins"] - dados["wins_base_janela"])
-            erros = max(0, dados["losses"] - dados["losses_base_janela"])
+            acertos = max(0, stats["wins"] - wins_base_ponderada)
+            erros = max(0, stats["losses"] - losses_base_ponderada)
             operacoes_janela = acertos + erros
             assertividade_atual = taxa(acertos, erros)
-            quantidade_gales = max(0, int(dados["gales_reativos"]))
+            quantidade_gales = max(0, int(gales_compartilhados))
 
         multiplicador_ciclo = MULTIPLICADOR_GALE
         valores = valores_do_ciclo(entrada_atual, quantidade_gales, multiplicador_ciclo)

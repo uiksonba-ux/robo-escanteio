@@ -1,4 +1,5 @@
 name: Android APK (PRACTICE)
+# Rebuild requested for isolated APK validation
 on:
   workflow_dispatch:
   push:

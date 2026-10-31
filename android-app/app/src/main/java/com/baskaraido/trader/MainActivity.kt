@@ -2,6 +2,10 @@ package com.baskaraido.trader
 
 import android.app.Activity
 import android.graphics.Color
+import android.graphics.BitmapFactory
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.LayerDrawable
+import android.graphics.drawable.ColorDrawable
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
@@ -30,7 +34,7 @@ class MainActivity : Activity() {
     private fun panel(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         background = GradientDrawable().apply {
-            setColor(cardColor); cornerRadius = dp(22).toFloat()
+            setColor(Color.argb(237, 10, 19, 43)); cornerRadius = dp(22).toFloat()
             setStroke(dp(1), Color.argb(105, 70, 195, 255))
         }
         setPadding(dp(16), dp(12), dp(16), dp(12))
@@ -44,7 +48,17 @@ class MainActivity : Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(26), dp(18), dp(30))
-            background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(Color.rgb(74, 11, 110), Color.rgb(7, 50, 108), Color.rgb(19, 13, 53)))
+            background = try {
+                val bitmap = assets.open("wallpaper.jpg").use { BitmapFactory.decodeStream(it) }
+                LayerDrawable(arrayOf(
+                    BitmapDrawable(resources, bitmap).apply { gravity = Gravity.FILL },
+                    ColorDrawable(Color.argb(45, 5, 9, 30))
+                ))
+            } catch (_: Exception) {
+                GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(
+                    Color.rgb(74, 11, 110), Color.rgb(7, 50, 108), Color.rgb(19, 13, 53)
+                ))
+            }
         }
         scroll.addView(root)
         setContentView(scroll)

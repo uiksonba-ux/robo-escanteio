@@ -155,7 +155,14 @@ MULTIPLICADOR_GALE = 2.0  # multiplicador fixo da progressão
 
 # A posição da ordem inicial aceita determina os gales do sinal: 0..9, 0..9.
 GALES_POR_CICLO = 0
-MAX_GALES = 9
+MAX_GALES = 2
+LIMIAR_ASSERTIVIDADE_SEM_GALE = 60.0
+
+def gales_por_assertividade(wins, losses):
+    total = wins + losses
+    if total <= 0:
+        return MAX_GALES
+    return 0 if (100.0 * wins / total) >= LIMIAR_ASSERTIVIDADE_SEM_GALE else MAX_GALES
 
 RECUPERACAO_PERCENTUAL = 1.0
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
@@ -475,7 +482,7 @@ def conectar():
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
                 f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
-                "🛡 Ordens iniciais aceitas: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 0 gales\n"
+                "🛡 Assertividade global abaixo de 60%: até 2 gales X2; a partir de 60%: sem gale\n"
                 "♻️ Recuperação de 100% do prejuízo líquido global, reservada a uma operação por vez\n"
                 "♾️ CICLOS ILIMITADOS\n"
                 f"📈 Multiplicador fixo nesta versão: X{MULTIPLICADOR_GALE:g}\n\n"
@@ -1588,15 +1595,16 @@ def snapshot_gestao_global():
             "prejuizo_global": max(0, -resultado_global_centavos) / 100,
             "recuperacao_em_curso": recuperacao_em_curso,
             "entradas_globais_aceitas": entradas_globais_aceitas,
-            "gales_proximos": entradas_globais_aceitas % QTD_BANCAS,
-            "sequencia_gales": list(range(QTD_BANCAS)),
+            "gales_proximos": gales_por_assertividade(stats["wins"], stats["losses"]),
+            "sequencia_gales": [gales_por_assertividade(stats["wins"], stats["losses"])],
+            "limiar_assertividade_sem_gale": LIMIAR_ASSERTIVIDADE_SEM_GALE,
             "multiplicador_gale": MULTIPLICADOR_GALE,
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "payout_recuperacao": PAYOUT_RECUPERACAO,
             "envio_indeterminado": dict(envio_indeterminado) if envio_indeterminado else None,
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Ordens iniciais aceitas: 0 a 9 gales; reinício em 0",
+            "regra_gales": "Assertividade global abaixo de 60%: até 2 gales X2; 60% ou mais: sem gale",
             "regra_recuperacao": "100% do prejuízo líquido global; reserva exclusiva por operação",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
@@ -1645,7 +1653,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 posicao = entradas_globais_aceitas % QTD_BANCAS
                 alvo = max(0, -resultado_global_centavos) / 100 if recuperacao_em_curso is None else 0.0
                 contexto = {"posicao": posicao, "numero": entradas_globais_aceitas + 1,
-                            "gales": posicao, "base": obter_entrada_base(saldo),
+                            "gales": gales_por_assertividade(stats["wins"], stats["losses"]), "base": obter_entrada_base(saldo),
                             "entrada": calcular_entrada_recuperacao(alvo, saldo),
                             "prejuizo_alocado": alvo, "resultado_centavos": 0,
                             "primeira_ordem": None, "ultimo_nivel": -1, "ativo": ativo}
@@ -1830,7 +1838,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                      f"💵 Resultado líquido do sinal: R${liquido:.2f}\n"
                      f"📉 Prejuízo líquido global: R${gestao['prejuizo_global']:.2f}\n"
-                     f"🛡 Próxima posição global: {gestao['gales_proximos']} gales\n"
+                     f"🛡 Próxima operação: {gestao['gales_proximos']} gales (faixa de assertividade)\n"
                      f"📊 Global: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                      f"🎯 Assertividade: {taxa_ponderada(stats['wins'], stats['losses'])}%\n"
                      f"💰 Saldo PRACTICE: {texto_saldo()}")

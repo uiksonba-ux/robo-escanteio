@@ -49,7 +49,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(26), dp(18), dp(30))
             background = try {
-                val bitmap = assets.open("wallpaper.jpg").use { BitmapFactory.decodeStream(it) }
+                val bitmap = assets.open("wallpaper.png").use { BitmapFactory.decodeStream(it) }
                 LayerDrawable(arrayOf(
                     BitmapDrawable(resources, bitmap).apply { gravity = Gravity.FILL },
                     ColorDrawable(Color.argb(45, 5, 9, 30))

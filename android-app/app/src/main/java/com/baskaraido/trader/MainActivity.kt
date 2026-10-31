@@ -30,8 +30,8 @@ class MainActivity : Activity() {
     private fun panel(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         background = GradientDrawable().apply {
-            setColor(cardColor); cornerRadius = dp(18).toFloat()
-            setStroke(dp(1), Color.argb(90, 210, 220, 255))
+            setColor(cardColor); cornerRadius = dp(22).toFloat()
+            setStroke(dp(1), Color.argb(105, 70, 195, 255))
         }
         setPadding(dp(16), dp(12), dp(16), dp(12))
     }
@@ -44,12 +44,13 @@ class MainActivity : Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(26), dp(18), dp(30))
-            setBackgroundColor(Color.rgb(10, 17, 37))
+            background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(Color.rgb(74, 11, 110), Color.rgb(7, 50, 108), Color.rgb(19, 13, 53)))
         }
         scroll.addView(root)
         setContentView(scroll)
 
-        root.addView(text("BASKARAIDO TRADER PRO", 25f, true))
+        root.addView(text("BASKARAIDO", 29f, true))
+        root.addView(text("TRADER  PRO", 16f, true).apply { setTextColor(Color.rgb(56, 214, 255)) })
         val practice = text("● MONITORAMENTO  •  PRACTICE", 13f, true)
         practice.setTextColor(Color.rgb(105, 240, 195))
         root.addView(practice)
@@ -59,7 +60,8 @@ class MainActivity : Activity() {
         summary.addView(text("VISÃO GERAL", 13f, true))
         status = text("Aguardando conexão autenticada com o Render.", 14f)
         summary.addView(status)
-        summary.addView(text("WIN: —     LOSS: —     ASSERTIVIDADE: —", 15f, true))
+        summary.addView(text("WIN     —        LOSS     —", 18f, true))
+        summary.addView(text("ASSERTIVIDADE     —", 16f, true).apply { setTextColor(Color.rgb(56, 214, 255)) })
         addPanel(root, summary)
 
         val bankPanel = panel()
@@ -67,8 +69,8 @@ class MainActivity : Activity() {
         bankPanel.addView(text("Valores indisponíveis até conectar a API segura.", 12f))
         banks = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         for (i in 1..10) {
-            val item = text("Banca %02d    •    saldo —    •    WIN — / LOSS —".format(i), 13f)
-            item.setTextColor(muted)
+            val item = text("●   BANCA %02d       SALDO —       W — / L —".format(i), 13f)
+            item.setTextColor(if (i % 2 == 0) Color.rgb(81, 213, 255) else Color.rgb(226, 143, 255))
             banks.addView(item)
         }
         bankPanel.addView(banks)
@@ -90,7 +92,7 @@ class MainActivity : Activity() {
             setText(getPreferences(0).getString("endpoint", ""))
         }
         connect.addView(endpoint)
-        val button = Button(this).apply { text = "TESTAR CONEXÃO" }
+        val button = Button(this).apply { text = "TESTAR CONEXÃO"; backgroundTintList = android.content.res.ColorStateList.valueOf(Color.rgb(56, 214, 255)); setTextColor(Color.rgb(6, 20, 42)) }
         connect.addView(button)
         connect.addView(text("A consulta requer uma API de monitoramento autenticada. Não insira senhas ou tokens aqui.", 12f))
         addPanel(root, connect)

@@ -45,23 +45,29 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val scroll = ScrollView(this).apply { isFillViewport = true }
+        val wallpaperLayer = android.widget.FrameLayout(this)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(26), dp(18), dp(30))
-            background = try {
-                val bitmap = assets.open("wallpaper.png").use { BitmapFactory.decodeStream(it) }
-                LayerDrawable(arrayOf(
-                    BitmapDrawable(resources, bitmap).apply { gravity = Gravity.FILL },
-                    ColorDrawable(Color.argb(45, 5, 9, 30))
-                ))
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+        val wallpaper = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            try {
+                setImageBitmap(assets.open("wallpaper.png").use { BitmapFactory.decodeStream(it) })
             } catch (_: Exception) {
-                GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(
+                setImageDrawable(GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(
                     Color.rgb(74, 11, 110), Color.rgb(7, 50, 108), Color.rgb(19, 13, 53)
-                ))
+                )))
             }
         }
+        wallpaperLayer.addView(wallpaper, android.widget.FrameLayout.LayoutParams(-1, -1))
+        wallpaperLayer.addView(View(this).apply {
+            setBackgroundColor(Color.argb(45, 5, 9, 30))
+        }, android.widget.FrameLayout.LayoutParams(-1, -1))
         scroll.addView(root)
-        setContentView(scroll)
+        wallpaperLayer.addView(scroll, android.widget.FrameLayout.LayoutParams(-1, -1))
+        setContentView(wallpaperLayer)
 
         root.addView(text("BASKARAIDO", 29f, true))
         root.addView(text("TRADER  PRO", 16f, true).apply { setTextColor(Color.rgb(56, 214, 255)) })

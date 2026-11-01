@@ -42,7 +42,7 @@ def read_remote_config(url, token):
         return None
     parsed = urlparse(url)
     if (parsed.scheme != "https" or parsed.hostname != ALLOWED_HOST
-            or parsed.port not in (None, 443) or parsed.username or parsed.password
+            or parsed.netloc != ALLOWED_HOST or parsed.username or parsed.password
             or parsed.query or parsed.fragment or parsed.path != "/api/v1/practice/faixas"):
         return None
     try:

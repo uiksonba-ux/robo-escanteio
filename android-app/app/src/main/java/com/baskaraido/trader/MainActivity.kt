@@ -111,10 +111,10 @@ class MainActivity : Activity() {
         val connect = panel()
         connect.addView(text("CONEXÃO COM RENDER", 17f, true))
         endpoint = EditText(this).apply {
-            hint = "https://seu-servico.onrender.com"
+            hint = "https://baskaraido-monitor-test.onrender.com"
             setSingleLine(true)
             setTextColor(ink); setHintTextColor(muted)
-            setText(getPreferences(0).getString("endpoint", ""))
+            setText(getPreferences(0).getString("endpoint", "https://baskaraido-monitor-test.onrender.com"))
         }
         connect.addView(endpoint)
         tokenField = EditText(this).apply {
@@ -126,7 +126,7 @@ class MainActivity : Activity() {
         connect.addView(tokenField)
         val button = Button(this).apply { text = "TESTAR CONEXÃO"; backgroundTintList = android.content.res.ColorStateList.valueOf(Color.rgb(56, 214, 255)); setTextColor(Color.rgb(6, 20, 42)) }
         connect.addView(button)
-        connect.addView(text("A consulta requer uma API de monitoramento autenticada. Não insira senhas ou tokens aqui.", 12f))
+        connect.addView(text("Use apenas o token exclusivo de monitoramento. Nunca informe sua senha da IQ Option ou o token do Telegram.", 12f))
         addPanel(root, connect)
 
         button.setOnClickListener {
@@ -169,7 +169,7 @@ class MainActivity : Activity() {
                                         (banks.getChildAt(i - 1) as TextView).text = "●   BANCA %02d       SALDO —       W %d / L %d".format(i, w, l)
                                     }
                                 }
-                                "Monitoramento PRACTICE conectado."
+                                "Monitoramento PRACTICE conectado (dados de teste)."
                             }
                         }
                     } finally { conn.disconnect() }

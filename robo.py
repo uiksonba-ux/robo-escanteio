@@ -3,13 +3,14 @@ import time
 import math
 import logging
 import threading
+import hmac
 import requests
 from decimal import Decimal, ROUND_HALF_UP, ROUND_UP
 
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from iqoptionapi.stable_api import IQ_Option
 
 
@@ -2296,6 +2297,49 @@ def home():
                 bloqueados
             ),
     })
+
+
+# ============================================================
+# API DE MONITORAMENTO - SOMENTE LEITURA / PRACTICE
+# Não habilita ordens e não expõe credenciais da IQ/Telegram.
+# Token deve ser configurado em MONITOR_API_TOKEN no servidor.
+# ============================================================
+
+@app.route("/api/v1/monitor", methods=["GET"])
+def monitor_practice():
+    token = os.getenv("MONITOR_API_TOKEN", "").strip()
+    supplied = request.headers.get("Authorization", "")
+    if not token:
+        return jsonify({"erro": "monitoramento_nao_configurado"}), 503
+    if not hmac.compare_digest(supplied, "Bearer " + token):
+        return jsonify({"erro": "nao_autorizado"}), 401
+
+    with estado_lock:
+        geral = {
+            "wins": int(stats["wins"]),
+            "losses": int(stats["losses"]),
+            "assertividade": taxa_ponderada(stats["wins"], stats["losses"]),
+        }
+        frentes = {
+            nome: {
+                "wins": int(dados.get("wins", 0)),
+                "losses": int(dados.get("losses", 0)),
+                # O robô não mantém saldo individual verificável por banca.
+                "saldo": None,
+            }
+            for nome, dados in estado_frentes.items()
+        }
+
+    return jsonify({
+        "schema_version": 1,
+        "conta": "PRACTICE",
+        "modo": "somente_leitura",
+        "origem": "robo_practice_memoria_volatil",
+        "persistencia": "nao_persistido_reinicia_com_processo",
+        "atualizado_em": agora_brasil().isoformat(),
+        "estatisticas": geral,
+        "bancas": frentes,
+    }), 200
 
 
 # ============================================================

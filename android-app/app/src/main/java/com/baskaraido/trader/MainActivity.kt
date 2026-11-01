@@ -256,7 +256,8 @@ class MainActivity : Activity() {
                                     bankHint.text = when { testData -> "Bancas simuladas para validar a conexão."; robotData -> "Bancas do processo atual do robô PRACTICE."; else -> "Origem não reconhecida; não use estes dados." }
                                     summaryStats.text = "WIN ${totals.getInt("wins")}        LOSS ${totals.getInt("losses")}"
                                     accuracyStats.text = "ASSERTIVIDADE ${totals.getDouble("assertividade")}%"
-                                    currentAccuracy = if (robotData) totals.getDouble("assertividade") else null\n                                    updateRange()
+                                    currentAccuracy = if (robotData) totals.getDouble("assertividade") else null
+                                    updateRange()
                                     for (i in 1..10) {
                                         val bank = entries.optJSONObject("BANCA $i")
                                         val w = bank?.optInt("wins", 0) ?: 0

@@ -167,11 +167,17 @@ class MainActivity : Activity() {
                             } else {
                                 val totals = json.getJSONObject("estatisticas")
                                 val entries = json.getJSONObject("bancas")
-                                val testData = json.optString("origem") == "ambiente_de_teste_sem_dados_reais"
-                                val originLabel = if (testData) "DADOS SIMULADOS — NÃO SÃO OPERAÇÕES REAIS" else "DADOS DO ROBÔ PRACTICE (ORIGEM NÃO VERIFICADA)"
+                                val origin = json.optString("origem")
+                                val testData = origin == "ambiente_de_teste_sem_dados_reais"
+                                val robotData = origin == "robo_practice_memoria_volatil"
+                                val originLabel = when {
+                                    testData -> "DADOS SIMULADOS — NÃO SÃO OPERAÇÕES REAIS"
+                                    robotData -> "ROBÔ PRACTICE — CONTADORES REINICIAM COM O PROCESSO"
+                                    else -> "ORIGEM DESCONHECIDA — DADOS NÃO CONFIÁVEIS"
+                                }
                                 runOnUiThread {
                                     dataOrigin.text = originLabel
-                                    bankHint.text = if (testData) "Bancas simuladas para validar a conexão." else "Dados recebidos da API; confirme a origem no servidor."
+                                    bankHint.text = when { testData -> "Bancas simuladas para validar a conexão."; robotData -> "Bancas do processo atual do robô PRACTICE."; else -> "Origem não reconhecida; não use estes dados." }
                                     summaryStats.text = "WIN ${totals.getInt("wins")}        LOSS ${totals.getInt("losses")}"
                                     accuracyStats.text = "ASSERTIVIDADE ${totals.getDouble("assertividade")}%"
                                     for (i in 1..10) {
@@ -181,7 +187,7 @@ class MainActivity : Activity() {
                                         (banks.getChildAt(i - 1) as TextView).text = "●   BANCA %02d       SALDO —       W %d / L %d".format(i, w, l)
                                     }
                                 }
-                                if (testData) "Conectado: dados simulados, sem operações reais." else "Conectado: dados PRACTICE recebidos (verifique origem)."
+                                when { testData -> "Conectado: dados simulados, sem operações reais."; robotData -> "Conectado: robô PRACTICE (memória temporária)."; else -> "Conectado, mas origem dos dados desconhecida." }
                             }
                         }
                     } finally { conn.disconnect() }

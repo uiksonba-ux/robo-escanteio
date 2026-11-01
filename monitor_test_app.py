@@ -9,6 +9,16 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 import json
+import threading
+
+_config_lock = threading.RLock()
+_config = {"schema_version": 1, "conta": "PRACTICE", "enabled": True, "faixas": [
+    {"min": 0, "max": 49, "gales": 4, "mult": 2.0},
+    {"min": 50, "max": 59, "gales": 3, "mult": 2.0},
+    {"min": 60, "max": 69, "gales": 2, "mult": 2.0},
+    {"min": 70, "max": 79, "gales": 1, "mult": 2.0},
+    {"min": 80, "max": 100, "gales": 0, "mult": 2.0},
+]}
 
 app = Flask(__name__)
 
@@ -59,3 +69,39 @@ def monitor():
         "estatisticas": {"wins": 0, "losses": 0, "assertividade": 0.0},
         "bancas": {f"BANCA {i}": {"wins": 0, "losses": 0, "saldo": None} for i in range(1, 11)},
     })
+
+@app.route("/api/v1/practice/faixas", methods=["GET", "PUT"])
+def practice_faixas():
+    """Isolated configuration preview. Never forwards writes to the trading robot."""
+    token = os.getenv("MONITOR_API_TOKEN", "").strip()
+    if not token:
+        return jsonify({"erro": "token_nao_configurado"}), 503
+    if not hmac.compare_digest(request.headers.get("Authorization", ""), "Bearer " + token):
+        return jsonify({"erro": "nao_autorizado"}), 401
+    if request.method == "GET":
+        with _config_lock:
+            return jsonify({**_config, "aplicada_no_robo": False, "persistencia": "memoria_temporaria"}), 200
+    if request.content_length is None or request.content_length > 4096:
+        return jsonify({"erro": "tamanho_invalido"}), 413
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "conta", "enabled", "faixas"}:
+        return jsonify({"erro": "formato_invalido"}), 400
+    if payload["schema_version"] != 1 or payload["conta"] != "PRACTICE" or type(payload["enabled"]) is not bool:
+        return jsonify({"erro": "somente_practice"}), 400
+    faixas = payload["faixas"]
+    limites = [(0,49), (50,59), (60,69), (70,79), (80,100)]
+    if not isinstance(faixas, list) or len(faixas) != 5:
+        return jsonify({"erro": "faixas_invalidas"}), 400
+    for faixa, (minimo, maximo) in zip(faixas, limites):
+        if (not isinstance(faixa, dict) or set(faixa) != {"min", "max", "gales", "mult"} or
+            type(faixa["min"]) is not int or type(faixa["max"]) is not int or
+            (faixa["min"], faixa["max"]) != (minimo, maximo) or
+            type(faixa["gales"]) is not int or not 0 <= faixa["gales"] <= 9 or
+            type(faixa["mult"]) not in (float, int) or
+            not 1.0 <= faixa["mult"] <= 10.0):
+            return jsonify({"erro": "faixas_invalidas"}), 400
+    with _config_lock:
+        _config.clear()
+        _config.update(payload)
+    return jsonify({"salvo": True, "conta": "PRACTICE", "aplicada_no_robo": False,
+                    "persistencia": "memoria_temporaria"}), 200

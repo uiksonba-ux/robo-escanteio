@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, request
 from iqoptionapi.stable_api import IQ_Option
+from practice_band_config import read_remote_config, select_band
 
 
 # ============================================================
@@ -183,6 +184,11 @@ def gestao_por_assertividade(wins, losses):
         if minimo <= percentual < maximo:
             return gales, multiplicador
     raise ValueError("assertividade fora das faixas configuradas")
+
+def gestao_sincronizada_practice(wins, losses, remote_config=None):
+    """Only used for new orders; never changes an existing operation context."""
+    return select_band(wins, losses, remote_config,
+                       gestao_por_assertividade(wins, losses))
 
 def gales_por_assertividade(wins, losses):
     return gestao_por_assertividade(wins, losses)[0]
@@ -1647,6 +1653,13 @@ def marcar_envio_indeterminado(banca, ativo, nivel, valor, motivo):
 def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
     """Escolha, envio e confirmação serializados; a recusa não consome posição."""
     global entradas_globais_aceitas, recuperacao_em_curso, ultimo_saldo_practice
+    # Fetch before taking operation/state locks. Disabled unless both env vars exist.
+    # If the remote preview is unavailable, use the validated branch-local bands.
+    config_remota = None
+    if nivel == 0:
+        config_remota = read_remote_config(
+            os.getenv("PRACTICE_FAIXAS_URL", "").strip(),
+            os.getenv("PRACTICE_FAIXAS_TOKEN", "").strip())
     with contador_entrada_lock:
         with estado_lock:
             contexto = operacoes_ativas.get(banca)
@@ -1676,8 +1689,8 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 posicao = entradas_globais_aceitas % QTD_BANCAS
                 alvo = max(0, -resultado_global_centavos) / 100 if recuperacao_em_curso is None else 0.0
                 contexto = {"posicao": posicao, "numero": entradas_globais_aceitas + 1,
-                            "gales": gestao_por_assertividade(max(0, stats["wins"] - wins_base_ponderada), max(0, stats["losses"] - losses_base_ponderada))[0],
-                            "multiplicador": gestao_por_assertividade(max(0, stats["wins"] - wins_base_ponderada), max(0, stats["losses"] - losses_base_ponderada))[1], "base": obter_entrada_base(saldo),
+                            "gales": gestao_sincronizada_practice(max(0, stats["wins"] - wins_base_ponderada), max(0, stats["losses"] - losses_base_ponderada), config_remota)[0],
+                            "multiplicador": gestao_sincronizada_practice(max(0, stats["wins"] - wins_base_ponderada), max(0, stats["losses"] - losses_base_ponderada), config_remota)[1], "base": obter_entrada_base(saldo),
                             "entrada": calcular_entrada_recuperacao(alvo, saldo),
                             "prejuizo_alocado": alvo, "resultado_centavos": 0,
                             "primeira_ordem": None, "ultimo_nivel": -1, "ativo": ativo}

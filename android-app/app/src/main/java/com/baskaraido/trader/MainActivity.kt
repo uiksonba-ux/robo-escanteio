@@ -9,6 +9,7 @@ import android.graphics.drawable.ColorDrawable
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.widget.*
@@ -27,6 +28,8 @@ class MainActivity : Activity() {
     private lateinit var summaryStats: TextView
     private lateinit var accuracyStats: TextView
     private lateinit var dataOrigin: TextView
+    private lateinit var rangeResult: TextView
+    private var currentAccuracy: Double? = null
 
     private fun dp(value: Int): Int = (resources.displayMetrics.density * value).toInt()
     private fun text(value: String, size: Float = 15f, bold: Boolean = false): TextView =
@@ -107,9 +110,82 @@ class MainActivity : Activity() {
 
         val rules = panel()
         rules.addView(text("GESTÃO DE ASSERTIVIDADE", 17f, true))
-        rules.addView(text("Abaixo de 60%: até 2 Gales ×2", 14f))
-        rules.addView(text("A partir de 60%: sem Gale", 14f))
-        rules.addView(text("Indicadores e Telegram preservados no robô Python.", 12f))
+        rules.addView(text("Configuração local • não altera operações do robô", 12f))
+        val strategyPrefs = getSharedPreferences("accuracy_ranges", MODE_PRIVATE)
+        val toggle = Switch(this).apply {
+            text = "Ativar gestão por faixas"
+            setTextColor(ink)
+            isChecked = strategyPrefs.getBoolean("enabled", true)
+        }
+        rules.addView(toggle)
+        val limits = intArrayOf(49, 59, 69, 79, 100)
+        val starts = intArrayOf(0, 50, 60, 70, 80)
+        val defaults = intArrayOf(4, 3, 2, 1, 0)
+        val galeFields = mutableListOf<EditText>()
+        val multFields = mutableListOf<EditText>()
+        for (i in starts.indices) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            row.addView(text("${starts[i]}–${limits[i]}%  ", 14f, true), LinearLayout.LayoutParams(0, -2, 1f))
+            val gale = EditText(this).apply {
+                setSingleLine(true); inputType = InputType.TYPE_CLASS_NUMBER
+                setText(strategyPrefs.getInt("gale_$i", defaults[i]).toString())
+                setTextColor(ink); hint = "Gales"
+                contentDescription = "Quantidade de gales na faixa ${starts[i]} a ${limits[i]}%"
+            }
+            row.addView(gale, LinearLayout.LayoutParams(dp(60), -2))
+            galeFields.add(gale)
+            val mult = EditText(this).apply {
+                setSingleLine(true); inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                setText(strategyPrefs.getString("mult_$i", "2"))
+                setTextColor(ink); hint = "×"
+                contentDescription = "Multiplicador na faixa ${starts[i]} a ${limits[i]}%"
+            }
+            row.addView(mult, LinearLayout.LayoutParams(dp(65), -2))
+            multFields.add(mult)
+            rules.addView(row)
+        }
+        rangeResult = text("Faixa ainda não calculada.", 13f, true)
+        rules.addView(rangeResult)
+        fun updateRange() {
+            val accuracy = currentAccuracy
+            rangeResult.text = when {
+                !toggle.isChecked -> "Gestão por faixas desativada."
+                accuracy == null -> "Aguardando assertividade do monitor PRACTICE."
+                else -> {
+                    val idx = AccuracyRanges.indexFor(accuracy)
+                    if (idx == null) "Assertividade inválida."
+                    else {
+                        val gales = strategyPrefs.getInt("gale_$idx", defaults[idx])
+                        val mult = strategyPrefs.getString("mult_$idx", "2")
+                        "Faixa ${starts[idx]}–${limits[idx]}%: até $gales Gales ×$mult (prévia local)"
+                    }
+                }
+            }
+        }
+        toggle.setOnCheckedChangeListener { _, checked ->
+            strategyPrefs.edit().putBoolean("enabled", checked).apply()
+            updateRange()
+        }
+        val saveRanges = Button(this).apply { text = "SALVAR FAIXAS" }
+        rules.addView(saveRanges)
+        saveRanges.setOnClickListener {
+            val gales = galeFields.map { it.text.toString().toIntOrNull() }
+            val multipliers = multFields.map { it.text.toString().replace(',', '.').toDoubleOrNull() }
+            if (gales.any { it == null || it !in 0..9 } || multipliers.any { it == null || !it.isFinite() || it < 1.0 || it > 10.0 }) {
+                Toast.makeText(this, "Gales: 0 a 9; multiplicador: 1 a 10.", Toast.LENGTH_LONG).show()
+            } else {
+                val editor = strategyPrefs.edit().putBoolean("enabled", toggle.isChecked)
+                for (i in starts.indices) {
+                    editor.putInt("gale_$i", gales[i]!!)
+                    editor.putString("mult_$i", multipliers[i]!!.toString())
+                }
+                editor.apply()
+                updateRange()
+                Toast.makeText(this, "Faixas salvas apenas neste aplicativo.", Toast.LENGTH_SHORT).show()
+            }
+        }
+        rules.addView(text("Esta tela apenas calcula a faixa. Não envia ordens nem modifica Telegram ou estratégia ativa.", 12f))
+        updateRange()
         addPanel(root, rules)
 
         val connect = panel()
@@ -180,6 +256,7 @@ class MainActivity : Activity() {
                                     bankHint.text = when { testData -> "Bancas simuladas para validar a conexão."; robotData -> "Bancas do processo atual do robô PRACTICE."; else -> "Origem não reconhecida; não use estes dados." }
                                     summaryStats.text = "WIN ${totals.getInt("wins")}        LOSS ${totals.getInt("losses")}"
                                     accuracyStats.text = "ASSERTIVIDADE ${totals.getDouble("assertividade")}%"
+                                    currentAccuracy = if (robotData) totals.getDouble("assertividade") else null\n                                    updateRange()
                                     for (i in 1..10) {
                                         val bank = entries.optJSONObject("BANCA $i")
                                         val w = bank?.optInt("wins", 0) ?: 0

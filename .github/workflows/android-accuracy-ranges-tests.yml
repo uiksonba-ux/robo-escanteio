@@ -1,0 +1,21 @@
+name: Android Accuracy Ranges Tests
+on:
+  push:
+    branches:
+      - feature/baskaraido-trader-android-practice
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest -v test_accuracy_ranges_android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: cd android-app && chmod +x gradlew && ./gradlew assembleDebug

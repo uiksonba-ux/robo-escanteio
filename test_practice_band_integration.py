@@ -47,7 +47,7 @@ class PracticeBandIntegrationTests(unittest.TestCase):
     def test_order_snapshot(self):
         import pathlib
         src = pathlib.Path("robo.py").read_text()
-        self.assertIn("if nivel == 0:\\n        config_remota = read_remote_config(", src)
+        self.assertIn("if nivel == 0:\n        config_remota = read_remote_config(", src)
         self.assertIn('"multiplicador": gestao_sincronizada_practice(', src)
         self.assertIn('contexto.get("multiplicador", MULTIPLICADOR_GALE)', src)
 

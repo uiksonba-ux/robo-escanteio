@@ -2342,6 +2342,8 @@ def monitor_practice():
         "schema_version": 1,
         "conta": "PRACTICE",
         "modo": "somente_leitura",
+        "origem": "robo_practice_memoria_volatil",
+        "persistencia": "nao_persistido_reinicia_com_processo",
         "atualizado_em": agora_brasil().isoformat(),
         "estatisticas": geral,
         "bancas": frentes,

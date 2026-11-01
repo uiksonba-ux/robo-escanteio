@@ -26,3 +26,9 @@ jobs:
       - name: Build debug APK
         working-directory: android-app
         run: gradle --no-daemon --stacktrace assembleDebug
+      - name: Upload validated debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Baskaraido-Trader-PRACTICE-Faixas-debug
+          path: android-app/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

@@ -126,23 +126,27 @@ class MainActivity : Activity() {
         connect.addView(tokenField)
         val button = Button(this).apply { text = "TESTAR CONEXÃO"; backgroundTintList = android.content.res.ColorStateList.valueOf(Color.rgb(56, 214, 255)); setTextColor(Color.rgb(6, 20, 42)) }
         connect.addView(button)
+        val connectionResult = text("Toque em TESTAR CONEXÃO para verificar o servidor.", 13f, true).apply { setTextColor(Color.rgb(105, 240, 195)) }
+        connect.addView(connectionResult)
         connect.addView(text("Use apenas o token exclusivo de monitoramento. Nunca informe sua senha da IQ Option ou o token do Telegram.", 12f))
         addPanel(root, connect)
 
         button.setOnClickListener {
+            fun showResult(message: String) { status.text = message; connectionResult.text = message }
             val base = endpoint.text.toString().trim().trimEnd('/')
             val url = try { URL(base + "/api/v1/monitor") } catch (_: Exception) { null }
             val token = tokenField.text.toString().trim()
             if (url == null || url.protocol != "https" || url.host.isBlank()) {
-                status.text = "Informe um endereço HTTPS válido."
+                showResult("Informe um endereço HTTPS válido.")
                 return@setOnClickListener
             }
             if (token.isEmpty()) {
-                status.text = "Informe o token de monitoramento."
+                showResult("Informe o token de monitoramento.")
                 return@setOnClickListener
             }
             getPreferences(0).edit().putString("endpoint", base).apply()
-            status.text = "Verificando servidor..."
+            showResult("Verificando servidor...")
+            button.isEnabled = false
             Thread {
                 val message = try {
                     val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -174,7 +178,7 @@ class MainActivity : Activity() {
                         }
                     } finally { conn.disconnect() }
                 } catch (e: Exception) { "Conexão não concluída: ${e.javaClass.simpleName}" }
-                runOnUiThread { status.text = message }
+                runOnUiThread { showResult(message); button.isEnabled = true }
             }.start()
         }
     }

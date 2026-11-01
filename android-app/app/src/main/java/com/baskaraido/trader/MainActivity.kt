@@ -209,6 +209,63 @@ class MainActivity : Activity() {
         val connectionResult = text("Toque em TESTAR CONEXÃO para verificar o servidor.", 13f, true).apply { setTextColor(Color.rgb(105, 240, 195)) }
         connect.addView(connectionResult)
         connect.addView(text("Use apenas o token exclusivo de monitoramento. Nunca informe sua senha da IQ Option ou o token do Telegram.", 12f))
+        val syncButton = Button(this).apply { text = "ENVIAR FAIXAS AO AMBIENTE DE TESTES" }
+        connect.addView(syncButton)
+        val syncResult = text("As configurações enviadas são uma prévia; não alteram o robô.", 12f)
+        connect.addView(syncResult)
+        syncButton.setOnClickListener {
+            val base = endpoint.text.toString().trim().trimEnd('/')
+            val address = try { URL(base + "/api/v1/practice/faixas") } catch (_: Exception) { null }
+            if (address == null || address.protocol != "https" ||
+                address.host != "baskaraido-monitor-test.onrender.com" || address.port != -1) {
+                syncResult.text = "Sincronização permitida somente com o monitor isolado de testes."
+                return@setOnClickListener
+            }
+            val token = tokenField.text.toString().trim()
+            if (token.isBlank()) {
+                syncResult.text = "Informe o token exclusivo de monitoramento."
+                return@setOnClickListener
+            }
+            val gales = galeFields.map { it.text.toString().toIntOrNull() }
+            val mults = multFields.map { it.text.toString().replace(',', '.').toDoubleOrNull() }
+            if (gales.any { it == null || it !in 0..9 } ||
+                mults.any { it == null || !it.isFinite() || it < 1.0 || it > 10.0 }) {
+                syncResult.text = "Corrija os Gales (0–9) e multiplicadores (1–10)."
+                return@setOnClickListener
+            }
+            val payload = JSONObject().put("schema_version", 1).put("conta", "PRACTICE")
+                .put("enabled", toggle.isChecked)
+            val faixas = org.json.JSONArray()
+            for (i in starts.indices) {
+                faixas.put(JSONObject().put("min", starts[i]).put("max", limits[i])
+                    .put("gales", gales[i]!!).put("mult", mults[i]!!))
+            }
+            payload.put("faixas", faixas)
+            syncButton.isEnabled = false
+            syncResult.text = "Enviando ao monitor de testes..."
+            Thread {
+                val result = try {
+                    val conn = (address.openConnection() as HttpURLConnection).apply {
+                        requestMethod = "PUT"; doOutput = true
+                        connectTimeout = 15000; readTimeout = 15000
+                        instanceFollowRedirects = false
+                        setRequestProperty("Authorization", "Bearer $token")
+                        setRequestProperty("Content-Type", "application/json")
+                    }
+                    try {
+                        conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                        if (conn.responseCode == 200) {
+                            val response = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                            if (response.optBoolean("salvo") && !response.optBoolean("aplicada_no_robo", true))
+                                "Faixas recebidas no teste. NÃO aplicadas ao robô."
+                            else "Resposta inesperada; não considerar sincronizado."
+                        } else "Envio rejeitado: HTTP ${conn.responseCode}."
+                    } finally { conn.disconnect() }
+                } catch (e: Exception) { "Falha no envio: ${e.javaClass.simpleName}" }
+                runOnUiThread { syncResult.text = result; syncButton.isEnabled = true }
+            }.start()
+        }
+
         addPanel(root, connect)
 
         button.setOnClickListener {

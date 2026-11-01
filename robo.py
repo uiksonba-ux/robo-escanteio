@@ -159,11 +159,33 @@ GALES_POR_CICLO = 0
 MAX_GALES = 2
 LIMIAR_ASSERTIVIDADE_SEM_GALE = 60.0
 
+# Configuração isolada da branch PRACTICE. Sem endpoint de escrita.
+# As preferências locais do Android não alteram esta configuração do robô.
+FAIXAS_ASSERTIVIDADE_ATIVAS = True
+FAIXAS_ASSERTIVIDADE = (
+    (0.0, 50.0, 4, 2.0),
+    (50.0, 60.0, 3, 2.0),
+    (60.0, 70.0, 2, 2.0),
+    (70.0, 80.0, 1, 2.0),
+    (80.0, 100.000001, 0, 2.0),
+)
+
+def gestao_por_assertividade(wins, losses):
+    """Seleciona a gestão global pela janela de assertividade das 10 bancas."""
+    if not FAIXAS_ASSERTIVIDADE_ATIVAS:
+        return (MAX_GALES if wins + losses <= 0 or
+                (100.0 * wins / (wins + losses)) < LIMIAR_ASSERTIVIDADE_SEM_GALE
+                else 0), MULTIPLICADOR_GALE
+    # Sem amostra, a faixa conservadora inicial é a primeira.
+    total = max(0, wins) + max(0, losses)
+    percentual = 0.0 if total == 0 else 100.0 * max(0, wins) / total
+    for minimo, maximo, gales, multiplicador in FAIXAS_ASSERTIVIDADE:
+        if minimo <= percentual < maximo:
+            return gales, multiplicador
+    raise ValueError("assertividade fora das faixas configuradas")
+
 def gales_por_assertividade(wins, losses):
-    total = wins + losses
-    if total <= 0:
-        return MAX_GALES
-    return 0 if (100.0 * wins / total) >= LIMIAR_ASSERTIVIDADE_SEM_GALE else MAX_GALES
+    return gestao_por_assertividade(wins, losses)[0]
 
 RECUPERACAO_PERCENTUAL = 1.0
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
@@ -1654,11 +1676,12 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 posicao = entradas_globais_aceitas % QTD_BANCAS
                 alvo = max(0, -resultado_global_centavos) / 100 if recuperacao_em_curso is None else 0.0
                 contexto = {"posicao": posicao, "numero": entradas_globais_aceitas + 1,
-                            "gales": gales_por_assertividade(stats["wins"], stats["losses"]), "base": obter_entrada_base(saldo),
+                            "gales": gestao_por_assertividade(max(0, stats["wins"] - wins_base_ponderada), max(0, stats["losses"] - losses_base_ponderada))[0],
+                            "multiplicador": gestao_por_assertividade(max(0, stats["wins"] - wins_base_ponderada), max(0, stats["losses"] - losses_base_ponderada))[1], "base": obter_entrada_base(saldo),
                             "entrada": calcular_entrada_recuperacao(alvo, saldo),
                             "prejuizo_alocado": alvo, "resultado_centavos": 0,
                             "primeira_ordem": None, "ultimo_nivel": -1, "ativo": ativo}
-            valor = valores_do_ciclo(contexto["entrada"], nivel)[nivel]
+            valor = valores_do_ciclo(contexto["entrada"], nivel, contexto.get("multiplicador", MULTIPLICADOR_GALE))[nivel]
             # Conservador enquanto a atualização de saldo da corretora pode estar atrasada.
             comprometido = sum(o["valor"] for o in ordens_pendentes.values())
             disponivel = saldo - comprometido - sum(reservas_pendentes.values())
@@ -1787,7 +1810,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         if not ok:
             return
         gales = contexto["gales"]
-        valores = valores_do_ciclo(contexto["entrada"], gales)
+        valores = valores_do_ciclo(contexto["entrada"], gales, contexto.get("multiplicador", MULTIPLICADOR_GALE))
         log.info("GESTÃO GLOBAL | %s | operação=%s | posição=%s | gales=%s | base=%.2f | entrada=%.2f | X2 | recuperação=%.2f",
                  banca, contexto["numero"], contexto["posicao"], gales,
                  contexto["base"], contexto["entrada"], contexto["prejuizo_alocado"])
@@ -1797,7 +1820,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                 "timeframe": timeframe_analise, "expiracao": expiracao,
                 "ciclo": contexto["numero"], "posicao_global": contexto["posicao"],
                 "entrada": contexto["entrada"], "gales": gales,
-                "multiplicador": MULTIPLICADOR_GALE,
+                "multiplicador": contexto.get("multiplicador", MULTIPLICADOR_GALE),
                 "recuperacao": contexto["prejuizo_alocado"] > 0,
                 "prejuizo_antes": contexto["prejuizo_alocado"],
                 "data": datetime.now(timezone.utc).isoformat()}

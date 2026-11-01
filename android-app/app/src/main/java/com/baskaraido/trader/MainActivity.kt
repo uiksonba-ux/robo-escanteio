@@ -23,6 +23,9 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var banks: LinearLayout
     private lateinit var endpoint: EditText
+    private lateinit var tokenField: EditText
+    private lateinit var summaryStats: TextView
+    private lateinit var accuracyStats: TextView
 
     private fun dp(value: Int): Int = (resources.displayMetrics.density * value).toInt()
     private fun text(value: String, size: Float = 15f, bold: Boolean = false): TextView =
@@ -80,8 +83,10 @@ class MainActivity : Activity() {
         summary.addView(text("VISÃO GERAL", 13f, true))
         status = text("Aguardando conexão autenticada com o Render.", 14f)
         summary.addView(status)
-        summary.addView(text("WIN     —        LOSS     —", 18f, true))
-        summary.addView(text("ASSERTIVIDADE     —", 16f, true).apply { setTextColor(Color.rgb(56, 214, 255)) })
+        summaryStats = text("WIN     —        LOSS     —", 18f, true)
+        summary.addView(summaryStats)
+        accuracyStats = text("ASSERTIVIDADE     —", 16f, true).apply { setTextColor(Color.rgb(56, 214, 255)) }
+        summary.addView(accuracyStats)
         addPanel(root, summary)
 
         val bankPanel = panel()
@@ -112,6 +117,13 @@ class MainActivity : Activity() {
             setText(getPreferences(0).getString("endpoint", ""))
         }
         connect.addView(endpoint)
+        tokenField = EditText(this).apply {
+            hint = "Token de monitoramento (não é a senha IQ)"
+            setSingleLine(true)
+            inputType = 129
+            setTextColor(ink); setHintTextColor(muted)
+        }
+        connect.addView(tokenField)
         val button = Button(this).apply { text = "TESTAR CONEXÃO"; backgroundTintList = android.content.res.ColorStateList.valueOf(Color.rgb(56, 214, 255)); setTextColor(Color.rgb(6, 20, 42)) }
         connect.addView(button)
         connect.addView(text("A consulta requer uma API de monitoramento autenticada. Não insira senhas ou tokens aqui.", 12f))
@@ -119,9 +131,14 @@ class MainActivity : Activity() {
 
         button.setOnClickListener {
             val base = endpoint.text.toString().trim().trimEnd('/')
-            val url = try { URL(base) } catch (_: Exception) { null }
+            val url = try { URL(base + "/api/v1/monitor") } catch (_: Exception) { null }
+            val token = tokenField.text.toString().trim()
             if (url == null || url.protocol != "https" || url.host.isBlank()) {
                 status.text = "Informe um endereço HTTPS válido."
+                return@setOnClickListener
+            }
+            if (token.isEmpty()) {
+                status.text = "Informe o token de monitoramento."
                 return@setOnClickListener
             }
             getPreferences(0).edit().putString("endpoint", base).apply()
@@ -131,16 +148,29 @@ class MainActivity : Activity() {
                     val conn = (url.openConnection() as HttpURLConnection).apply {
                         connectTimeout = 8000; readTimeout = 8000; requestMethod = "GET"
                         instanceFollowRedirects = false
+                        setRequestProperty("Authorization", "Bearer $token")
                     }
                     try {
-                        if (conn.responseCode != 200) "Servidor respondeu HTTP ${conn.responseCode}. API ainda não conectada."
+                        if (conn.responseCode != 200) "API respondeu HTTP ${conn.responseCode}."
                         else {
-                            val body = conn.inputStream.bufferedReader().use { it.readText().take(3000) }
-                            val json = JSONObject(body)
-                            val account = json.optString("conta", json.optString("account", ""))
-                            if (account.equals("PRACTICE", true))
-                                "Servidor respondeu PRACTICE. Integração de dados das bancas ainda pendente."
-                            else "Servidor acessível, mas conta PRACTICE não confirmada. Dados não exibidos."
+                            val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText().take(30000) })
+                            if (json.optString("conta") != "PRACTICE" || json.optString("modo") != "somente_leitura" || json.optInt("schema_version") != 1) {
+                                "Resposta rejeitada: somente PRACTICE e leitura são permitidos."
+                            } else {
+                                val totals = json.getJSONObject("estatisticas")
+                                val entries = json.getJSONObject("bancas")
+                                runOnUiThread {
+                                    summaryStats.text = "WIN ${totals.getInt("wins")}        LOSS ${totals.getInt("losses")}"
+                                    accuracyStats.text = "ASSERTIVIDADE ${totals.getDouble("assertividade")}%"
+                                    for (i in 1..10) {
+                                        val bank = entries.optJSONObject("BANCA $i")
+                                        val w = bank?.optInt("wins", 0) ?: 0
+                                        val l = bank?.optInt("losses", 0) ?: 0
+                                        (banks.getChildAt(i - 1) as TextView).text = "●   BANCA %02d       SALDO —       W %d / L %d".format(i, w, l)
+                                    }
+                                }
+                                "Monitoramento PRACTICE conectado."
+                            }
                         }
                     } finally { conn.disconnect() }
                 } catch (e: Exception) { "Conexão não concluída: ${e.javaClass.simpleName}" }

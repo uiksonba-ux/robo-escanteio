@@ -26,6 +26,7 @@ class MainActivity : Activity() {
     private lateinit var tokenField: EditText
     private lateinit var summaryStats: TextView
     private lateinit var accuracyStats: TextView
+    private lateinit var dataOrigin: TextView
 
     private fun dp(value: Int): Int = (resources.displayMetrics.density * value).toInt()
     private fun text(value: String, size: Float = 15f, bold: Boolean = false): TextView =
@@ -83,6 +84,8 @@ class MainActivity : Activity() {
         summary.addView(text("VISÃO GERAL", 13f, true))
         status = text("Aguardando conexão autenticada com o Render.", 14f)
         summary.addView(status)
+        dataOrigin = text("ORIGEM DOS DADOS: não conectado", 12f, true)
+        summary.addView(dataOrigin)
         summaryStats = text("WIN     —        LOSS     —", 18f, true)
         summary.addView(summaryStats)
         accuracyStats = text("ASSERTIVIDADE     —", 16f, true).apply { setTextColor(Color.rgb(56, 214, 255)) }
@@ -91,7 +94,8 @@ class MainActivity : Activity() {
 
         val bankPanel = panel()
         bankPanel.addView(text("10 BANCAS", 18f, true))
-        bankPanel.addView(text("Valores indisponíveis até conectar a API segura.", 12f))
+        val bankHint = text("Valores indisponíveis até conectar a API segura.", 12f)
+        bankPanel.addView(bankHint)
         banks = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         for (i in 1..10) {
             val item = text("●   BANCA %02d       SALDO —       W — / L —".format(i), 13f)
@@ -150,7 +154,7 @@ class MainActivity : Activity() {
             Thread {
                 val message = try {
                     val conn = (url.openConnection() as HttpURLConnection).apply {
-                        connectTimeout = 8000; readTimeout = 8000; requestMethod = "GET"
+                        connectTimeout = 30000; readTimeout = 30000; requestMethod = "GET"
                         instanceFollowRedirects = false
                         setRequestProperty("Authorization", "Bearer $token")
                     }
@@ -163,7 +167,11 @@ class MainActivity : Activity() {
                             } else {
                                 val totals = json.getJSONObject("estatisticas")
                                 val entries = json.getJSONObject("bancas")
+                                val testData = json.optString("origem") == "ambiente_de_teste_sem_dados_reais"
+                                val originLabel = if (testData) "DADOS SIMULADOS — NÃO SÃO OPERAÇÕES REAIS" else "DADOS DO ROBÔ PRACTICE (ORIGEM NÃO VERIFICADA)"
                                 runOnUiThread {
+                                    dataOrigin.text = originLabel
+                                    bankHint.text = if (testData) "Bancas simuladas para validar a conexão." else "Dados recebidos da API; confirme a origem no servidor."
                                     summaryStats.text = "WIN ${totals.getInt("wins")}        LOSS ${totals.getInt("losses")}"
                                     accuracyStats.text = "ASSERTIVIDADE ${totals.getDouble("assertividade")}%"
                                     for (i in 1..10) {
@@ -173,7 +181,7 @@ class MainActivity : Activity() {
                                         (banks.getChildAt(i - 1) as TextView).text = "●   BANCA %02d       SALDO —       W %d / L %d".format(i, w, l)
                                     }
                                 }
-                                "Monitoramento PRACTICE conectado (dados de teste)."
+                                if (testData) "Conectado: dados simulados, sem operações reais." else "Conectado: dados PRACTICE recebidos (verifique origem)."
                             }
                         }
                     } finally { conn.disconnect() }

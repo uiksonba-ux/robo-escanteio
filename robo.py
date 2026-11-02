@@ -1307,7 +1307,7 @@ def ativo_digital_disponivel(ativo):
         mesma_sessao = _disponibilidade_cache.get("sessao", id(cliente)) == id(cliente)
         if mesma_sessao and dados is not None and time.time() < _disponibilidade_cache["ate"]:
             info = dados.get(ativo)
-            return info.get("open") if isinstance(info, dict) and isinstance(info.get("open"), bool) else False
+            return info.get("open") if isinstance(info, dict) and isinstance(info.get("open"), bool) else None
     # get_all_open_time também espera binárias/forex e pode nunca retornar.
     # Consultamos somente o catálogo DIGITAL publicado pela própria corretora.
     estado, resposta = chamada_api_limitada("digital_underlying",
@@ -1320,12 +1320,18 @@ def ativo_digital_disponivel(ativo):
     for instrumento in resposta["underlying"]:
         if not isinstance(instrumento, dict) or not isinstance(instrumento.get("underlying"), str):
             continue
-        aberto = False
-        for horario in instrumento.get("schedule", []):
-            if isinstance(horario, dict):
-                inicio, fim = horario.get("open"), horario.get("close")
-                if isinstance(inicio, (int, float)) and isinstance(fim, (int, float)):
-                    aberto = aberto or inicio < agora_servidor < fim
+        horarios = instrumento.get("schedule")
+        intervalos = []
+        if isinstance(horarios, list):
+            for horario in horarios:
+                if isinstance(horario, dict):
+                    inicio, fim = horario.get("open"), horario.get("close")
+                    if (isinstance(inicio, (int, float)) and not isinstance(inicio, bool)
+                            and isinstance(fim, (int, float)) and not isinstance(fim, bool)
+                            and math.isfinite(inicio) and math.isfinite(fim) and inicio < fim):
+                        intervalos.append((inicio, fim))
+        # Sem agenda valida, a disponibilidade e desconhecida, nao fechada.
+        aberto = any(inicio <= agora_servidor < fim for inicio, fim in intervalos) if intervalos else None
         dados[instrumento["underlying"]] = {"open": aberto}
     with _disponibilidade_lock:
         _disponibilidade_cache.update(dados=dados, ate=time.time() + 30,
@@ -1333,7 +1339,7 @@ def ativo_digital_disponivel(ativo):
     log.info("DISPONIBILIDADE DIGITAL | instrumentos=%s | duracao_ms=%s",
              len(dados), int((time.monotonic() - agora) * 1000))
     info = dados.get(ativo)
-    return info["open"] if info else False
+    return info["open"] if info else None
 
 
 _payout_cache = {}

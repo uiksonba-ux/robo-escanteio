@@ -22,6 +22,22 @@ class RestoreSafetyTests(unittest.TestCase):
         self.assertIn('change_balance(', guard)
         self.assertIn('"PRACTICE"', guard)
 
+    def test_practice_mode_must_be_confirmed(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        guard = ast.get_source_segment(source, FUNCTIONS["garantir_practice"])
+        self.assertIn("get_balance_mode()", guard)
+        self.assertIn('!= "PRACTICE"', guard)
+        self.assertIn("return False", guard)
+
+    def test_duplicate_order_protection(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        managed = ast.get_source_segment(source, FUNCTIONS["enviar_ordem_gerida"])
+        self.assertIn("contador_entrada_lock", managed)
+        self.assertIn("ordens_pendentes.values()", managed)
+        self.assertIn('"ordem_ja_pendente"', managed)
+        self.assertIn("order_id in ordens_pendentes", managed)
+        self.assertIn("marcar_envio_indeterminado", managed)
+
     def test_no_new_underlying_catalog_gate(self):
         self.assertNotIn("get_digital_underlying_list_data", SOURCE.read_text(encoding="utf-8"))
 

@@ -3,7 +3,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [restore/execucao-antiga-assertividade-global]
+    branches: [fix/restore-practice-validation]
 jobs:
   test:
     runs-on: ubuntu-latest

@@ -29,6 +29,26 @@ class RestoreSafetyTests(unittest.TestCase):
         self.assertIn('!= "PRACTICE"', guard)
         self.assertIn("return False", guard)
 
+    def test_practice_guard_rejects_real_mode_and_accepts_practice(self):
+        import threading
+        from unittest.mock import Mock
+        node = FUNCTIONS["garantir_practice"]
+        api = Mock()
+        api.get_balance_mode.return_value = "REAL"
+        namespace = {
+            "garantir_conexao": lambda: True,
+            "api_lock": threading.RLock(),
+            "api": api,
+            "log": Mock(),
+        }
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), "exec"), namespace)
+        self.assertFalse(namespace["garantir_practice"]())
+        api.change_balance.assert_called_with("PRACTICE")
+        api.get_balance_mode.return_value = "PRACTICE"
+        self.assertTrue(namespace["garantir_practice"]())
+        api.get_balance_mode.side_effect = RuntimeError("connection failed")
+        self.assertFalse(namespace["garantir_practice"]())
+
     def test_duplicate_order_protection(self):
         source = SOURCE.read_text(encoding="utf-8")
         managed = ast.get_source_segment(source, FUNCTIONS["enviar_ordem_gerida"])

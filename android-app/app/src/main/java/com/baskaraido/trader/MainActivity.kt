@@ -27,6 +27,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var banks: LinearLayout
     private lateinit var endpoint: EditText
+    private val savedCredentials by lazy { SecureMonitorCredentials(this) }
     private lateinit var tokenField: EditText
     private lateinit var controlTokenField: EditText
     private lateinit var iqStats: TextView
@@ -344,6 +345,7 @@ class MainActivity : Activity() {
             setTextColor(ink); setHintTextColor(muted)
         }
         connect.addView(tokenField)
+        savedCredentials.load()?.let { tokenField.setText(it) }
         controlTokenField = EditText(this).apply {
             hint = "Token separado de controle PRACTICE"
             setSingleLine(true); inputType = 129
@@ -356,7 +358,21 @@ class MainActivity : Activity() {
         connect.addView(button)
         val connectionResult = text("Toque em TESTAR CONEXÃO para verificar o servidor.", 13f, true).apply { setTextColor(Color.rgb(105, 240, 195)) }
         connect.addView(connectionResult)
-        connect.addView(text("Leitura e controle usam tokens diferentes. Nunca informe e-mail, senha IQ Option, token do robô ou Telegram. Os tokens ficam apenas nesta sessão.", 12f))
+        connect.addView(text("Token de leitura protegido pelo Android Keystore e reconexão automática. O token de controle permanece apenas nesta sessão. Nunca informe senha IQ, token do robô ou Telegram.", 12f))
+        val forgetTokenButton = Button(this).apply { text = "ESQUECER TOKEN SALVO" }
+        connect.addView(forgetTokenButton)
+        forgetTokenButton.setOnClickListener {
+            savedCredentials.clear()
+            tokenField.text.clear()
+            session = null
+            generation++
+            poll?.let(handler::removeCallbacks)
+            activeTask?.cancel(true)
+            connection?.disconnect()
+            pauseButton.isEnabled = false; resumeButton.isEnabled = false
+            status.text = "Token removido. Informe um novo token para conectar."
+            connectionResult.text = status.text
+        }
         val syncButton = Button(this).apply { text = "SALVAR FAIXAS NO ROBÔ PRACTICE" }
         connect.addView(syncButton)
         val syncResult = text("Conecte para carregar a revisão das faixas do servidor.", 12f)
@@ -476,6 +492,7 @@ class MainActivity : Activity() {
             activeTask = worker.submit {
                 try {
                     val snapshot = PracticeProtocol.monitor(request(auth.first, auth.second, "/api/v1/monitor"))
+                    savedCredentials.save(auth.second)
                     val config = PracticeProtocol.config(request(auth.first, auth.second, "/api/v1/practice/settings"))
                     val control = PracticeProtocol.control(request(auth.first, auth.second, "/api/v1/practice/control"))
                     runOnUiThread {
@@ -502,7 +519,10 @@ class MainActivity : Activity() {
                             syncButton.isEnabled = true
                             (galeFields + multFields + minFields + maxFields).forEach { it.isEnabled = true }
                             toggle.isEnabled = true
-                            if (error is ApiFailure && error.code == 401) session = null
+                            if (error is ApiFailure && error.code == 401) {
+                                session = null
+                                savedCredentials.clear()
+                            }
                             schedulePoll()
                         }
                     }
@@ -647,6 +667,7 @@ class MainActivity : Activity() {
             button.isEnabled = false
             refreshAction?.invoke()
         }
+        if (savedCredentials.load() != null) button.post { if (foreground) button.performClick() }
     }
 }
 

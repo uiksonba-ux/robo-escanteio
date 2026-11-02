@@ -512,10 +512,12 @@ def garantir_practice():
     try:
 
         with api_lock:
-
-            api.change_balance(
-                "PRACTICE"
-            )
+            api.change_balance("PRACTICE")
+            # Fail closed: switching balance alone does not prove the account mode.
+            modo = api.get_balance_mode()
+            if str(modo).strip().upper() != "PRACTICE":
+                log.error("ORDEM BLOQUEADA | conta PRACTICE nao confirmada | modo=%s", modo)
+                return False
 
         return True
 

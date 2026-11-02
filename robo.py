@@ -18,7 +18,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-DIGITAL-10B-GLOBAL-0A9-REC100-PRACTICE"
+VERSAO = "IQ-DIGITAL-10B-FAIXAS-ASSERTIVIDADE-REC100-PRACTICE"
 
 app = Flask(__name__)
 
@@ -154,9 +154,9 @@ ENTRADA_MINIMA = 2.0
 
 MULTIPLICADOR_GALE = 2.0  # multiplicador fixo da progressão
 
-# A posição da ordem inicial aceita determina os gales do sinal: 0..9, 0..9.
-GALES_POR_CICLO = 0
-MAX_GALES = 9
+# Faixas de assertividade global (WINs / operações concluídas), compartilhadas pelas 10 bancas.
+GALES_POR_CICLO = 4
+MAX_GALES = 4
 
 RECUPERACAO_PERCENTUAL = 1.0
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
@@ -476,7 +476,7 @@ def conectar():
                 "⏱ M1 + M5 + M15\n"
                 "📊 SOMENTE DIGITAL\n"
                 f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
-                "🛡 Ordens iniciais aceitas: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 0 gales\n"
+                "🛡 Gales por assertividade global: <50%=4; 50-59%=3; 60-69%=2; 70-79%=1; >=80%=0\n"
                 "♻️ Recuperação de 100% do prejuízo líquido global, reservada a uma operação por vez\n"
                 "♾️ CICLOS ILIMITADOS\n"
                 f"📈 Multiplicador fixo nesta versão: X{MULTIPLICADOR_GALE:g}\n\n"
@@ -1460,6 +1460,16 @@ def taxa(
     )
 
 
+def gales_por_assertividade(percentual):
+    """Faixas globais: 0-49:4, 50-59:3, 60-69:2, 70-79:1, 80-100:0."""
+    valor = max(0.0, min(100.0, float(percentual)))
+    if valor < 50: return 4
+    if valor < 60: return 3
+    if valor < 70: return 2
+    if valor < 80: return 1
+    return 0
+
+
 def taxa_ponderada(wins, losses):
     """Taxa real das ordens desde o ultimo reset de 100 entradas iniciais."""
     return taxa(max(0, wins - wins_base_ponderada),
@@ -1589,15 +1599,16 @@ def snapshot_gestao_global():
             "prejuizo_global": max(0, -resultado_global_centavos) / 100,
             "recuperacao_em_curso": recuperacao_em_curso,
             "entradas_globais_aceitas": entradas_globais_aceitas,
-            "gales_proximos": entradas_globais_aceitas % QTD_BANCAS,
-            "sequencia_gales": list(range(QTD_BANCAS)),
+            "assertividade_global": taxa_ponderada(stats["wins"], stats["losses"]),
+            "gales_proximos": gales_por_assertividade(taxa_ponderada(stats["wins"], stats["losses"])),
+            "sequencia_gales": [4, 3, 2, 1, 0],
             "multiplicador_gale": MULTIPLICADOR_GALE,
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "payout_recuperacao": PAYOUT_RECUPERACAO,
             "envio_indeterminado": dict(envio_indeterminado) if envio_indeterminado else None,
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Ordens iniciais aceitas: 0 a 9 gales; reinício em 0",
+            "regra_gales": "Faixas de assertividade global: <50%=4, <60%=3, <70%=2, <80%=1, >=80%=0 gales",
             "regra_recuperacao": "100% do prejuízo líquido global; reserva exclusiva por operação",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
@@ -1643,10 +1654,12 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
         with estado_lock:
             ultimo_saldo_practice = saldo
             if nivel == 0:
-                posicao = entradas_globais_aceitas % QTD_BANCAS
+                assertividade_atual = taxa_ponderada(stats["wins"], stats["losses"])
+                posicao = gales_por_assertividade(assertividade_atual)
                 alvo = max(0, -resultado_global_centavos) / 100 if recuperacao_em_curso is None else 0.0
                 contexto = {"posicao": posicao, "numero": entradas_globais_aceitas + 1,
-                            "gales": posicao, "base": obter_entrada_base(saldo),
+                            "gales": posicao, "assertividade_global": assertividade_atual,
+                            "base": obter_entrada_base(saldo),
                             "entrada": calcular_entrada_recuperacao(alvo, saldo),
                             "prejuizo_alocado": alvo, "resultado_centavos": 0,
                             "primeira_ordem": None, "ultimo_nivel": -1, "ativo": ativo}

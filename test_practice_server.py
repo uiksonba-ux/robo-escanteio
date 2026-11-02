@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+import tempfile
 import unittest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
@@ -13,13 +14,18 @@ import monitor_test_app as service
 class PracticeServerTests(unittest.TestCase):
     def setUp(self):
         self.client = service.app.test_client()
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
         self.env = patch.dict(os.environ, {"MONITOR_API_TOKEN": "app-test-secret",
+                                          "MONITOR_CONTROL_TOKEN": "control-test-secret",
+                                          "MONITOR_CONTROL_DB": self.directory.name + "/control.sqlite",
                                           "MONITOR_ROBOT_TOKEN": "robot-test-secret",
                                           "MONITOR_UPSTREAM_URL": ""})
         self.env.start()
         self.addCleanup(self.env.stop)
         self.app_auth = {"Authorization": "Bearer app-test-secret"}
         self.robot_auth = {"Authorization": "Bearer robot-test-secret"}
+        self.control_auth = {"Authorization": "Bearer control-test-secret"}
         config = copy.deepcopy(service._config)
         for name, value in {"_config": config, "_revision": 1, "_telemetry": None,
                             "_received_at": None, "_applied": None, "_sessions": {}}.items():
@@ -42,6 +48,11 @@ class PracticeServerTests(unittest.TestCase):
         return self.client.put("/api/v1/practice/telemetry", json=data or self.telemetry,
                                headers=auth or self.robot_auth)
 
+    def command(self, config, before=None):
+        before = before or self.get_config().json
+        return {**config, "expected_revision": before["revision"], "expected_config_id": before["config_id"],
+                "command_id": str(uuid4()), "expires_at": (datetime.now(timezone.utc)+timedelta(seconds=90)).isoformat()}
+
     def test_roles_fail_closed_and_tokens_not_echoed(self):
         self.assertEqual(self.publish(auth=self.app_auth).status_code, 401)
         self.assertEqual(self.client.get("/api/v1/monitor", headers=self.robot_auth).status_code, 401)
@@ -59,10 +70,8 @@ class PracticeServerTests(unittest.TestCase):
     def test_complete_round_trip_applies_only_after_matching_ack(self):
         before = self.get_config().json
         self.config["faixas"][0]["gales"] = 5
-        response = self.client.put("/api/v1/practice/faixas", headers=self.app_auth,
-                                   json={**self.config, "expected_revision": before["revision"],
-                                         "expected_config_id": before["config_id"]})
-        self.assertEqual(response.status_code, 200)
+        response = self.client.put("/api/v1/practice/faixas", headers=self.control_auth, json=self.command(self.config, before))
+        self.assertEqual(response.status_code, 202)
         saved = response.json
         self.assertGreater(saved["revision"], before["revision"])
         self.assertFalse(saved["aplicada_no_robo"])
@@ -87,11 +96,9 @@ class PracticeServerTests(unittest.TestCase):
         before = self.get_config().json
         changed = copy.deepcopy(self.config)
         changed["faixas"][0]["gales"] = 6
-        self.client.put("/api/v1/practice/faixas", headers=self.app_auth, json=changed)
+        self.client.put("/api/v1/practice/faixas", headers=self.control_auth, json=self.command(changed))
         service._revision = before["revision"]  # simulate revision reuse after a process restart
-        response = self.client.put("/api/v1/practice/faixas", headers=self.app_auth,
-                                   json={**self.config, "expected_revision": before["revision"],
-                                         "expected_config_id": before["config_id"]})
+        response = self.client.put("/api/v1/practice/faixas", headers=self.control_auth, json=self.command(self.config, before))
         self.assertEqual(response.status_code, 409)
         self.telemetry.update(config_revision=before["revision"], config_id=before["config_id"])
         self.publish()
@@ -99,7 +106,7 @@ class PracticeServerTests(unittest.TestCase):
 
     def test_idempotent_save_preserves_revision(self):
         before = self.get_config().json
-        after = self.client.put("/api/v1/practice/faixas", headers=self.app_auth, json=self.config).json
+        after = self.client.put("/api/v1/practice/faixas", headers=self.control_auth, json=self.command(self.config)).json
         self.assertEqual(after["revision"], before["revision"])
         self.assertEqual(after["config_id"], before["config_id"])
 
@@ -119,19 +126,20 @@ class PracticeServerTests(unittest.TestCase):
         for value in (float("nan"), float("inf"), True, 10**400):
             config = copy.deepcopy(self.config)
             config["faixas"][0]["mult"] = value
-            self.assertEqual(self.client.put("/api/v1/practice/faixas", headers=self.app_auth,
-                                            json=config).status_code, 400)
-        self.assertEqual(self.client.put("/api/v1/practice/faixas", headers=self.app_auth,
+            self.assertEqual(self.client.put("/api/v1/practice/faixas", headers=self.control_auth,
+                                            json=self.command(config)).status_code, 400)
+        self.assertEqual(self.client.put("/api/v1/practice/faixas", headers=self.control_auth,
                                         data="x" * 4097).status_code, 413)
 
     def test_reject_out_of_order_and_report_stale_data(self):
-        self.assertEqual(self.publish().status_code, 200)
-        self.assertEqual(self.publish().status_code, 409)
-        stale = dict(self.telemetry, sequence=2,
+        stale = dict(self.telemetry, sequence=1,
                      atualizado_em=(datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat())
         self.assertEqual(self.publish(stale).status_code, 200)
         response = self.client.get("/api/v1/monitor", headers=self.app_auth)
         self.assertTrue(response.json["stale"])
+        self.telemetry["sequence"] = 2
+        self.assertEqual(self.publish().status_code, 200)
+        self.assertEqual(self.publish().status_code, 409)
         replay = dict(stale, robot_session=str(uuid4()), sequence=1)
         self.assertEqual(self.publish(replay).status_code, 409)
 
@@ -155,3 +163,4 @@ class PracticeServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

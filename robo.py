@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, request
 from iqoptionapi.stable_api import IQ_Option
-from practice_band_config import read_remote_snapshot, publish_telemetry, select_band
+from practice_band_config import read_remote_snapshot, read_remote_control, publish_telemetry, select_band
 
 
 # ============================================================
@@ -196,6 +196,8 @@ def gales_por_assertividade(wins, losses):
 
 RECUPERACAO_PERCENTUAL = 1.0
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
+if PAYOUT_RECUPERACAO > 1:
+    PAYOUT_RECUPERACAO = 0.80
 
 QTD_BANCAS = 10
 PERCENTUAL_ENTRADA = 0.01
@@ -294,6 +296,11 @@ estado_lock = threading.RLock()
 config_practice_lock = threading.Lock()
 telemetria_practice_lock = threading.Lock()
 config_practice_remota = None
+controle_practice = None
+controle_practice_confirmado = None
+controle_practice_erro = None
+controle_practice_valido_ate = 0.0
+entradas_practice_pausadas = True
 sessao_monitor_practice = str(uuid.uuid4())
 sequencia_monitor_practice = 0
 
@@ -1325,6 +1332,11 @@ def executar_ordem(
 
     try:
         with api_lock:
+            # Um lease de controle pode expirar durante consultas da corretora.
+            # Gales pertencem ao contexto aceito; só a inicial exige liberação.
+            with estado_lock:
+                if banca not in operacoes_ativas and not novas_entradas_practice_liberadas():
+                    return False, "novas_entradas_pausadas_ou_sem_confirmacao"
             resposta = metodo(
                 ativo,
                 valor,
@@ -1611,12 +1623,43 @@ def prejuizo_global_atual():
         return max(0, -resultado_global_centavos) / 100
 
 
-def calcular_entrada_recuperacao(prejuizo, saldo=None):
-    """Base percentual + alvo de 100% da dívida ao payout configurado."""
-    alvo = max(Decimal("0"), Decimal(str(prejuizo)))
-    adicional = (alvo / Decimal(str(PAYOUT_RECUPERACAO))).quantize(
+def calcular_entrada_recuperacao(prejuizo, saldo=None, payout=None):
+    """Alvo de 100% da dívida; o retorno futuro da corretora é incerto."""
+    if payout is None:
+        payout = PAYOUT_RECUPERACAO
+    payout = Decimal(str(payout))
+    if not payout.is_finite() or not Decimal("0") < payout <= Decimal("1"):
+        raise ValueError("Payout de recuperação inválido")
+    alvo = Decimal(str(prejuizo))
+    if not alvo.is_finite():
+        raise ValueError("Prejuízo de recuperação inválido")
+    alvo = max(Decimal("0"), alvo)
+    adicional = (alvo * Decimal(str(RECUPERACAO_PERCENTUAL)) / payout).quantize(
         Decimal("0.01"), rounding=ROUND_UP)
     return float(Decimal(str(obter_entrada_base(saldo))) + adicional)
+
+
+def obter_payout_recuperacao(ativo, expiracao):
+    """Lê o cache de lucro digital; nunca inicia assinatura ou outra ordem.
+
+    Sem cotação no cache, a estimativa configurada no servidor fica explícita
+    no contexto. Não se usa get_digital_payout, que pode aguardar indefinidamente.
+    """
+    try:
+        with api_lock:
+            metodo = getattr(api, "get_digital_current_profit", None)
+            observado = metodo(ativo, expiracao) if callable(metodo) else None
+        if type(observado) in (int, float) and math.isfinite(observado):
+            # iqoptionapi fornece a rentabilidade em percentual.
+            proporcao = observado / 100
+            if 0 < proporcao <= 1:
+                return proporcao, "cache_iq"
+    except Exception:
+        pass
+    estimado = PAYOUT_RECUPERACAO
+    if not math.isfinite(estimado) or not 0 < estimado <= 1:
+        estimado = 0.80
+    return estimado, "configurado_servidor"
 
 
 def snapshot_gestao_global():
@@ -1625,26 +1668,50 @@ def snapshot_gestao_global():
             max(0, stats["wins"] - wins_base_ponderada),
             max(0, stats["losses"] - losses_base_ponderada),
             config_practice_remota.config if config_practice_remota else None)
+        prejuizo = max(0, -resultado_global_centavos) / 100
+        contexto = operacoes_ativas.get(recuperacao_em_curso, {})
+        comprometido = sum(o["valor"] for o in ordens_pendentes.values()) + sum(reservas_pendentes.values())
+        disponivel = max(0, (ultimo_saldo_practice or 0) - comprometido)
+        planejada = contexto.get("entrada", calcular_entrada_recuperacao(prejuizo))
+        if envio_indeterminado:
+            recuperacao_estado = "envio_indeterminado"
+        elif recuperacao_em_curso:
+            recuperacao_estado = "em_andamento"
+        elif not prejuizo:
+            recuperacao_estado = "sem_prejuizo"
+        elif planejada > disponivel:
+            recuperacao_estado = "saldo_insuficiente"
+        else:
+            recuperacao_estado = "aguardando_operacao"
         return {
             "entrada_base": obter_entrada_base(),
             "entrada_percentual": PERCENTUAL_ENTRADA,
             "entrada_minima": ENTRADA_MINIMA,
             "saldo_practice_referencia": ultimo_saldo_practice,
             "resultado_liquido_global": resultado_global_centavos / 100,
-            "prejuizo_global": max(0, -resultado_global_centavos) / 100,
+            "prejuizo_global": prejuizo,
+            "prejuizo_acumulado": prejuizo,
             "recuperacao_em_curso": recuperacao_em_curso,
+            "recuperacao_estado": recuperacao_estado,
+            "recuperacao_planejada": contexto.get("prejuizo_alocado", prejuizo),
+            "entrada_recuperacao_planejada": planejada if prejuizo or recuperacao_em_curso else 0.0,
+            "saldo_disponivel_conservador": round(disponivel, 2),
             "entradas_globais_aceitas": entradas_globais_aceitas,
             "gales_proximos": proxima_gestao[0],
             "sequencia_gales": [proxima_gestao[0]],
             "limiar_assertividade_sem_gale": LIMIAR_ASSERTIVIDADE_SEM_GALE,
             "multiplicador_gale": proxima_gestao[1],
+            "multiplicador_proximo": proxima_gestao[1],
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "payout_recuperacao": PAYOUT_RECUPERACAO,
+            "payout_operacao": contexto.get("payout"),
+            "payout_fonte": contexto.get("payout_fonte", "configurado_servidor"),
             "envio_indeterminado": dict(envio_indeterminado) if envio_indeterminado else None,
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Assertividade global abaixo de 60%: até 2 gales X2; 60% ou mais: sem gale",
+            "regra_gales": "Cinco faixas globais: 0–49/50–59/60–69/70–79/80–100%; padrões 4/3/2/1/0 gales X2",
             "regra_recuperacao": "100% do prejuízo líquido global; reserva exclusiva por operação",
+            "recuperacao_garantida": False,
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }
@@ -1678,8 +1745,89 @@ def carregar_config_practice():
         snapshot = read_remote_snapshot(url, token)
         with estado_lock:
             if snapshot is not None:
-                config_practice_remota = snapshot
+                anterior = config_practice_remota
+                if (anterior is None or anterior.revision is None or
+                        (snapshot.revision is not None and
+                         (snapshot.revision > anterior.revision or
+                          (snapshot.revision == anterior.revision and
+                           snapshot.config_id == anterior.config_id)))):
+                    config_practice_remota = snapshot
             return config_practice_remota
+
+
+def controle_practice_habilitado():
+    """A extensão de controle só entra em vigor por configuração do servidor."""
+    return env_bool("PRACTICE_CONTROL_ENABLED", False)
+
+
+def carregar_controle_practice():
+    """Aplica uma revisão validada somente às próximas operações.
+
+    Uma falha de leitura pausa novas entradas e retira a confirmação. Nenhum
+    comando inicia um worker ou muda a autorização EXECUTAR_ORDENS.
+    """
+    global controle_practice, controle_practice_confirmado, controle_practice_erro
+    global controle_practice_valido_ate, entradas_practice_pausadas
+    if not controle_practice_habilitado():
+        return None
+    url, token = credenciais_monitor_practice()
+    with config_practice_lock:
+        remoto = read_remote_control(url, token) if url and token and CONTA == "PRACTICE" else None
+        erro = None
+        validade = 0.0
+        if remoto is None:
+            erro = "controle_sem_confirmacao"
+        else:
+            try:
+                expira = datetime.fromisoformat(remoto["lease_expires_at"].replace("Z", "+00:00"))
+                segundos = (expira - datetime.now(timezone.utc)).total_seconds()
+                if segundos <= 0:
+                    raise ValueError("lease expirado")
+                validade = time.monotonic() + min(segundos, 30.0)
+            except (KeyError, TypeError, ValueError):
+                erro = "controle_expirado"
+        # A pausa só pode ser confirmada depois que qualquer envio anterior
+        # saiu da seção serializada; um ACK nunca antecede uma inicial já liberada.
+        with contador_entrada_lock, estado_lock:
+            if not erro and controle_practice is not None:
+                if (remoto["revision"] < controle_practice["revision"] or
+                        (remoto["revision"] == controle_practice["revision"] and
+                         remoto["command_id"] != controle_practice["command_id"])):
+                    erro = "controle_revisao_antiga"
+            if erro:
+                entradas_practice_pausadas = True
+                controle_practice_confirmado = None
+                controle_practice_valido_ate = 0.0
+                controle_practice_erro = erro
+                return None
+            controle_practice = dict(remoto)
+            sessao_autorizada = (remoto["desired_paused"] or
+                                remoto.get("target_session") == sessao_monitor_practice)
+            configuracao_confirmada = (
+                remoto.get("settings_revision") is None or
+                (config_practice_remota is not None and
+                 config_practice_remota.revision == remoto["settings_revision"] and
+                 config_practice_remota.config_id == remoto.get("settings_config_id")))
+            entradas_practice_pausadas = (remoto["desired_paused"] or not EXECUTAR_ORDENS
+                                         or not sessao_autorizada or not configuracao_confirmada)
+            controle_practice_valido_ate = validade
+            controle_practice_erro = None if sessao_autorizada else "liberacao_exige_sessao_atual"
+            if not configuracao_confirmada and not remoto["desired_paused"]:
+                controle_practice_erro = "configuracao_pendente_no_robo"
+            controle_practice_confirmado = {
+                "revision": remoto["revision"], "command_id": remoto["command_id"],
+                "paused": entradas_practice_pausadas, "authorized": bool(EXECUTAR_ORDENS),
+            }
+            return dict(controle_practice_confirmado)
+
+
+def novas_entradas_practice_liberadas():
+    if not controle_practice_habilitado():
+        return True
+    with estado_lock:
+        return (bool(EXECUTAR_ORDENS) and not entradas_practice_pausadas and
+                controle_practice_confirmado is not None and
+                time.monotonic() < controle_practice_valido_ate)
 
 
 def sincronizar_monitor_practice():
@@ -1690,6 +1838,7 @@ def sincronizar_monitor_practice():
         return False
     with telemetria_practice_lock:
         carregar_config_practice()
+        carregar_controle_practice()
         with estado_lock:
             sequencia_monitor_practice += 1
             payload = snapshot_monitor_practice()
@@ -1707,10 +1856,13 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
     snapshot_remoto = None
     if nivel == 0:
         snapshot_remoto = carregar_config_practice()
+        carregar_controle_practice()
         config_remota = snapshot_remoto.config if snapshot_remoto else None
     with contador_entrada_lock:
         with estado_lock:
             contexto = operacoes_ativas.get(banca)
+            if nivel == 0 and not novas_entradas_practice_liberadas():
+                return False, "novas_entradas_pausadas_ou_sem_confirmacao", contexto
             if envio_indeterminado:
                 return False, "gestao_pausada_envio_indeterminado", contexto
             if any(o["banca"] == banca for o in ordens_pendentes.values()):
@@ -1731,7 +1883,10 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             log.warning("SALDO PRACTICE INDISPONÍVEL | %s", banca)
             return False, "saldo_indisponivel", contexto
 
+        payout, payout_fonte = obter_payout_recuperacao(ativo, expiracao) if nivel == 0 else (None, None)
         with estado_lock:
+            if nivel == 0 and not novas_entradas_practice_liberadas():
+                return False, "novas_entradas_pausadas_ou_sem_confirmacao", contexto
             ultimo_saldo_practice = saldo
             if nivel == 0:
                 # O fetch pode ter aguardado outro envio; usa a versão mais
@@ -1749,7 +1904,8 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                             "config_revision": snapshot_remoto.revision if snapshot_remoto else None,
                             "config_id": snapshot_remoto.config_id if snapshot_remoto else None,
                             "base": obter_entrada_base(saldo),
-                            "entrada": calcular_entrada_recuperacao(alvo, saldo),
+                            "entrada": calcular_entrada_recuperacao(alvo, saldo, payout),
+                            "payout": payout, "payout_fonte": payout_fonte,
                             "prejuizo_alocado": alvo, "resultado_centavos": 0,
                             "primeira_ordem": None, "ultimo_nivel": -1, "ativo": ativo}
             valor = valores_do_ciclo(contexto["entrada"], nivel, contexto.get("multiplicador", MULTIPLICADOR_GALE))[nivel]
@@ -2422,6 +2578,7 @@ def monitor_practice():
 
 def snapshot_monitor_practice():
     """Snapshot atômico compartilhado pela API de leitura e pela telemetria."""
+    iq_conectada = conectado()
     with estado_lock:
         geral = {
             "wins": int(stats["wins"]),
@@ -2434,10 +2591,31 @@ def snapshot_monitor_practice():
                 "losses": int(dados.get("losses", 0)),
                 # O robô não mantém saldo individual verificável por banca.
                 "saldo": None,
+                "ocupada": bool(dados["ocupada"]),
+                "ativo": dados["ativo"],
+                "entrada_atual": dados["entrada_atual"],
+                "gales": operacoes_ativas.get(nome, {}).get("gales", dados["gales_reativos"]),
+                "multiplicador": operacoes_ativas.get(nome, {}).get("multiplicador", MULTIPLICADOR_GALE),
+                "em_recuperacao": bool(dados["em_recuperacao"]),
+                "resultado_liquido": dados["resultado_liquido"],
             }
             for nome, dados in estado_frentes.items()
         }
 
+        gestao = snapshot_gestao_global()
+        operacoes = [
+            {"banca": nome, "ativo": dados["ativo"], "gales": dados["gales"],
+             "multiplicador": dados["multiplicador"], "entrada": dados["entrada"],
+             "valor": valores_do_ciclo(dados["entrada"], dados["ultimo_nivel"], dados["multiplicador"])[dados["ultimo_nivel"]],
+             "nivel": dados["ultimo_nivel"], "prejuizo_alocado": dados["prejuizo_alocado"],
+             "payout": dados.get("payout"), "payout_fonte": dados.get("payout_fonte"),
+             "config_revision": dados.get("config_revision"),
+             "resultado_liquido": dados["resultado_centavos"] / 100,
+             "pendentes": sum(o["banca"] == nome for o in ordens_pendentes.values())}
+            for nome, dados in operacoes_ativas.items()
+        ]
+        controle_valido = (controle_practice_habilitado() and
+                           time.monotonic() < controle_practice_valido_ate)
         payload = {
             "schema_version": 1,
             "conta": "PRACTICE",
@@ -2447,6 +2625,20 @@ def snapshot_monitor_practice():
             "atualizado_em": agora_brasil().isoformat(),
             "estatisticas": geral,
             "bancas": frentes,
+            "iq_conectada": iq_conectada,
+            "saldo_practice": ultimo_saldo_practice,
+            "ativos": list(ATIVOS),
+            "ativos_em_uso": sorted(ativos_em_uso),
+            "operacoes": operacoes,
+            "gestao": gestao,
+            "connection": {"connected": iq_conectada, "practice_balance": ultimo_saldo_practice},
+            "recovery": {"accumulated_loss": gestao["prejuizo_acumulado"],
+                         "planned": gestao["recuperacao_planejada"],
+                         "state": gestao["recuperacao_estado"],
+                         "bank": gestao["recuperacao_em_curso"]},
+            "control_ack": dict(controle_practice_confirmado) if controle_valido and controle_practice_confirmado else None,
+            "control_error": controle_practice_erro or (
+                "controle_expirado" if controle_practice_habilitado() and not controle_valido else None),
         }
         if config_practice_remota and config_practice_remota.revision is not None:
             payload.update(config_revision=config_practice_remota.revision,
@@ -2593,6 +2785,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 

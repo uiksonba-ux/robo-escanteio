@@ -28,6 +28,14 @@ class MainActivity : Activity() {
     private lateinit var banks: LinearLayout
     private lateinit var endpoint: EditText
     private lateinit var tokenField: EditText
+    private lateinit var controlTokenField: EditText
+    private lateinit var iqStats: TextView
+    private lateinit var recoveryStats: TextView
+    private lateinit var operationStats: TextView
+    private lateinit var controlStatus: TextView
+    private lateinit var pauseButton: Button
+    private lateinit var resumeButton: Button
+    private val confirmation = PracticeProtocol.Confirmation()
     private lateinit var summaryStats: TextView
     private lateinit var accuracyStats: TextView
     private lateinit var dataOrigin: TextView
@@ -56,6 +64,11 @@ class MainActivity : Activity() {
         activeTask?.cancel(true)
         connection?.disconnect()
         currentAccuracy = null
+        confirmation.failed()
+        if (::pauseButton.isInitialized) {
+            pauseButton.isEnabled = false; resumeButton.isEnabled = false
+            controlStatus.text = "Estado efetivo sem confirmação recente. Atualizando ao retornar ao aplicativo."
+        }
         super.onStop()
     }
 
@@ -82,7 +95,7 @@ class MainActivity : Activity() {
         connection = conn
         try {
             payload?.let { body -> conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) } }
-            if (conn.responseCode != 200) throw ApiFailure(conn.responseCode)
+            if (conn.responseCode != 200 && !(payload != null && conn.responseCode == 202)) throw ApiFailure(conn.responseCode)
             val output = java.io.ByteArrayOutputStream()
             conn.inputStream.use { input ->
                 val buffer = ByteArray(4096)
@@ -103,8 +116,9 @@ class MainActivity : Activity() {
     private class ApiFailure(val code: Int) : Exception()
 
     private fun failureMessage(error: Exception): String = when {
-        error is ApiFailure && error.code == 401 -> "Token rejeitado. Informe um token válido e reconecte."
-        error is ApiFailure && error.code == 409 -> "Configuração mudou no servidor. Reconecte para revisar antes de enviar."
+        error is ApiFailure && error.code in setOf(401, 403) -> "Token rejeitado. Informe um token válido e reconecte."
+        error is ApiFailure && error.code == 409 -> "Revisão alterada ou comando repetido. Atualize e revise antes de enviar."
+        error is ApiFailure && error.code == 503 -> "Controle indisponível no servidor. Nenhuma confirmação recebida."
         error is ApiFailure -> "Servidor respondeu HTTP ${error.code}."
         else -> "Atualização indisponível. Dados exibidos podem estar desatualizados."
     }
@@ -159,7 +173,7 @@ class MainActivity : Activity() {
         val practice = text("● MONITORAMENTO  •  PRACTICE", 13f, true)
         practice.setTextColor(Color.rgb(105, 240, 195))
         root.addView(practice)
-        root.addView(text("Painel de acompanhamento · sem envio de ordens", 12f))
+        root.addView(text("Controle de novas entradas · somente PRACTICE", 12f))
 
         val summary = panel()
         summary.addView(text("VISÃO GERAL", 13f, true))
@@ -171,6 +185,13 @@ class MainActivity : Activity() {
         summary.addView(summaryStats)
         accuracyStats = text("ASSERTIVIDADE     —", 16f, true).apply { setTextColor(Color.rgb(56, 214, 255)) }
         summary.addView(accuracyStats)
+        iqStats = text("IQ OPTION — conexão e saldo PRACTICE não confirmados", 13f)
+        summary.addView(iqStats)
+        recoveryStats = text("RECUPERAÇÃO — aguardando dados do robô", 13f)
+        summary.addView(recoveryStats)
+        operationStats = text("ATIVOS E OPERAÇÕES — aguardando dados", 12f)
+        summary.addView(operationStats)
+        summary.addView(text("Recuperação planejada pode não ser atingida; depende de payout, saldo e resultados.", 12f))
         addPanel(root, summary)
 
         val bankPanel = panel()
@@ -204,14 +225,31 @@ class MainActivity : Activity() {
         var remoteConfig: PracticeProtocol.Config? = null
         val galeFields = mutableListOf<EditText>()
         val multFields = mutableListOf<EditText>()
+        val minFields = mutableListOf<EditText>()
+        val maxFields = mutableListOf<EditText>()
+        rules.addView(text("Mínimo %  ·  Máximo %  ·  Gales  ·  Multiplicador", 11f))
         for (i in starts.indices) {
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            row.addView(text("${starts[i]}–${limits[i]}%  ", 14f, true), LinearLayout.LayoutParams(0, -2, 1f))
+            val lower = EditText(this).apply {
+                setSingleLine(true); inputType = InputType.TYPE_CLASS_NUMBER
+                setText(strategyPrefs.getInt("min_$i", starts[i]).toString())
+                setTextColor(ink); hint = "Mín"
+                contentDescription = "Limite mínimo percentual da faixa ${i + 1}"
+            }
+            val upper = EditText(this).apply {
+                setSingleLine(true); inputType = InputType.TYPE_CLASS_NUMBER
+                setText(strategyPrefs.getInt("max_$i", limits[i]).toString())
+                setTextColor(ink); hint = "Máx"
+                contentDescription = "Limite máximo percentual da faixa ${i + 1}"
+            }
+            minFields.add(lower); maxFields.add(upper)
+            row.addView(lower, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(upper, LinearLayout.LayoutParams(0, -2, 1f))
             val gale = EditText(this).apply {
                 setSingleLine(true); inputType = InputType.TYPE_CLASS_NUMBER
                 setText(strategyPrefs.getInt("gale_$i", defaults[i]).toString())
                 setTextColor(ink); hint = "Gales"
-                contentDescription = "Quantidade de gales na faixa ${starts[i]} a ${limits[i]}%"
+                contentDescription = "Quantidade de Gales na faixa ${i + 1}"
             }
             row.addView(gale, LinearLayout.LayoutParams(dp(60), -2))
             galeFields.add(gale)
@@ -219,12 +257,16 @@ class MainActivity : Activity() {
                 setSingleLine(true); inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
                 setText(strategyPrefs.getString("mult_$i", "2"))
                 setTextColor(ink); hint = "×"
-                contentDescription = "Multiplicador na faixa ${starts[i]} a ${limits[i]}%"
+                contentDescription = "Multiplicador na faixa ${i + 1}"
             }
             row.addView(mult, LinearLayout.LayoutParams(dp(65), -2))
             multFields.add(mult)
             rules.addView(row)
         }
+        rules.addView(text("Use cinco faixas consecutivas, sem lacunas: de 0% até 100%.", 12f))
+        fun readBands() = PracticeProtocol.validatedBands(starts.indices.map { i -> PracticeProtocol.Band(
+            galeFields[i].text.toString().toInt(), multFields[i].text.toString().replace(',', '.').toDouble(),
+            minFields[i].text.toString().toInt(), maxFields[i].text.toString().toInt()) })
         rangeResult = text("Faixa ainda não calculada.", 13f, true)
         rules.addView(rangeResult)
         fun updateRange() {
@@ -233,13 +275,17 @@ class MainActivity : Activity() {
                 !toggle.isChecked -> "Gestão por faixas desativada."
                 accuracy == null -> "Aguardando assertividade do monitor PRACTICE."
                 else -> {
-                    val idx = AccuracyRanges.indexFor(accuracy)
-                    if (idx == null) "Assertividade inválida."
-                    else {
-                        val gales = strategyPrefs.getInt("gale_$idx", defaults[idx])
-                        val mult = strategyPrefs.getString("mult_$idx", "2")
-                        "Faixa ${starts[idx]}–${limits[idx]}%: até $gales Gales ×$mult (prévia local)"
-                    }
+                    try {
+                        val saved = starts.indices.map { i -> PracticeProtocol.Band(
+                            strategyPrefs.getInt("gale_$i", defaults[i]),
+                            strategyPrefs.getString("mult_$i", "2")!!.toDouble(),
+                            strategyPrefs.getInt("min_$i", starts[i]), strategyPrefs.getInt("max_$i", limits[i])) }
+                        val idx = PracticeProtocol.bandIndex(accuracy, saved)
+                        if (idx == null) "Assertividade inválida."
+                        else saved[idx].let { band ->
+                            "Faixa ${band.min}–${band.max}%: até ${band.gales} Gales ×${band.multiplier} (prévia local)"
+                        }
+                    } catch (_: Exception) { "Revise os limites e valores das cinco faixas." }
                 }
             }
         }
@@ -250,24 +296,25 @@ class MainActivity : Activity() {
             }
             override fun afterTextChanged(s: Editable?) {}
         }
-        (galeFields + multFields).forEach { it.addTextChangedListener(changeWatcher) }
+        (galeFields + multFields + minFields + maxFields).forEach { it.addTextChangedListener(changeWatcher) }
         toggle.setOnCheckedChangeListener { _, checked ->
             if (!loadingRanges) dirtyRanges = true
             strategyPrefs.edit().putBoolean("enabled", checked).apply()
             updateRange()
         }
-        val saveRanges = Button(this).apply { text = "SALVAR FAIXAS" }
+        val saveRanges = Button(this).apply { text = "SALVAR RASCUNHO LOCAL" }
         rules.addView(saveRanges)
         saveRanges.setOnClickListener {
-            val gales = galeFields.map { it.text.toString().toIntOrNull() }
-            val multipliers = multFields.map { it.text.toString().replace(',', '.').toDoubleOrNull() }
-            if (gales.any { it == null || it !in 0..9 } || multipliers.any { it == null || !it.isFinite() || it < 1.0 || it > 10.0 }) {
-                Toast.makeText(this, "Gales: 0 a 9; multiplicador: 1 a 10.", Toast.LENGTH_LONG).show()
-            } else {
+            val bands = try { readBands() } catch (_: Exception) {
+                Toast.makeText(this, "Faixas consecutivas 0–100%; Gales 0–9; multiplicador 1–10.", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            run {
                 val editor = strategyPrefs.edit().putBoolean("enabled", toggle.isChecked)
                 for (i in starts.indices) {
-                    editor.putInt("gale_$i", gales[i]!!)
-                    editor.putString("mult_$i", multipliers[i]!!.toString())
+                    editor.putInt("gale_$i", bands[i].gales)
+                    editor.putString("mult_$i", bands[i].multiplier.toString())
+                    editor.putInt("min_$i", bands[i].min!!).putInt("max_$i", bands[i].max!!)
                 }
                 editor.apply()
                 dirtyRanges = true
@@ -297,15 +344,42 @@ class MainActivity : Activity() {
             setTextColor(ink); setHintTextColor(muted)
         }
         connect.addView(tokenField)
+        controlTokenField = EditText(this).apply {
+            hint = "Token separado de controle PRACTICE"
+            setSingleLine(true); inputType = 129
+            isSaveEnabled = false
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+            setTextColor(ink); setHintTextColor(muted)
+        }
+        connect.addView(controlTokenField)
         val button = Button(this).apply { text = "TESTAR CONEXÃO"; backgroundTintList = android.content.res.ColorStateList.valueOf(Color.rgb(56, 214, 255)); setTextColor(Color.rgb(6, 20, 42)) }
         connect.addView(button)
         val connectionResult = text("Toque em TESTAR CONEXÃO para verificar o servidor.", 13f, true).apply { setTextColor(Color.rgb(105, 240, 195)) }
         connect.addView(connectionResult)
-        connect.addView(text("Use apenas o token exclusivo de monitoramento. Nunca informe sua senha da IQ Option ou o token do Telegram.", 12f))
-        val syncButton = Button(this).apply { text = "ENVIAR FAIXAS AO AMBIENTE DE TESTES" }
+        connect.addView(text("Leitura e controle usam tokens diferentes. Nunca informe e-mail, senha IQ Option, token do robô ou Telegram. Os tokens ficam apenas nesta sessão.", 12f))
+        val syncButton = Button(this).apply { text = "SALVAR FAIXAS NO ROBÔ PRACTICE" }
         connect.addView(syncButton)
         val syncResult = text("Conecte para carregar a revisão das faixas do servidor.", 12f)
         connect.addView(syncResult)
+        pauseButton = Button(this).apply { text = "PAUSAR NOVAS ENTRADAS"; isEnabled = false }
+        resumeButton = Button(this).apply { text = "LIBERAR NOVAS ENTRADAS"; isEnabled = false }
+        connect.addView(pauseButton); connect.addView(resumeButton)
+        controlStatus = text("Estado efetivo não confirmado. Conecte para consultar o robô.", 13f, true)
+        connect.addView(controlStatus)
+        connect.addView(text("A liberação exige autorização prévia do robô. Pausa afeta novas entradas; operações e Gales em andamento continuam.", 12f))
+        fun showControl(control: PracticeProtocol.Control) {
+            confirmation.observed(control)
+            controlStatus.text = when {
+                !control.online -> "Robô sem confirmação recente. Estado efetivo desconhecido."
+                control.pending -> "Comando revisão ${control.revision} pendente de confirmação pelo robô."
+                !control.confirmed -> "Estado efetivo não confirmado pelo robô."
+                control.paused == true -> "PAUSA CONFIRMADA pelo robô · revisão ${control.revision}."
+                !control.authorized -> "Robô não autorizado a enviar ordens. Liberação indisponível."
+                else -> "NOVAS ENTRADAS LIBERADAS pelo robô · revisão ${control.revision}."
+            } + (control.error?.let { " Erro: $it" } ?: "")
+            pauseButton.isEnabled = confirmation.canPause
+            resumeButton.isEnabled = confirmation.canResume
+        }
         fun showConfig(config: PracticeProtocol.Config, populate: Boolean) {
             val revisionChangedWhileEditing = dirtyRanges && remoteConfig != null &&
                 remoteConfig!!.configId != config.configId
@@ -317,21 +391,33 @@ class MainActivity : Activity() {
                 config.bands.forEachIndexed { i, band ->
                     galeFields[i].setText(band.gales.toString())
                     multFields[i].setText(band.multiplier.toString())
+                    minFields[i].setText(band.min.toString()); maxFields[i].setText(band.max.toString())
                     editor.putInt("gale_$i", band.gales).putString("mult_$i", band.multiplier.toString())
+                    editor.putInt("min_$i", band.min!!).putInt("max_$i", band.max!!)
                 }
                 editor.apply()
                 loadingRanges = false
                 dirtyRanges = false
                 updateRange()
             }
-            val applied = config.appliedRevision == config.revision && config.appliedConfigId == config.configId
+            val applied = !config.pending && config.appliedRevision == config.revision && config.appliedConfigId == config.configId
             syncResult.text = "Revisão ${config.revision}: " +
-                (if (applied) "recebida pelo robô; somente novas operações." else "aguardando confirmação do robô PRACTICE.") +
+                (if (applied) "confirmada pelo robô; somente novas operações." else "aguardando confirmação do robô PRACTICE.") +
                 (if (revisionChangedWhileEditing) " A revisão mudou durante a edição; reconecte para revisar." else
-                    if (dirtyRanges) " Há alterações locais não enviadas." else "")
+                    if (dirtyRanges) " Há alterações locais não enviadas." else "") +
+                (config.effectiveBands?.let { effective -> "\nEfetivo (revisão ${config.appliedRevision}): gestão ${if (config.effectiveEnabled == true) "ativada" else "desativada"}. " + effective.mapIndexed { i, band ->
+                    "${band.min}–${band.max}%: ${band.gales}G ×${band.multiplier}"
+                }.joinToString(" · ") } ?: "\nConfiguração efetiva ainda não informada pelo robô.")
         }
         fun markStale() {
             currentAccuracy = null
+            confirmation.failed()
+            pauseButton.isEnabled = false; resumeButton.isEnabled = false
+            controlStatus.text = "Conexão indisponível. Comando e estado não confirmados; atualize para reconciliar."
+            syncResult.text = "Confirmação indisponível. A última configuração exibida pode estar desatualizada."
+            iqStats.text = "IQ OPTION — conexão e saldo sem confirmação recente"
+            recoveryStats.text = "RECUPERAÇÃO — estado sem confirmação recente; aguardando dados do robô."
+            operationStats.text = "ATIVOS E OPERAÇÕES — estado sem confirmação recente."
             dataOrigin.text = "DADOS DESATUALIZADOS — aguardando atualização autenticada"
             updateRange()
         }
@@ -358,6 +444,29 @@ class MainActivity : Activity() {
                 val balance = bank.balance?.let { String.format(Locale.getDefault(), "%.2f", it) } ?: "—"
                 (banks.getChildAt(i) as TextView).text = "●   BANCA %02d       SALDO %s       W %d / L %d".format(i + 1, balance, bank.wins, bank.losses)
             }
+            fun amount(value: Double?): String = value?.let { String.format(Locale.getDefault(), "%.2f", it) } ?: "—"
+            iqStats.text = "IQ OPTION: " + when (snapshot.iqConnected) {
+                true -> "conectada"; false -> "desconectada"; null -> "não informada"
+            } + " · Saldo PRACTICE: ${amount(snapshot.practiceBalance)}" + if (snapshot.stale) " (desatualizado)" else ""
+            recoveryStats.text = snapshot.recovery?.let { r ->
+                "PREJUÍZO GLOBAL ${amount(r.loss)} · recuperação planejada ${amount(r.planned)}\n" +
+                "Entrada planejada ${amount(r.stake)} · ${when (r.state) {
+                    "sem_prejuizo" -> "sem prejuízo acumulado"
+                    "aguardando_operacao" -> "aguardando operação elegível"
+                    "saldo_insuficiente" -> "saldo insuficiente"
+                    "em_andamento" -> "em andamento"
+                    "envio_indeterminado" -> "envio sem confirmação; entradas bloqueadas"
+                    else -> "estado não informado"
+                }} ${r.bank ?: ""}\n" +
+                "Próximos Gales: ${r.gales ?: "—"} · ×${r.multiplier ?: "—"}"
+            } ?: "RECUPERAÇÃO — não informada pelo robô"
+            operationStats.text = "ATIVOS: ${snapshot.assets.joinToString(", ").ifEmpty { "—" }}\n" +
+                "OPERAÇÕES: ${snapshot.operations.joinToString("\n").ifEmpty { "nenhuma informada" }}"
+            snapshot.banks.forEachIndexed { i, bank ->
+                if (bank.asset != null || bank.gales != null) (banks.getChildAt(i) as TextView).append(
+                    "\n${bank.asset ?: "—"} · ${bank.gales ?: "—"}G ×${bank.multiplier ?: "—"}" +
+                        if (bank.recovering == true) " · recuperação" else "")
+            }
             updateRange()
         }
         refreshAction = refresh@{
@@ -367,16 +476,18 @@ class MainActivity : Activity() {
             activeTask = worker.submit {
                 try {
                     val snapshot = PracticeProtocol.monitor(request(auth.first, auth.second, "/api/v1/monitor"))
-                    val config = PracticeProtocol.config(request(auth.first, auth.second, "/api/v1/practice/faixas"))
+                    val config = PracticeProtocol.config(request(auth.first, auth.second, "/api/v1/practice/settings"))
+                    val control = PracticeProtocol.control(request(auth.first, auth.second, "/api/v1/practice/control"))
                     runOnUiThread {
                         if (foreground && generation == requestGeneration) {
                             render(snapshot)
                             showConfig(config, !dirtyRanges)
+                            showControl(control)
                             status.text = if (snapshot.stale) "Robô sem atualização recente." else "Conectado: atualização automática a cada 5 segundos."
                             connectionResult.text = status.text
                             button.isEnabled = true
                             syncButton.isEnabled = true
-                            (galeFields + multFields).forEach { it.isEnabled = true }
+                            (galeFields + multFields + minFields + maxFields).forEach { it.isEnabled = true }
                             toggle.isEnabled = true
                             schedulePoll()
                         }
@@ -389,7 +500,7 @@ class MainActivity : Activity() {
                             connectionResult.text = status.text
                             button.isEnabled = true
                             syncButton.isEnabled = true
-                            (galeFields + multFields).forEach { it.isEnabled = true }
+                            (galeFields + multFields + minFields + maxFields).forEach { it.isEnabled = true }
                             toggle.isEnabled = true
                             if (error is ApiFailure && error.code == 401) session = null
                             schedulePoll()
@@ -405,7 +516,7 @@ class MainActivity : Activity() {
             }
             val auth = try {
                 val base = endpoint.text.toString().trim()
-                PracticeProtocol.address(base, "/api/v1/practice/faixas")
+                PracticeProtocol.address(base, "/api/v1/practice/settings")
                 Pair(base, PracticeProtocol.token(tokenField.text.toString()))
             } catch (_: Exception) {
                 syncResult.text = "Use o endereço HTTPS do monitor isolado e o token de monitoramento."
@@ -417,28 +528,32 @@ class MainActivity : Activity() {
                 return@setOnClickListener
             }
             val payload = try {
-                val bands = starts.indices.map { i -> PracticeProtocol.Band(
-                    galeFields[i].text.toString().toInt(),
-                    multFields[i].text.toString().replace(',', '.').toDouble()) }
-                PracticeProtocol.payload(toggle.isChecked, bands, config.revision, config.configId)
+                val bands = readBands()
+                PracticeProtocol.settingsPayload(toggle.isChecked, bands, config.revision, config.configId)
             } catch (_: Exception) {
-                syncResult.text = "Corrija os Gales (0–9) e multiplicadores (1–10)."
+                syncResult.text = "Use faixas consecutivas 0–100%, Gales 0–9 e multiplicadores 1–10."
+                return@setOnClickListener
+            }
+            val writeToken = try { PracticeProtocol.token(controlTokenField.text.toString()).also {
+                require(it != auth.second)
+            } } catch (_: Exception) {
+                syncResult.text = "Informe um token de controle diferente do token de leitura."
                 return@setOnClickListener
             }
             poll?.let(handler::removeCallbacks)
             syncButton.isEnabled = false
-            (galeFields + multFields).forEach { it.isEnabled = false }
+            (galeFields + multFields + minFields + maxFields).forEach { it.isEnabled = false }
             toggle.isEnabled = false
-            syncResult.text = "Enviando ao monitor de testes..."
+            syncResult.text = "Enviando configuração; aplicação pelo robô ainda não confirmada..."
             val requestGeneration = generation
             activeTask = worker.submit {
                 try {
-                    val saved = PracticeProtocol.config(request(auth.first, auth.second, "/api/v1/practice/faixas", payload))
+                    val saved = PracticeProtocol.config(request(auth.first, writeToken, "/api/v1/practice/settings", payload))
                     runOnUiThread {
                         if (foreground && generation == requestGeneration) {
                             showConfig(saved, true)
                             syncButton.isEnabled = true
-                            (galeFields + multFields).forEach { it.isEnabled = true }
+                            (galeFields + multFields + minFields + maxFields).forEach { it.isEnabled = true }
                             toggle.isEnabled = true
                             schedulePoll()
                         }
@@ -446,9 +561,10 @@ class MainActivity : Activity() {
                 } catch (error: Exception) {
                     runOnUiThread {
                         if (foreground && generation == requestGeneration) {
-                            syncResult.text = failureMessage(error)
+                            markStale()
+                            syncResult.text = failureMessage(error) + " Configuração não confirmada; consulte novamente antes de reenviar."
                             syncButton.isEnabled = true
-                            (galeFields + multFields).forEach { it.isEnabled = true }
+                            (galeFields + multFields + minFields + maxFields).forEach { it.isEnabled = true }
                             toggle.isEnabled = true
                             if (error is ApiFailure && error.code == 409) {
                                 remoteConfig = null
@@ -463,6 +579,47 @@ class MainActivity : Activity() {
             }
         }
 
+        fun sendControl(action: String) {
+            if (activeTask?.isDone == false) return
+            val auth = session ?: return
+            val observed = confirmation.control ?: return
+            if (action == "resume_new_entries" && !confirmation.canResume) return
+            if (action == "pause_new_entries" && !confirmation.canPause) return
+            val writeToken = try {
+                PracticeProtocol.token(controlTokenField.text.toString()).also { require(it != auth.second) }
+            } catch (_: Exception) {
+                controlStatus.text = "Informe um token de controle diferente do token de leitura."
+                return
+            }
+            val payload = PracticeProtocol.command(action, observed.revision)
+            confirmation.begin()
+            pauseButton.isEnabled = false; resumeButton.isEnabled = false
+            poll?.let(handler::removeCallbacks)
+            controlStatus.text = "Enviando comando; aguardando confirmação efetiva do robô..."
+            val requestGeneration = generation
+            activeTask = worker.submit {
+                try {
+                    // Even HTTP 202 only queues a command. A later authenticated GET must confirm it.
+                    PracticeProtocol.control(request(auth.first, writeToken, "/api/v1/practice/control", payload))
+                    runOnUiThread {
+                        if (foreground && generation == requestGeneration) {
+                            controlStatus.text = "Comando recebido pelo servidor. Aguardando confirmação do robô."
+                            schedulePoll()
+                        }
+                    }
+                } catch (error: Exception) {
+                    runOnUiThread {
+                        if (foreground && generation == requestGeneration) {
+                            markStale()
+                            controlStatus.text = failureMessage(error) + " Comando não confirmado; consulte o estado antes de reenviar."
+                            schedulePoll()
+                        }
+                    }
+                }
+            }
+        }
+        pauseButton.setOnClickListener { sendControl("pause_new_entries") }
+        resumeButton.setOnClickListener { sendControl("resume_new_entries") }
         addPanel(root, connect)
 
         button.setOnClickListener {
@@ -481,6 +638,8 @@ class MainActivity : Activity() {
             connection?.disconnect()
             activeTask = null
             remoteConfig = null
+            confirmation.begin()
+            pauseButton.isEnabled = false; resumeButton.isEnabled = false
             session = auth
             getPreferences(0).edit().putString("endpoint", auth.first).apply()
             status.text = "Verificando servidor..."
@@ -490,3 +649,4 @@ class MainActivity : Activity() {
         }
     }
 }
+

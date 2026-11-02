@@ -7,11 +7,14 @@ import copy
 import importlib.util
 import itertools
 import os
+import tempfile
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import unittest
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import monitor_test_app as service
 import practice_band_config as protocol
@@ -20,6 +23,7 @@ import practice_band_config as protocol
 CONFIG_PATH = "/api/v1/practice/faixas"
 CONFIG_URL = "https://baskaraido-monitor-test.onrender.com" + CONFIG_PATH
 APP_TOKEN = "offline-app-token"
+CONTROL_TOKEN = "offline-control-token"
 ROBOT_TOKEN = "offline-robot-token"
 DEFAULT_CONFIG = {
     "schema_version": 1, "conta": "PRACTICE", "enabled": True,
@@ -57,7 +61,12 @@ class PracticeEndToEndTests(unittest.TestCase):
     def setUp(self):
         self.client = service.app.test_client()
         self.headers = {"Authorization": "Bearer " + APP_TOKEN}
+        self.control_headers = {"Authorization": "Bearer " + CONTROL_TOKEN}
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
         self.variables = {"MONITOR_API_TOKEN": APP_TOKEN,
+                          "MONITOR_CONTROL_TOKEN": CONTROL_TOKEN,
+                          "MONITOR_CONTROL_DB": directory.name + "/control.sqlite",
                           "MONITOR_ROBOT_TOKEN": ROBOT_TOKEN,
                           "MONITOR_UPSTREAM_URL": "",
                           "PRACTICE_FAIXAS_URL": CONFIG_URL}
@@ -93,26 +102,44 @@ class PracticeEndToEndTests(unittest.TestCase):
         address = urlparse(request.full_url)
         self.assertEqual(address.scheme, "https")
         self.assertEqual(address.netloc, protocol.ALLOWED_HOST)
-        self.assertIn(address.path, {CONFIG_PATH, "/api/v1/practice/telemetry"})
+        self.assertIn(address.path, {CONFIG_PATH, "/api/v1/practice/telemetry", "/api/v1/practice/control"})
         self.assertEqual(timeout, 3)
         response = self.client.open(address.path, method=request.get_method(),
-                                    headers=dict(request.header_items()), data=request.data)
+                                    headers=dict(request.header_items()), data=request.data,
+                                    base_url="https://localhost")
         if response.status_code != 200:
             raise HTTPError(request.full_url, response.status_code, "offline API failure", {}, None)
         return TransportResponse(response)
 
     def config(self):
-        response = self.client.get(CONFIG_PATH, headers=self.headers)
+        response = self.client.get(CONFIG_PATH, headers=self.headers, base_url="https://localhost")
         self.assertEqual(response.status_code, 200)
         return response.json
 
     def save(self, config):
         before = self.config()
         body = {**copy.deepcopy(config), "expected_revision": before["revision"],
-                "expected_config_id": before["config_id"]}
-        response = self.client.put(CONFIG_PATH, json=body, headers=self.headers)
-        self.assertEqual(response.status_code, 200)
+                "expected_config_id": before["config_id"],
+                "command_id": str(uuid4()),
+                "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=90)).isoformat()}
+        response = self.client.put("/api/v1/practice/settings", json=body,
+                                   headers=self.control_headers, base_url="https://localhost")
+        self.assertEqual(response.status_code, 202, response.json)
         return response.json
+
+    def control(self):
+        response = self.client.get("/api/v1/practice/control", headers=self.headers,
+                                   base_url="https://localhost")
+        self.assertEqual(response.status_code, 200, response.json)
+        return response.json
+
+    def command(self, action):
+        before = self.control()
+        body = {"schema_version": 1, "conta": "PRACTICE", "action": action,
+                "expected_revision": before["revision"], "command_id": str(uuid4()),
+                "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=90)).isoformat()}
+        return self.client.put("/api/v1/practice/control", json=body,
+                               headers=self.control_headers, base_url="https://localhost")
 
     def open_order(self, banca, level=0):
         ok, order_id, context = self.robot.enviar_ordem_gerida(
@@ -160,6 +187,7 @@ class PracticeEndToEndTests(unittest.TestCase):
         self.assertEqual(data["config_id"], saved["config_id"])
         self.assertFalse(data["stale"])
         self.assertNotIn(APP_TOKEN, response.get_data(as_text=True))
+        self.assertNotIn(CONTROL_TOKEN, response.get_data(as_text=True))
         self.assertNotIn(ROBOT_TOKEN, response.get_data(as_text=True))
         # A telemetry refresh never mutates an operation already accepted.
         self.assertEqual(self.robot.operacoes_ativas["BANCA 1"]["config_id"], original["config_id"])
@@ -188,6 +216,70 @@ class PracticeEndToEndTests(unittest.TestCase):
         self.assertEqual(data["origem"], "ambiente_de_teste_sem_dados_reais")
         self.assertFalse(self.config()["aplicada_no_robo"])
 
+    def test_custom_thresholds_reach_robot_and_reject_gaps(self):
+        changed = copy.deepcopy(DEFAULT_CONFIG)
+        bounds = [(0, 39), (40, 54), (55, 69), (70, 89), (90, 100)]
+        for index, (lower, upper) in enumerate(bounds):
+            changed["faixas"][index].update(min=lower, max=upper, gales=4-index)
+        saved = self.save(changed)
+        snapshot = protocol.read_remote_snapshot(CONFIG_URL, ROBOT_TOKEN)
+        self.assertEqual(snapshot.config_id, saved["config_id"])
+        for wins, expected in [(39, 4), (40, 3), (54, 3), (55, 2),
+                               (69, 2), (70, 1), (89, 1), (90, 0), (100, 0)]:
+            with self.subTest(wins=wins):
+                self.assertEqual(self.robot.gestao_sincronizada_practice(
+                    wins, 100-wins, snapshot.config), (expected, 2.0))
+        invalid = copy.deepcopy(changed)
+        invalid["faixas"][1]["min"] += 1
+        before = self.config()
+        body = {**invalid, "expected_revision": before["revision"],
+                "expected_config_id": before["config_id"], "command_id": str(uuid4()),
+                "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=90)).isoformat()}
+        response = self.client.put("/api/v1/practice/settings", json=body,
+                                   headers=self.control_headers, base_url="https://localhost")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.config()["revision"], before["revision"])
+
+    def test_control_round_trip_preserves_open_gales_and_closes_on_transport_failure(self):
+        with patch.dict(os.environ, {"PRACTICE_CONTROL_ENABLED": "true"}), \
+             patch.object(self.robot, "EXECUTAR_ORDENS", True):
+            self.assertTrue(self.robot.sincronizar_monitor_practice())
+            self.assertTrue(self.control()["paused"])
+            resumed = self.command("resume_new_entries")
+            self.assertEqual(resumed.status_code, 202, resumed.json)
+            self.assertFalse(resumed.json["confirmed"])
+            self.assertTrue(self.robot.sincronizar_monitor_practice())
+            self.assertTrue(self.control()["confirmed"])
+            self.assertFalse(self.control()["paused"])
+            initial, context = self.open_order("BANCA 1")
+
+            paused = self.command("pause_new_entries")
+            self.assertEqual(paused.status_code, 202)
+            self.assertFalse(paused.json["confirmed"])
+            self.assertTrue(self.robot.sincronizar_monitor_practice())
+            self.assertTrue(self.control()["paused"])
+            self.assertFalse(self.robot.enviar_ordem_gerida("BANCA 2", "OFFLINE-TEST", "call", 1)[0])
+            self.robot.registrar_resultado_ordem(initial, "loss", -10)
+            _, gale = self.open_order("BANCA 1", level=1)
+            self.assertEqual(gale["config_id"], context["config_id"])
+
+            self.assertEqual(self.command("resume_new_entries").status_code, 202)
+            self.assertTrue(self.robot.sincronizar_monitor_practice())
+            before = len(self.orders)
+            with patch.object(protocol, "urlopen", side_effect=TimeoutError):
+                self.assertFalse(self.robot.enviar_ordem_gerida("BANCA 2", "OFFLINE-TEST", "call", 1)[0])
+                self.assertFalse(self.robot.sincronizar_monitor_practice())
+            self.assertEqual(len(self.orders), before)
+            self.assertIsNone(self.robot.snapshot_monitor_practice()["control_ack"])
+            # Publish the explicit unknown state without rereading a successful lease.
+            self.robot.sequencia_monitor_practice += 1
+            payload = self.robot.snapshot_monitor_practice()
+            payload.update(robot_session=self.robot.sessao_monitor_practice,
+                           sequence=self.robot.sequencia_monitor_practice)
+            self.assertTrue(protocol.publish_telemetry(CONFIG_URL, ROBOT_TOKEN, payload))
+            self.assertFalse(self.control()["confirmed"])
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -1,22 +1,37 @@
-# Baskaraido Trader PRO — plano de controle PRACTICE
+# Baskaraido Trader PRO — controle PRACTICE
 
-## Estado atual
-O APK consulta telemetria e altera faixas no monitor isolado; ainda **não** pode iniciar, pausar ou reconfigurar o robô. O robô já usa `iqoptionapi` e `CONTA = "PRACTICE"`, mas `EXECUTAR_ORDENS` é uma configuração de inicialização, não um comando remoto.
+## Implementado no código
 
-## Contrato proposto (a implementar e testar)
-- `GET /api/v1/practice/control`: estado efetivo do robô, conectividade, revisão da configuração, origem e atualização da telemetria.
-- `PUT /api/v1/practice/control`: comando `pause_new_entries` ou `resume_new_entries`, com revisão esperada, idempotência e autenticação separada do token de leitura.
-- `GET /api/v1/practice/settings`: parâmetros atuais validados e revisados.
-- `PUT /api/v1/practice/settings`: alterações para **novas** operações, com validação de valores, revisão esperada e confirmação explícita pelo robô.
+O APK usa o monitor isolado como relay de configurações e comandos. O monitor não importa `robo.py`, não autentica na corretora e não inicia processos de negociação. O processo já existente de `robo.py` consulta o relay somente quando configurado e habilitado explicitamente. `CONTA = "PRACTICE"` é obrigatório; `EXECUTAR_ORDENS` continua sendo autorização independente no servidor.
 
-## Invariantes obrigatórios
-1. Nunca aceitar `REAL`, nunca receber senha IQ Option no Android e nunca executar ordens no monitor.
-2. Controle de pausa consultado pelo **processo de robô já existente** antes de aceitar nova operação, sem interromper ordens abertas ou Gales em andamento.
-3. Sem conectividade, token inválido, comando expirado ou estado desconhecido: não afirmar no app que a operação foi pausada/iniciada; mostrar status não confirmado.
-4. Um botão 'iniciar' só libera novas entradas se o processo existente já estiver autorizado por `EXECUTAR_ORDENS`; não inicia outro worker, não ignora proteção e não ativa produção.
-5. Tokens separados para aplicativo e robô, HTTPS, allowlist de host, sem redirects, logs sem segredos, rejeição de comandos repetidos/antigos.
-6. Mudanças de estratégia e gestão aplicadas apenas em novos contextos; guardar snapshot por operação.
-7. Testes unitários e integração simulada antes de compilar APK; nunca fazer deploy na `main`, Render principal ou Telegram.
+Todos os endpoints `/api/` exigem HTTPS e retornam `Cache-Control: no-store`. Leituras usam `MONITOR_API_TOKEN`; somente o robô recebe `MONITOR_ROBOT_TOKEN`; alterações usam `MONITOR_CONTROL_TOKEN`. Os três valores precisam ser diferentes e não são incluídos em respostas ou logs. O APK recebe tokens do monitor, nunca e-mail ou senha IQ Option. Clientes permitem somente `https://baskaraido-monitor-test.onrender.com`, sem porta alternativa, query, credenciais na URL ou redirecionamentos.
 
-## Próxima implementação
-Criar modelo de estado e validação de configurações compartilhado, endpoints autenticados no monitor isolado, consumo pelo robô existente, controles Android e testes de ponta a ponta. A memória volátil do monitor exige estratégia de revisão/reconciliação antes de habilitar comandos reais.
+## Persistência e confirmação
+
+Configure `MONITOR_CONTROL_DB` como caminho absoluto de um arquivo SQLite em armazenamento persistente do **monitor isolado**. Diretório e arquivo precisam ser acessíveis ao usuário do processo. Ausência de configuração, falha de armazenamento ou tokens incompletos bloqueiam controles com HTTP 503. Não há fallback de escrita para memória. O arquivo guarda configurações, revisões, IDs de comandos, sequência de telemetria e últimos ACKs. Deve ser preservado em reinícios; um arquivo novo começa pausado e sem confirmação.
+
+`GET /api/v1/practice/settings` retorna as cinco faixas desejadas, `revision`, `config_id` SHA-256, `persistencia: "sqlite"`, `pending` e `aplicada_no_robo`. `effective_config` contém somente a configuração confirmada pela telemetria recente do robô; pode diferir da desejada enquanto uma alteração estiver pendente. Os limites inteiros das cinco faixas devem cobrir 0–100 em ordem, sem lacunas ou sobreposição; Gales 0–9 e multiplicador 1–10. Os padrões são 0–49/4, 50–59/3, 60–69/2, 70–79/1, 80–100/0, todos ×2.
+
+`PUT /api/v1/practice/settings` recebe exatamente `schema_version: 1`, `conta: "PRACTICE"`, `enabled`, `faixas`, `expected_revision`, `expected_config_id`, `command_id` UUID e `expires_at` UTC. O prazo deve estar no futuro e até 120 segundos. `GET /api/v1/practice/faixas` é o alias de compatibilidade; toda escrita nesse alias passa pelas mesmas validações, token de controle e persistência. Sem DB, somente a leitura legada volátil permanece disponível.
+
+`GET /api/v1/practice/control` retorna `revision`, `command_id`, `desired_paused`, `expires_at`, `target_session`, `confirmed`, `pending`, `robot_online`, `authorized`, `paused`, `last_paused`, `applied_revision` e `lease_expires_at`. `paused` só representa o comando confirmado; `last_paused` pode descrever o último estado efetivo de uma revisão anterior. ACKs ficam recentes por no máximo 45 segundos. Cada consulta produz uma licença curta de controle de 30 segundos para o robô, que pausa novas entradas se não a renovar.
+
+`PUT /api/v1/practice/control` recebe exatamente `schema_version: 1`, `conta: "PRACTICE"`, `action: "pause_new_entries"` ou `"resume_new_entries"`, `expected_revision`, `command_id` UUID e `expires_at` UTC. Resume exige autorização prévia e telemetria recente do robô. O comando é vinculado a `target_session`: uma nova sessão do robô invalida o resume persistido, volta o desejo a pausa e exige liberação explícita posterior. O APK não altera `EXECUTAR_ORDENS`.
+
+PUTs aceitos retornam HTTP 202, que significa **recebido**, nunca confirmação efetiva. Revisões conflitantes e IDs repetidos retornam HTTP 409; entradas inválidas/expiradas, HTTP 400. O SQLite verifica revisão e registra o UUID numa única transação. Um retry consulta o estado em vez de reenviar cegamente. Uma falha HTTP ou timeout deixa o estado desconhecido no APK.
+
+## Confirmação pelo processo existente
+
+`PUT /api/v1/practice/telemetry` aceita somente o token do robô, PRACTICE, as dez bancas, contagens globais consistentes, sessão UUID, sequência crescente e timestamp válido. Sequências persistidas impedem replay após reinício do monitor. Campos opcionais permitidos incluem conexão IQ, saldo PRACTICE, ativos, operações, estados das bancas, Gales/multiplicador e gestão da recuperação; dados arbitrários e credenciais são removidos.
+
+O robô publica `control_ack: {revision, command_id, paused, authorized}` somente depois de aplicar o estado sob o mesmo bloqueio que admite novas operações. `control_ack: null`, `control_error` ou ausência de confirmação invalidam imediatamente o ACK anterior. Para configurações, `config_revision` e `config_id` precisam coincidir com o snapshot efetivo. Uma telemetria posterior que não confirma a configuração anterior deixa o estado pendente. Operações abertas preservam o snapshot; a pausa bloqueia novas operações e permite concluir ordens e Gales existentes.
+
+O robô precisa de `PRACTICE_CONTROL_ENABLED=true`, `PRACTICE_FAIXAS_URL=https://baskaraido-monitor-test.onrender.com/api/v1/practice/faixas` e `MONITOR_ROBOT_TOKEN` contendo o token **do robô** (fallback legado: `PRACTICE_FAIXAS_TOKEN`). Sem opt-in, os controles não assumem autorização nem ativam negociação. O ledger financeiro do robô continua sendo estado do processo: um reinício exige reconciliar operações pendentes e prejuízo com a IQ Option antes de autorizar novas entradas. Recuperação usa 100% do prejuízo líquido, payout e saldo disponível; não garante recuperação.
+
+## Configuração ainda necessária no servidor
+
+Este trabalho não faz deploy e não modifica Render principal, Telegram ou `main`. É necessário instalar esta revisão no processo PRACTICE existente e no monitor isolado, configurar os três tokens, o SQLite persistente e o transporte HTTPS, e comprovar um ciclo de comando/ACK com o robô real. Não iniciar um segundo worker.
+
+Se TLS terminar em um proxy, o servidor WSGI deve receber o esquema HTTPS de um proxy explicitamente confiável (por exemplo, a configuração de proxy confiável do Gunicorn na rede da implantação). A aplicação rejeita esquema HTTP com 426 e não confia por conta própria em `X-Forwarded-Proto` enviado pelo cliente. `PREFERRED_URL_SCHEME=https` controla apenas geração de URL, não altera o esquema de uma conexão recebida. Não habilite confiança irrestrita em cabeçalhos de encaminhamento.
+
+Os testes usam IQ Option e transporte simulados. Compilação e assinatura do APK não comprovam conectividade real, saldo real observado nem execução de comandos por uma instância implantada do robô. A integração permanece sem confirmação em ambiente real até essa verificação.

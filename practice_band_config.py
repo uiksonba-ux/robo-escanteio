@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 from urllib.parse import urlparse
+from datetime import datetime, timezone
 from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 
@@ -48,23 +49,27 @@ def validate_config(data):
     if (type(data.get("schema_version")) is not int or data.get("schema_version") != 1 or data.get("conta") != "PRACTICE"
             or type(data.get("enabled")) is not bool
             or data.get("aplicada_no_robo") is not False
-            or data.get("persistencia") != "memoria_temporaria"):
+            or data.get("persistencia") not in ("memoria_temporaria", "sqlite")):
         return None
     rows = data.get("faixas")
     if not isinstance(rows, list) or len(rows) != 5:
         return None
     parsed = []
-    for row, (lower, upper) in zip(rows, EXPECTED_BOUNDS):
+    next_lower = 0
+    for row in rows:
         if not isinstance(row, dict) or set(row) != {"min", "max", "gales", "mult"}:
             return None
         if (type(row["min"]) is not int or type(row["max"]) is not int
-                or (row["min"], row["max"]) != (lower, upper)
+                or row["min"] != next_lower or not row["min"] <= row["max"] <= 100
                 or type(row["gales"]) is not int or not 0 <= row["gales"] <= 9
                 or type(row["mult"]) not in (float, int)
                 or not 1.0 <= row["mult"] <= 10.0
                 or not math.isfinite(row["mult"])):
             return None
-        parsed.append((float(lower), float(upper + 1), row["gales"], float(row["mult"])))
+        parsed.append((float(row["min"]), float(row["max"] + 1), row["gales"], float(row["mult"])))
+        next_lower = row["max"] + 1
+    if next_lower != 101:
+        return None
     return (data["enabled"], tuple(parsed))
 
 def read_remote_snapshot(url, token):
@@ -135,3 +140,54 @@ def select_band(wins, losses, config, default):
             return (gales, multiplier)
     return default
 
+
+
+
+def read_remote_control(config_url, token):
+    """Read a short control lease; any transport/schema failure returns unknown.
+
+    A confirmed command remains durable after its submission expiry. Unconfirmed
+    expired commands are rejected, so reconnecting never applies an old resume.
+    """
+    if not token or not _allowed_config_url(config_url):
+        return None
+    try:
+        endpoint = "https://" + ALLOWED_HOST + "/api/v1/practice/control"
+        req = Request(endpoint, headers={"Authorization": "Bearer " + token}, method="GET")
+        with urlopen(req, timeout=3) as response:
+            if response.status != 200:
+                return None
+            raw = response.read(8193)
+        if len(raw) > 8192:
+            return None
+        data = json.loads(raw)
+        if (not isinstance(data, dict) or data.get("schema_version") != 1
+                or type(data.get("schema_version")) is not int or data.get("conta") != "PRACTICE"
+                or type(data.get("revision")) is not int or data["revision"] < 1
+                or type(data.get("desired_paused")) is not bool
+                or type(data.get("confirmed")) is not bool
+                or type(data.get("pending")) is not bool
+                or data["pending"] == data["confirmed"]):
+            return None
+        from uuid import UUID
+        if not isinstance(data.get("command_id"), str) or str(UUID(data["command_id"])) != data["command_id"]:
+            return None
+        current = datetime.now(timezone.utc)
+        lease = datetime.fromisoformat(data["lease_expires_at"])
+        if lease.tzinfo is None or not 0 < (lease - current).total_seconds() <= 60:
+            return None
+        expires = data.get("expires_at")
+        if expires is not None:
+            expires = datetime.fromisoformat(expires)
+            if expires.tzinfo is None or (data["pending"] and expires <= current):
+                return None
+        elif not data["desired_paused"]:
+            return None
+        return data
+    except (ValueError, OSError, TimeoutError, TypeError, KeyError, AttributeError, OverflowError):
+        return None
+
+
+def read_remote_settings(config_url, token):
+    """Settings are also served through the legacy allowlisted faixas endpoint."""
+    return read_remote_snapshot(config_url, token)

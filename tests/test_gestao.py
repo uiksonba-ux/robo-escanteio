@@ -21,6 +21,7 @@ def carregar_robo(variaveis=None):
     app.route.side_effect = lambda *args, **kwargs: lambda func: func
     flask.Flask = MagicMock(return_value=app)
     flask.jsonify = MagicMock(side_effect=lambda dados: dados)
+    flask.request = types.SimpleNamespace(headers={})
     requests = types.ModuleType("requests")
     requests.post = MagicMock()
     iqoption = types.ModuleType("iqoptionapi")
@@ -55,6 +56,7 @@ class GestaoGlobalTest(unittest.TestCase):
         self.robo = carregar_robo()
         self.banca = self.robo.BANCAS[0]
         self.api = MagicMock()
+        self.api.get_balance_mode.return_value = "PRACTICE"
         self.api.get_balance.return_value = 1000
         self.robo.api = self.api
         self.ids = itertools.count(1001)
@@ -62,6 +64,7 @@ class GestaoGlobalTest(unittest.TestCase):
         self.resultados_envio = []
         self.patches = [
             patch.object(self.robo, "garantir_practice", return_value=True),
+            patch.object(self.robo, "obter_payout_digital", return_value=0.8),
             patch.object(self.robo, "executar_ordem", side_effect=self.comprar),
             patch.object(self.robo, "telegram"),
             patch.object(self.robo.time, "sleep"),
@@ -121,7 +124,7 @@ class GestaoGlobalTest(unittest.TestCase):
         self.assertEqual(robo.MULTIPLICADOR_GALE, 2)
         self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1)
 
-    def test_doze_ordens_iniciais_seguem_posicoes_globais_zero_a_nove(self):
+    def test_doze_ordens_iniciais_usam_faixa_global_sem_rotacao_por_numero(self):
         posicoes, numeros, gales = [], [], []
         for indice in range(12):
             banca = self.robo.BANCAS[(indice * 3) % 10]
@@ -134,19 +137,25 @@ class GestaoGlobalTest(unittest.TestCase):
             self.assertEqual(contexto["base"], 10)
             self.assertEqual(contexto["primeira_ordem"], order_id)
             self.concluir(order_id, "draw", 0, banca)
-        self.assertEqual(posicoes, list(range(10)) + [0, 1])
+        self.assertEqual(posicoes, [4] * 12)
         self.assertEqual(gales, posicoes)
         self.assertEqual(numeros, list(range(1, 13)))
         self.assertEqual(self.robo.entradas_globais_aceitas, 12)
         self.assertEqual(len(self.robo.operacoes_concluidas), 12)
 
-    def test_win_e_loss_nao_mudam_ou_reutilizam_posicao(self):
+    def test_win_e_loss_alteram_faixa_do_proximo_sinal_e_nao_reutilizam_numero(self):
+        esperados = [4, 4, 3, 4]
         for indice, (resultado, lucro) in enumerate((("loss", -10), ("win", 30),
                                                    ("loss", -5), ("win", 5))):
             ok, order_id, contexto = self.enviar()
             self.assertTrue(ok)
-            self.assertEqual(contexto["posicao"], indice)
+            self.assertEqual(contexto["posicao"], esperados[indice])
+            self.assertEqual(contexto["numero"], indice + 1)
             self.concluir(order_id, resultado, lucro)
+            if resultado == "win":
+                self.robo.registrar_win(self.banca, 0)
+            else:
+                self.robo.registrar_loss(self.banca)
         self.assertEqual(self.robo.entradas_globais_aceitas, 4)
 
     def test_base_reflete_saldo_practice_de_cada_inicial(self):
@@ -161,6 +170,7 @@ class GestaoGlobalTest(unittest.TestCase):
 
     def test_gales_dobram_sem_consumir_outra_posicao(self):
         self.robo.entradas_globais_aceitas = 3
+        self.robo.stats.update(wins=55, losses=45)
         ok, inicial, contexto = self.enviar()
         self.assertTrue(ok)
         self.assertEqual(contexto["gales"], 3)
@@ -286,7 +296,7 @@ class GestaoGlobalTest(unittest.TestCase):
         self.assertFalse(self.robo.ordens_pendentes)
         ok, _, contexto = self.enviar()
         self.assertTrue(ok)
-        self.assertEqual(contexto["posicao"], 0)
+        self.assertEqual(contexto["posicao"], 4)
         self.assertEqual(contexto["prejuizo_alocado"], 10)
 
     def test_recusa_gale_fecha_perdas_confirmadas_sem_consumir_posicao(self):
@@ -314,7 +324,7 @@ class GestaoGlobalTest(unittest.TestCase):
         self.assertEqual(len(self.compras), 1)
         self.assertEqual(self.robo.entradas_globais_aceitas, 0)
 
-    def test_dez_iniciais_concorrentes_tem_posicoes_unicas_e_uma_lease(self):
+    def test_dez_iniciais_concorrentes_tem_numeros_unicos_mesma_faixa_e_uma_lease(self):
         self.robo.resultado_global_centavos = -1000
         barreira = threading.Barrier(10)
         def enviar_concorrente(banca):
@@ -326,7 +336,7 @@ class GestaoGlobalTest(unittest.TestCase):
         self.assertEqual(self.robo.entradas_globais_aceitas, 10)
         contextos = [resposta[1][2] for resposta in respostas]
         self.assertTrue(all(resposta[1][0] for resposta in respostas))
-        self.assertEqual(sorted(x["posicao"] for x in contextos), list(range(10)))
+        self.assertEqual([x["posicao"] for x in contextos], [4] * 10)
         self.assertEqual(sorted(x["numero"] for x in contextos), list(range(1, 11)))
         self.assertEqual(sum(x["prejuizo_alocado"] > 0 for x in contextos), 1)
         self.assertEqual(sum(x["entrada"] == 22.50 for x in contextos), 1)
@@ -447,19 +457,21 @@ class GestaoGlobalTest(unittest.TestCase):
         self.concluir(primeiras[0], "draw", 0, self.robo.BANCAS[0])
         ok, _, contexto = self.enviar(self.robo.BANCAS[5])
         self.assertTrue(ok)
-        self.assertEqual(contexto["posicao"], 5)
+        self.assertEqual(contexto["posicao"], 4)
         self.assertEqual(self.robo.entradas_globais_aceitas, 6)
 
-    def test_recuperacao_sem_saldo_nao_reserva_lease_ou_posicao(self):
+    def test_recuperacao_sem_saldo_permite_normal_sem_reservar_divida(self):
         self.api.get_balance.return_value = 10
         self.robo.resultado_global_centavos = -1000
-        ok, motivo, _ = self.enviar()
-        self.assertFalse(ok)
-        self.assertEqual(motivo, "saldo_insuficiente")
-        self.assertEqual(self.robo.entradas_globais_aceitas, 0)
+        ok, order_id, contexto = self.enviar()
+        self.assertTrue(ok)
+        self.assertEqual(contexto["entrada"], 2)
+        self.assertEqual(contexto["prejuizo_alocado"], 0)
+        self.assertEqual(self.robo.resultado_global_centavos, -1000)
+        self.assertEqual(self.robo.entradas_globais_aceitas, 1)
         self.assertIsNone(self.robo.recuperacao_em_curso)
         self.assertFalse(self.robo.reservas_pendentes)
-        self.assertFalse(self.compras)
+        self.assertEqual(self.robo.ordens_pendentes[order_id]["valor"], 2)
 
     def test_excecao_no_envio_pausa_todos_os_envios_sem_apagar_divida(self):
         self.robo.resultado_global_centavos = -1000
@@ -486,10 +498,13 @@ class GestaoGlobalTest(unittest.TestCase):
         self.enviar(self.robo.BANCAS[2])
         self.assertEqual(len(self.compras), 2)
 
-    def test_ciclo_envio_incerto_mantem_banca_e_ativo_reservados(self):
+    def test_envio_incerto_mantem_banca_e_ativo_reservados(self):
         self.robo.resultado_global_centavos = -1000
         self.resultados_envio = [(None, "envio sem confirmação")]
-        self.executar_ciclo([])
+        ativo = f"ATIVO-{self.banca}"
+        self.assertEqual(self.robo.reservar_banca(ativo, "call", 80, 1, 1), self.banca)
+        ok, _, _ = self.enviar()
+        self.assertIsNone(ok)
         self.assertTrue(self.robo.estado_frentes[self.banca]["ocupada"])
         self.assertIn(f"ATIVO-{self.banca}", self.robo.ativos_em_uso)
         self.assertTrue(self.robo.estado_frentes[self.banca]["envio_indeterminado"])
@@ -512,8 +527,8 @@ class GestaoGlobalTest(unittest.TestCase):
             self.assertEqual(gestao["prejuizo_global"], 10)
             self.assertEqual(gestao["resultado_liquido_global"], -10)
             self.assertEqual(gestao["recuperacao_percentual"], 1)
-            self.assertEqual(gestao["gales_proximos"], 1)
-            self.assertEqual(gestao["sequencia_gales"], list(range(10)))
+            self.assertEqual(gestao["gales_proximos"], 4)
+            self.assertEqual(gestao["sequencia_gales"], [4, 3, 2, 1, 0])
             self.assertEqual(gestao["recuperacao_em_curso"], self.banca)
             self.assertEqual(gestao["ordens_pendentes"], 1)
         self.assertEqual(len(home["bancas"]), 10)
@@ -559,6 +574,50 @@ class GestaoGlobalTest(unittest.TestCase):
                 self.assertEqual(robo.PAYOUT_RECUPERACAO, 0.8)
                 self.assertEqual(robo.calcular_entrada_recuperacao(10, 1000), 22.50)
 
+    def test_fronteiras_de_todas_as_faixas_globais(self):
+        for percentual, gales in ((0, 4), (49, 4), (49.99, 4),
+                                  (50, 3), (59, 3), (59.99, 3),
+                                  (60, 2), (69, 2), (69.99, 2),
+                                  (70, 1), (79, 1), (79.99, 1),
+                                  (80, 0), (100, 0)):
+            with self.subTest(percentual=percentual):
+                self.assertEqual(self.robo.gales_por_assertividade(percentual), gales)
+                self.robo.stats.update(wins=percentual, losses=100-percentual)
+                ok, ordem, contexto = self.enviar()
+                self.assertTrue(ok)
+                self.assertEqual(contexto["gales"], gales)
+                self.assertEqual(contexto["assertividade_global"], percentual)
+                self.concluir(ordem, "draw", 0)
+
+    def test_historico_global_define_mesma_faixa_para_todas_as_dez_bancas(self):
+        self.robo.stats.update(wins=70, losses=30)
+        for indice, banca in enumerate(self.robo.BANCAS):
+            # Histórico local conflitante não pode escolher outra faixa.
+            self.robo.estado_frentes[banca].update(wins=indice, losses=100-indice)
+            ok, ordem, contexto = self.enviar(banca)
+            self.assertTrue(ok)
+            self.assertEqual(contexto["assertividade_global"], 70)
+            self.assertEqual(contexto["gales"], 1)
+            self.concluir(ordem, "draw", 0, banca)
+
+    def test_gales_congelam_no_ciclo_mesmo_com_mudanca_de_assertividade(self):
+        ok, inicial, contexto = self.enviar()
+        self.assertTrue(ok)
+        self.assertEqual(contexto["gales"], 4)
+        self.robo.registrar_resultado_ordem(inicial, "loss", -10)
+        # Uma mudança global afeta somente a próxima operação inicial.
+        self.robo.stats.update(wins=80, losses=20)
+        for nivel, valor in ((1, 20), (2, 40), (3, 80), (4, 160)):
+            ok, ordem, contexto = self.enviar(nivel=nivel)
+            self.assertTrue(ok)
+            self.assertEqual(contexto["gales"], 4)
+            self.assertEqual(self.compras[-1][2], valor)
+            self.robo.registrar_resultado_ordem(ordem, "loss", -valor)
+        self.robo.finalizar_operacao_global(self.banca)
+        ok, _, contexto = self.enviar(self.robo.BANCAS[1])
+        self.assertTrue(ok)
+        self.assertEqual(contexto["gales"], 0)
+
 
 class IntegracoesTest(unittest.TestCase):
     def setUp(self):
@@ -567,6 +626,8 @@ class IntegracoesTest(unittest.TestCase):
         self.api = MagicMock()
         self.api.check_connect.return_value = True
         self.api.get_balance.return_value = 10000
+        self.api.get_balance_mode.return_value = "PRACTICE"
+        self.api.get_digital_payout.return_value = 80
         self.api.buy_digital_spot_v2.return_value = (True, 123)
         self.robo.api = self.api
 
@@ -574,16 +635,17 @@ class IntegracoesTest(unittest.TestCase):
         with patch.object(self.robo, "ativo_digital_disponivel", return_value=True):
             self.assertEqual(self.robo.executar_ordem(self.banca, "EURUSD-OTC", 2, "call", 1),
                              (True, 123))
-        self.api.change_balance.assert_called_once_with("PRACTICE")
+        self.api.get_balance_mode.assert_called()
         self.api.buy_digital_spot_v2.assert_called_once_with("EURUSD-OTC", 2, "call", 1)
         chamadas = self.api.mock_calls
-        self.assertLess(chamadas.index(call.change_balance("PRACTICE")),
+        self.assertLess(chamadas.index(call.get_balance_mode()),
                         chamadas.index(call.buy_digital_spot_v2("EURUSD-OTC", 2, "call", 1)))
         self.assertEqual(self.robo.stats["ordens_aceitas"], 1)
         self.api.buy_digital_spot.assert_not_called()
         self.api.buy.assert_not_called()
 
     def test_falha_ao_escolher_practice_impede_ordem(self):
+        self.api.get_balance_mode.return_value = "REAL"
         self.api.change_balance.side_effect = RuntimeError("sem conta de treino")
         self.assertEqual(self.robo.executar_ordem(self.banca, "EURUSD-OTC", 2, "call", 1),
                          (False, "sem_conexao"))
@@ -616,7 +678,7 @@ class IntegracoesTest(unittest.TestCase):
         self.assertEqual(self.robo.listar_ativos_otc(), ["EURUSD-OTC", "GOOGLE-OTC"])
         self.assertTrue(self.robo.ativo_digital_disponivel("GOOGLE-OTC"))
         self.assertFalse(self.robo.ativo_digital_disponivel("AMAZON-OTC"))
-        self.assertIsNone(self.robo.ativo_digital_disponivel("DESCONHECIDO-OTC"))
+        self.assertFalse(self.robo.ativo_digital_disponivel("DESCONHECIDO-OTC"))
         self.api.get_all_open_time.assert_not_called()
 
     def test_telegram_preservado_sem_requisicao_real(self):
@@ -641,15 +703,16 @@ class IntegracoesTest(unittest.TestCase):
         self.api.connect.return_value = (True, "ok")
         with patch.object(self.robo, "telegram") as telegram, patch.object(self.robo.time, "sleep"):
             self.assertTrue(self.robo.conectar())
-        self.api.change_balance.assert_called_once_with("PRACTICE")
+        self.api.get_balance_mode.assert_called()
         mensagem = telegram.call_args.args[0]
         self.assertIn("PRACTICE", mensagem)
         self.assertIn("1%", mensagem)
         self.assertIn("100%", mensagem)
         self.assertIn("10 bancas", mensagem)
         self.assertIn("GALE X2", mensagem)
-        self.assertIn("0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 0", mensagem)
-        self.assertNotIn("50%", mensagem)
+        self.assertIn("assertividade global", mensagem)
+        self.assertIn("<50%=4", mensagem)
+        self.assertIn(">=80%=0", mensagem)
         self.assertEqual(self.robo.obter_entrada_base(), 100)
 
     def test_excecao_de_compra_retorna_envio_indeterminado(self):
@@ -707,4 +770,5 @@ class EstrategiaTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

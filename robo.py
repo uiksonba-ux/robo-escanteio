@@ -4,6 +4,7 @@ import math
 import logging
 import threading
 import hmac
+import uuid
 import requests
 from decimal import Decimal, ROUND_HALF_UP, ROUND_UP
 
@@ -12,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, request
 from iqoptionapi.stable_api import IQ_Option
-from practice_band_config import read_remote_config, select_band
+from practice_band_config import read_remote_snapshot, publish_telemetry, select_band
 
 
 # ============================================================
@@ -160,8 +161,8 @@ GALES_POR_CICLO = 0
 MAX_GALES = 2
 LIMIAR_ASSERTIVIDADE_SEM_GALE = 60.0
 
-# Configuração isolada da branch PRACTICE. Sem endpoint de escrita.
-# As preferências locais do Android não alteram esta configuração do robô.
+# Padrão local da branch PRACTICE. Configurações autenticadas do monitor de
+# testes substituem estes valores somente ao iniciar uma nova operação.
 FAIXAS_ASSERTIVIDADE_ATIVAS = True
 FAIXAS_ASSERTIVIDADE = (
     (0.0, 50.0, 4, 2.0),
@@ -290,6 +291,11 @@ api = None
 api_lock = threading.RLock()
 connect_lock = threading.Lock()
 estado_lock = threading.RLock()
+config_practice_lock = threading.Lock()
+telemetria_practice_lock = threading.Lock()
+config_practice_remota = None
+sessao_monitor_practice = str(uuid.uuid4())
+sequencia_monitor_practice = 0
 
 ativos_em_uso = set()
 bloqueados = {}
@@ -1615,6 +1621,10 @@ def calcular_entrada_recuperacao(prejuizo, saldo=None):
 
 def snapshot_gestao_global():
     with estado_lock:
+        proxima_gestao = gestao_sincronizada_practice(
+            max(0, stats["wins"] - wins_base_ponderada),
+            max(0, stats["losses"] - losses_base_ponderada),
+            config_practice_remota.config if config_practice_remota else None)
         return {
             "entrada_base": obter_entrada_base(),
             "entrada_percentual": PERCENTUAL_ENTRADA,
@@ -1624,10 +1634,10 @@ def snapshot_gestao_global():
             "prejuizo_global": max(0, -resultado_global_centavos) / 100,
             "recuperacao_em_curso": recuperacao_em_curso,
             "entradas_globais_aceitas": entradas_globais_aceitas,
-            "gales_proximos": gales_por_assertividade(stats["wins"], stats["losses"]),
-            "sequencia_gales": [gales_por_assertividade(stats["wins"], stats["losses"])],
+            "gales_proximos": proxima_gestao[0],
+            "sequencia_gales": [proxima_gestao[0]],
             "limiar_assertividade_sem_gale": LIMIAR_ASSERTIVIDADE_SEM_GALE,
-            "multiplicador_gale": MULTIPLICADOR_GALE,
+            "multiplicador_gale": proxima_gestao[1],
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "payout_recuperacao": PAYOUT_RECUPERACAO,
             "envio_indeterminado": dict(envio_indeterminado) if envio_indeterminado else None,
@@ -1650,16 +1660,54 @@ def marcar_envio_indeterminado(banca, ativo, nivel, valor, motivo):
     log.error("ENVIO INDETERMINADO | %s | novas ordens pausadas; reconciliar com a corretora", banca)
 
 
+def credenciais_monitor_practice():
+    return (os.getenv("PRACTICE_FAIXAS_URL", "").strip(),
+            os.getenv("MONITOR_ROBOT_TOKEN", "").strip() or
+            os.getenv("PRACTICE_FAIXAS_TOKEN", "").strip())
+
+
+def carregar_config_practice():
+    """Retém a última versão validada durante falhas temporárias do monitor."""
+    global config_practice_remota
+    url, token = credenciais_monitor_practice()
+    if CONTA != "PRACTICE" or not url or not token:
+        return None
+    # Serializa consultas concorrentes para uma resposta antiga não substituir
+    # uma revisão recém-carregada; nunca mantém locks de ordens durante a rede.
+    with config_practice_lock:
+        snapshot = read_remote_snapshot(url, token)
+        with estado_lock:
+            if snapshot is not None:
+                config_practice_remota = snapshot
+            return config_practice_remota
+
+
+def sincronizar_monitor_practice():
+    """Observador do supervisor existente: configurações e métricas, sem ordens."""
+    global sequencia_monitor_practice
+    url, token = credenciais_monitor_practice()
+    if CONTA != "PRACTICE" or not url or not token:
+        return False
+    with telemetria_practice_lock:
+        carregar_config_practice()
+        with estado_lock:
+            sequencia_monitor_practice += 1
+            payload = snapshot_monitor_practice()
+            payload.update(robot_session=sessao_monitor_practice,
+                           sequence=sequencia_monitor_practice)
+        return publish_telemetry(url, token, payload)
+
+
 def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
     """Escolha, envio e confirmação serializados; a recusa não consome posição."""
     global entradas_globais_aceitas, recuperacao_em_curso, ultimo_saldo_practice
-    # Fetch before taking operation/state locks. Disabled unless both env vars exist.
-    # If the remote preview is unavailable, use the validated branch-local bands.
+    # Atualiza antes dos locks de operação. Gales usam exclusivamente o contexto
+    # aceito da ordem inicial, mesmo se a configuração remota mudar no meio.
     config_remota = None
+    snapshot_remoto = None
     if nivel == 0:
-        config_remota = read_remote_config(
-            os.getenv("PRACTICE_FAIXAS_URL", "").strip(),
-            os.getenv("PRACTICE_FAIXAS_TOKEN", "").strip())
+        snapshot_remoto = carregar_config_practice()
+        config_remota = snapshot_remoto.config if snapshot_remoto else None
     with contador_entrada_lock:
         with estado_lock:
             contexto = operacoes_ativas.get(banca)
@@ -1686,11 +1734,21 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
         with estado_lock:
             ultimo_saldo_practice = saldo
             if nivel == 0:
+                # O fetch pode ter aguardado outro envio; usa a versão mais
+                # recente já validada ao criar o contexto da nova operação.
+                if snapshot_remoto is not None:
+                    snapshot_remoto = config_practice_remota
+                    config_remota = snapshot_remoto.config
                 posicao = entradas_globais_aceitas % QTD_BANCAS
                 alvo = max(0, -resultado_global_centavos) / 100 if recuperacao_em_curso is None else 0.0
+                gales, multiplicador = gestao_sincronizada_practice(
+                    max(0, stats["wins"] - wins_base_ponderada),
+                    max(0, stats["losses"] - losses_base_ponderada), config_remota)
                 contexto = {"posicao": posicao, "numero": entradas_globais_aceitas + 1,
-                            "gales": gestao_sincronizada_practice(max(0, stats["wins"] - wins_base_ponderada), max(0, stats["losses"] - losses_base_ponderada), config_remota)[0],
-                            "multiplicador": gestao_sincronizada_practice(max(0, stats["wins"] - wins_base_ponderada), max(0, stats["losses"] - losses_base_ponderada), config_remota)[1], "base": obter_entrada_base(saldo),
+                            "gales": gales, "multiplicador": multiplicador,
+                            "config_revision": snapshot_remoto.revision if snapshot_remoto else None,
+                            "config_id": snapshot_remoto.config_id if snapshot_remoto else None,
+                            "base": obter_entrada_base(saldo),
                             "entrada": calcular_entrada_recuperacao(alvo, saldo),
                             "prejuizo_alocado": alvo, "resultado_centavos": 0,
                             "primeira_ordem": None, "ultimo_nivel": -1, "ativo": ativo}
@@ -2157,6 +2215,7 @@ def supervisor():
                         0
                     )
 
+            sincronizar_monitor_practice()
             time.sleep(15)
 
         except Exception as e:
@@ -2355,14 +2414,19 @@ def monitor_practice():
     supplied = request.headers.get("Authorization", "")
     if not token:
         return jsonify({"erro": "monitoramento_nao_configurado"}), 503
-    if not hmac.compare_digest(supplied, "Bearer " + token):
+    if not hmac.compare_digest(supplied.encode("utf-8"), ("Bearer " + token).encode("utf-8")):
         return jsonify({"erro": "nao_autorizado"}), 401
 
+    return jsonify(snapshot_monitor_practice()), 200
+
+
+def snapshot_monitor_practice():
+    """Snapshot atômico compartilhado pela API de leitura e pela telemetria."""
     with estado_lock:
         geral = {
             "wins": int(stats["wins"]),
             "losses": int(stats["losses"]),
-            "assertividade": taxa_ponderada(stats["wins"], stats["losses"]),
+            "assertividade": taxa(stats["wins"], stats["losses"]),
         }
         frentes = {
             nome: {
@@ -2374,16 +2438,20 @@ def monitor_practice():
             for nome, dados in estado_frentes.items()
         }
 
-    return jsonify({
-        "schema_version": 1,
-        "conta": "PRACTICE",
-        "modo": "somente_leitura",
-        "origem": "robo_practice_memoria_volatil",
-        "persistencia": "nao_persistido_reinicia_com_processo",
-        "atualizado_em": agora_brasil().isoformat(),
-        "estatisticas": geral,
-        "bancas": frentes,
-    }), 200
+        payload = {
+            "schema_version": 1,
+            "conta": "PRACTICE",
+            "modo": "somente_leitura",
+            "origem": "robo_practice_memoria_volatil",
+            "persistencia": "nao_persistido_reinicia_com_processo",
+            "atualizado_em": agora_brasil().isoformat(),
+            "estatisticas": geral,
+            "bancas": frentes,
+        }
+        if config_practice_remota and config_practice_remota.revision is not None:
+            payload.update(config_revision=config_practice_remota.revision,
+                           config_id=config_practice_remota.config_id)
+        return payload
 
 
 # ============================================================
@@ -2525,5 +2593,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 

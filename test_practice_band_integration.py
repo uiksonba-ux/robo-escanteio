@@ -44,12 +44,14 @@ class PracticeBandIntegrationTests(unittest.TestCase):
             req = fetch.call_args.args[0]
             self.assertEqual(req.get_header("Authorization"), "Bearer test-token")
             self.assertEqual(req.get_method(), "GET")
-    def test_order_snapshot(self):
-        import pathlib
-        src = pathlib.Path("robo.py").read_text()
-        self.assertIn("if nivel == 0:\n        config_remota = read_remote_config(", src)
-        self.assertIn('"multiplicador": gestao_sincronizada_practice(', src)
-        self.assertIn('contexto.get("multiplicador", MULTIPLICADOR_GALE)', src)
+    def test_validated_values_do_not_retain_mutable_server_rows(self):
+        import copy
+        response = copy.deepcopy(BASE)
+        validated = cfg.validate_config(response)
+        response["faixas"][0]["gales"] = 9
+        response["faixas"][0]["mult"] = 10.0
+        self.assertEqual(cfg.select_band(0, 0, validated, (2, 2.0)), (4, 2.0))
 
 if __name__ == "__main__":
     unittest.main()
+

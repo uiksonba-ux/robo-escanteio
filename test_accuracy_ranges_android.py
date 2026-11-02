@@ -20,11 +20,16 @@ class AccuracyRangesTests(unittest.TestCase):
         self.assertIn('intArrayOf(49, 59, 69, 79, 100)', ACTIVITY)
         self.assertIn('getString("mult_$i", "2")', ACTIVITY)
 
-    def test_local_only(self):
+    def test_authenticated_sync_is_practice_only(self):
         self.assertIn('getSharedPreferences("accuracy_ranges", MODE_PRIVATE)', ACTIVITY)
-        self.assertIn('currentAccuracy = if (robotData)', ACTIVITY)
+        self.assertIn('currentAccuracy = if (robotData && !snapshot.stale)', ACTIVITY)
+        self.assertIn('PracticeProtocol.address(base,', ACTIVITY)
+        self.assertIn('instanceFollowRedirects = false', ACTIVITY)
+        self.assertIn('isSaveEnabled = false', ACTIVITY)
+        self.assertIn('override fun onStop()', ACTIVITY)
         self.assertNotIn('HttpURLConnection', BANDS)
         self.assertNotIn('robo.py', BANDS)
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -3,19 +3,22 @@ package com.baskaraido.trader
 import android.app.Activity
 import android.graphics.Color
 import android.graphics.BitmapFactory
-import android.graphics.drawable.BitmapDrawable
-import android.graphics.drawable.LayerDrawable
-import android.graphics.drawable.ColorDrawable
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.Locale
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.widget.*
 import org.json.JSONObject
 import java.net.HttpURLConnection
-import java.net.URL
 
 class MainActivity : Activity() {
     private val ink = Color.WHITE
@@ -30,6 +33,81 @@ class MainActivity : Activity() {
     private lateinit var dataOrigin: TextView
     private lateinit var rangeResult: TextView
     private var currentAccuracy: Double? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private val worker = Executors.newSingleThreadExecutor()
+    private var poll: Runnable? = null
+    private var activeTask: Future<*>? = null
+    @Volatile private var connection: HttpURLConnection? = null
+    private var generation = 0
+    private var foreground = false
+    private var session: Pair<String, String>? = null
+    private var refreshAction: (() -> Unit)? = null
+
+    override fun onStart() {
+        super.onStart()
+        foreground = true
+        if (session != null) refreshAction?.invoke()
+    }
+
+    override fun onStop() {
+        foreground = false
+        generation++
+        poll?.let(handler::removeCallbacks)
+        activeTask?.cancel(true)
+        connection?.disconnect()
+        currentAccuracy = null
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        session = null
+        worker.shutdownNow()
+        super.onDestroy()
+    }
+
+    /** No redirects and bounded reads: the bearer token can only reach the isolated host. */
+    private fun request(base: String, token: String, path: String, payload: JSONObject? = null): JSONObject {
+        val conn = (PracticeProtocol.address(base, path).openConnection() as HttpURLConnection).apply {
+            requestMethod = if (payload == null) "GET" else "PUT"
+            connectTimeout = 10000; readTimeout = 10000
+            instanceFollowRedirects = false
+            setRequestProperty("Authorization", "Bearer ${PracticeProtocol.token(token)}")
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Cache-Control", "no-store")
+            if (payload != null) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+        }
+        connection = conn
+        try {
+            payload?.let { body -> conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) } }
+            if (conn.responseCode != 200) throw ApiFailure(conn.responseCode)
+            val output = java.io.ByteArrayOutputStream()
+            conn.inputStream.use { input ->
+                val buffer = ByteArray(4096)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read == -1) break
+                    require(output.size() + read <= 65536)
+                    output.write(buffer, 0, read)
+                }
+            }
+            return JSONObject(String(output.toByteArray(), Charsets.UTF_8))
+        } finally {
+            connection = null
+            conn.disconnect()
+        }
+    }
+
+    private class ApiFailure(val code: Int) : Exception()
+
+    private fun failureMessage(error: Exception): String = when {
+        error is ApiFailure && error.code == 401 -> "Token rejeitado. Informe um token válido e reconecte."
+        error is ApiFailure && error.code == 409 -> "Configuração mudou no servidor. Reconecte para revisar antes de enviar."
+        error is ApiFailure -> "Servidor respondeu HTTP ${error.code}."
+        else -> "Atualização indisponível. Dados exibidos podem estar desatualizados."
+    }
 
     private fun dp(value: Int): Int = (resources.displayMetrics.density * value).toInt()
     private fun text(value: String, size: Float = 15f, bold: Boolean = false): TextView =
@@ -110,7 +188,7 @@ class MainActivity : Activity() {
 
         val rules = panel()
         rules.addView(text("GESTÃO DE ASSERTIVIDADE", 17f, true))
-        rules.addView(text("Configuração local • não altera operações do robô", 12f))
+        rules.addView(text("Alterações sincronizadas valem somente para novas operações", 12f))
         val strategyPrefs = getSharedPreferences("accuracy_ranges", MODE_PRIVATE)
         val toggle = Switch(this).apply {
             text = "Ativar gestão por faixas"
@@ -121,6 +199,9 @@ class MainActivity : Activity() {
         val limits = intArrayOf(49, 59, 69, 79, 100)
         val starts = intArrayOf(0, 50, 60, 70, 80)
         val defaults = intArrayOf(4, 3, 2, 1, 0)
+        var dirtyRanges = false
+        var loadingRanges = false
+        var remoteConfig: PracticeProtocol.Config? = null
         val galeFields = mutableListOf<EditText>()
         val multFields = mutableListOf<EditText>()
         for (i in starts.indices) {
@@ -162,7 +243,16 @@ class MainActivity : Activity() {
                 }
             }
         }
+        val changeWatcher = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (!loadingRanges) dirtyRanges = true
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        }
+        (galeFields + multFields).forEach { it.addTextChangedListener(changeWatcher) }
         toggle.setOnCheckedChangeListener { _, checked ->
+            if (!loadingRanges) dirtyRanges = true
             strategyPrefs.edit().putBoolean("enabled", checked).apply()
             updateRange()
         }
@@ -180,11 +270,12 @@ class MainActivity : Activity() {
                     editor.putString("mult_$i", multipliers[i]!!.toString())
                 }
                 editor.apply()
+                dirtyRanges = true
                 updateRange()
                 Toast.makeText(this, "Faixas salvas apenas neste aplicativo.", Toast.LENGTH_SHORT).show()
             }
         }
-        rules.addView(text("Esta tela apenas calcula a faixa. Não envia ordens nem modifica Telegram ou estratégia ativa.", 12f))
+        rules.addView(text("As faixas são aplicadas pelo robô PRACTICE em novas operações após a confirmação de recebimento. Operações em andamento mantêm suas regras.", 12f))
         updateRange()
         addPanel(root, rules)
 
@@ -201,6 +292,8 @@ class MainActivity : Activity() {
             hint = "Token de monitoramento (não é a senha IQ)"
             setSingleLine(true)
             inputType = 129
+            isSaveEnabled = false
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
             setTextColor(ink); setHintTextColor(muted)
         }
         connect.addView(tokenField)
@@ -211,124 +304,189 @@ class MainActivity : Activity() {
         connect.addView(text("Use apenas o token exclusivo de monitoramento. Nunca informe sua senha da IQ Option ou o token do Telegram.", 12f))
         val syncButton = Button(this).apply { text = "ENVIAR FAIXAS AO AMBIENTE DE TESTES" }
         connect.addView(syncButton)
-        val syncResult = text("As configurações enviadas são uma prévia; não alteram o robô.", 12f)
+        val syncResult = text("Conecte para carregar a revisão das faixas do servidor.", 12f)
         connect.addView(syncResult)
+        fun showConfig(config: PracticeProtocol.Config, populate: Boolean) {
+            val revisionChangedWhileEditing = dirtyRanges && remoteConfig != null &&
+                remoteConfig!!.configId != config.configId
+            if (!dirtyRanges || remoteConfig == null) remoteConfig = config
+            if (populate) {
+                loadingRanges = true
+                toggle.isChecked = config.enabled
+                val editor = strategyPrefs.edit().putBoolean("enabled", config.enabled)
+                config.bands.forEachIndexed { i, band ->
+                    galeFields[i].setText(band.gales.toString())
+                    multFields[i].setText(band.multiplier.toString())
+                    editor.putInt("gale_$i", band.gales).putString("mult_$i", band.multiplier.toString())
+                }
+                editor.apply()
+                loadingRanges = false
+                dirtyRanges = false
+                updateRange()
+            }
+            val applied = config.appliedRevision == config.revision && config.appliedConfigId == config.configId
+            syncResult.text = "Revisão ${config.revision}: " +
+                (if (applied) "recebida pelo robô; somente novas operações." else "aguardando confirmação do robô PRACTICE.") +
+                (if (revisionChangedWhileEditing) " A revisão mudou durante a edição; reconecte para revisar." else
+                    if (dirtyRanges) " Há alterações locais não enviadas." else "")
+        }
+        fun markStale() {
+            currentAccuracy = null
+            dataOrigin.text = "DADOS DESATUALIZADOS — aguardando atualização autenticada"
+            updateRange()
+        }
+        fun schedulePoll() {
+            poll?.let(handler::removeCallbacks)
+            if (foreground && session != null) {
+                poll = Runnable { refreshAction?.invoke() }
+                handler.postDelayed(poll!!, 5000)
+            }
+        }
+        fun render(snapshot: PracticeProtocol.Snapshot) {
+            val robotData = snapshot.robotData
+            val testData = !robotData
+            dataOrigin.text = when {
+                snapshot.stale -> "DADOS DESATUALIZADOS — ROBÔ PRACTICE SEM ATUALIZAÇÃO RECENTE"
+                robotData -> "ROBÔ PRACTICE — CONTADORES REINICIAM COM O PROCESSO"
+                else -> "DADOS SIMULADOS — NÃO SÃO OPERAÇÕES REAIS"
+            }
+            bankHint.text = if (testData) "Bancas simuladas para validar a conexão." else "Bancas do robô PRACTICE; saldo — quando não verificado."
+            summaryStats.text = "WIN ${snapshot.wins}        LOSS ${snapshot.losses}"
+            accuracyStats.text = "ASSERTIVIDADE ${String.format(Locale.getDefault(), "%.2f", snapshot.accuracy)}%"
+            currentAccuracy = if (robotData && !snapshot.stale) snapshot.accuracy else null
+            snapshot.banks.forEachIndexed { i, bank ->
+                val balance = bank.balance?.let { String.format(Locale.getDefault(), "%.2f", it) } ?: "—"
+                (banks.getChildAt(i) as TextView).text = "●   BANCA %02d       SALDO %s       W %d / L %d".format(i + 1, balance, bank.wins, bank.losses)
+            }
+            updateRange()
+        }
+        refreshAction = refresh@{
+            val auth = session ?: return@refresh
+            if (!foreground || activeTask?.isDone == false) return@refresh
+            val requestGeneration = generation
+            activeTask = worker.submit {
+                try {
+                    val snapshot = PracticeProtocol.monitor(request(auth.first, auth.second, "/api/v1/monitor"))
+                    val config = PracticeProtocol.config(request(auth.first, auth.second, "/api/v1/practice/faixas"))
+                    runOnUiThread {
+                        if (foreground && generation == requestGeneration) {
+                            render(snapshot)
+                            showConfig(config, !dirtyRanges)
+                            status.text = if (snapshot.stale) "Robô sem atualização recente." else "Conectado: atualização automática a cada 5 segundos."
+                            connectionResult.text = status.text
+                            button.isEnabled = true
+                            syncButton.isEnabled = true
+                            (galeFields + multFields).forEach { it.isEnabled = true }
+                            toggle.isEnabled = true
+                            schedulePoll()
+                        }
+                    }
+                } catch (error: Exception) {
+                    runOnUiThread {
+                        if (foreground && generation == requestGeneration) {
+                            markStale()
+                            status.text = failureMessage(error)
+                            connectionResult.text = status.text
+                            button.isEnabled = true
+                            syncButton.isEnabled = true
+                            (galeFields + multFields).forEach { it.isEnabled = true }
+                            toggle.isEnabled = true
+                            if (error is ApiFailure && error.code == 401) session = null
+                            schedulePoll()
+                        }
+                    }
+                }
+            }
+        }
         syncButton.setOnClickListener {
-            val base = endpoint.text.toString().trim().trimEnd('/')
-            val address = try { URL(base + "/api/v1/practice/faixas") } catch (_: Exception) { null }
-            if (address == null || address.protocol != "https" ||
-                address.host != "baskaraido-monitor-test.onrender.com" || address.port != -1) {
-                syncResult.text = "Sincronização permitida somente com o monitor isolado de testes."
+            if (activeTask?.isDone == false) {
+                syncResult.text = "Aguarde a atualização em andamento e envie novamente."
                 return@setOnClickListener
             }
-            val token = tokenField.text.toString().trim()
-            if (token.isBlank()) {
-                syncResult.text = "Informe o token exclusivo de monitoramento."
+            val auth = try {
+                val base = endpoint.text.toString().trim()
+                PracticeProtocol.address(base, "/api/v1/practice/faixas")
+                Pair(base, PracticeProtocol.token(tokenField.text.toString()))
+            } catch (_: Exception) {
+                syncResult.text = "Use o endereço HTTPS do monitor isolado e o token de monitoramento."
                 return@setOnClickListener
             }
-            val gales = galeFields.map { it.text.toString().toIntOrNull() }
-            val mults = multFields.map { it.text.toString().replace(',', '.').toDoubleOrNull() }
-            if (gales.any { it == null || it !in 0..9 } ||
-                mults.any { it == null || !it.isFinite() || it < 1.0 || it > 10.0 }) {
+            val config = remoteConfig
+            if (config == null || session != auth) {
+                syncResult.text = "Teste a conexão para carregar a revisão atual antes de enviar."
+                return@setOnClickListener
+            }
+            val payload = try {
+                val bands = starts.indices.map { i -> PracticeProtocol.Band(
+                    galeFields[i].text.toString().toInt(),
+                    multFields[i].text.toString().replace(',', '.').toDouble()) }
+                PracticeProtocol.payload(toggle.isChecked, bands, config.revision, config.configId)
+            } catch (_: Exception) {
                 syncResult.text = "Corrija os Gales (0–9) e multiplicadores (1–10)."
                 return@setOnClickListener
             }
-            val payload = JSONObject().put("schema_version", 1).put("conta", "PRACTICE")
-                .put("enabled", toggle.isChecked)
-            val faixas = org.json.JSONArray()
-            for (i in starts.indices) {
-                faixas.put(JSONObject().put("min", starts[i]).put("max", limits[i])
-                    .put("gales", gales[i]!!).put("mult", mults[i]!!))
-            }
-            payload.put("faixas", faixas)
+            poll?.let(handler::removeCallbacks)
             syncButton.isEnabled = false
+            (galeFields + multFields).forEach { it.isEnabled = false }
+            toggle.isEnabled = false
             syncResult.text = "Enviando ao monitor de testes..."
-            Thread {
-                val result = try {
-                    val conn = (address.openConnection() as HttpURLConnection).apply {
-                        requestMethod = "PUT"; doOutput = true
-                        connectTimeout = 15000; readTimeout = 15000
-                        instanceFollowRedirects = false
-                        setRequestProperty("Authorization", "Bearer $token")
-                        setRequestProperty("Content-Type", "application/json")
+            val requestGeneration = generation
+            activeTask = worker.submit {
+                try {
+                    val saved = PracticeProtocol.config(request(auth.first, auth.second, "/api/v1/practice/faixas", payload))
+                    runOnUiThread {
+                        if (foreground && generation == requestGeneration) {
+                            showConfig(saved, true)
+                            syncButton.isEnabled = true
+                            (galeFields + multFields).forEach { it.isEnabled = true }
+                            toggle.isEnabled = true
+                            schedulePoll()
+                        }
                     }
-                    try {
-                        conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-                        if (conn.responseCode == 200) {
-                            val response = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                            if (response.optBoolean("salvo") && !response.optBoolean("aplicada_no_robo", true))
-                                "Faixas recebidas no teste. NÃO aplicadas ao robô."
-                            else "Resposta inesperada; não considerar sincronizado."
-                        } else "Envio rejeitado: HTTP ${conn.responseCode}."
-                    } finally { conn.disconnect() }
-                } catch (e: Exception) { "Falha no envio: ${e.javaClass.simpleName}" }
-                runOnUiThread { syncResult.text = result; syncButton.isEnabled = true }
-            }.start()
+                } catch (error: Exception) {
+                    runOnUiThread {
+                        if (foreground && generation == requestGeneration) {
+                            syncResult.text = failureMessage(error)
+                            syncButton.isEnabled = true
+                            (galeFields + multFields).forEach { it.isEnabled = true }
+                            toggle.isEnabled = true
+                            if (error is ApiFailure && error.code == 409) {
+                                remoteConfig = null
+                                session = null
+                                markStale()
+                            }
+                            if (error is ApiFailure && error.code == 401) session = null
+                            schedulePoll()
+                        }
+                    }
+                }
+            }
         }
 
         addPanel(root, connect)
 
         button.setOnClickListener {
-            fun showResult(message: String) { status.text = message; connectionResult.text = message }
-            val base = endpoint.text.toString().trim().trimEnd('/')
-            val url = try { URL(base + "/api/v1/monitor") } catch (_: Exception) { null }
-            val token = tokenField.text.toString().trim()
-            if (url == null || url.protocol != "https" || url.host.isBlank()) {
-                showResult("Informe um endereço HTTPS válido.")
+            val auth = try {
+                val base = endpoint.text.toString().trim()
+                PracticeProtocol.address(base, "/api/v1/monitor")
+                Pair(base, PracticeProtocol.token(tokenField.text.toString()))
+            } catch (_: Exception) {
+                status.text = "Use o endereço HTTPS do monitor isolado e o token de monitoramento."
+                connectionResult.text = status.text
                 return@setOnClickListener
             }
-            if (token.isEmpty()) {
-                showResult("Informe o token de monitoramento.")
-                return@setOnClickListener
-            }
-            getPreferences(0).edit().putString("endpoint", base).apply()
-            showResult("Verificando servidor...")
+            generation++
+            poll?.let(handler::removeCallbacks)
+            activeTask?.cancel(true)
+            connection?.disconnect()
+            activeTask = null
+            remoteConfig = null
+            session = auth
+            getPreferences(0).edit().putString("endpoint", auth.first).apply()
+            status.text = "Verificando servidor..."
+            connectionResult.text = status.text
             button.isEnabled = false
-            Thread {
-                val message = try {
-                    val conn = (url.openConnection() as HttpURLConnection).apply {
-                        connectTimeout = 30000; readTimeout = 30000; requestMethod = "GET"
-                        instanceFollowRedirects = false
-                        setRequestProperty("Authorization", "Bearer $token")
-                    }
-                    try {
-                        if (conn.responseCode != 200) "API respondeu HTTP ${conn.responseCode}."
-                        else {
-                            val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText().take(30000) })
-                            if (json.optString("conta") != "PRACTICE" || json.optString("modo") != "somente_leitura" || json.optInt("schema_version") != 1) {
-                                "Resposta rejeitada: somente PRACTICE e leitura são permitidos."
-                            } else {
-                                val totals = json.getJSONObject("estatisticas")
-                                val entries = json.getJSONObject("bancas")
-                                val origin = json.optString("origem")
-                                val testData = origin == "ambiente_de_teste_sem_dados_reais"
-                                val robotData = origin == "robo_practice_memoria_volatil"
-                                val originLabel = when {
-                                    testData -> "DADOS SIMULADOS — NÃO SÃO OPERAÇÕES REAIS"
-                                    robotData -> "ROBÔ PRACTICE — CONTADORES REINICIAM COM O PROCESSO"
-                                    else -> "ORIGEM DESCONHECIDA — DADOS NÃO CONFIÁVEIS"
-                                }
-                                runOnUiThread {
-                                    dataOrigin.text = originLabel
-                                    bankHint.text = when { testData -> "Bancas simuladas para validar a conexão."; robotData -> "Bancas do processo atual do robô PRACTICE."; else -> "Origem não reconhecida; não use estes dados." }
-                                    summaryStats.text = "WIN ${totals.getInt("wins")}        LOSS ${totals.getInt("losses")}"
-                                    accuracyStats.text = "ASSERTIVIDADE ${totals.getDouble("assertividade")}%"
-                                    currentAccuracy = if (robotData) totals.getDouble("assertividade") else null
-                                    updateRange()
-                                    for (i in 1..10) {
-                                        val bank = entries.optJSONObject("BANCA $i")
-                                        val w = bank?.optInt("wins", 0) ?: 0
-                                        val l = bank?.optInt("losses", 0) ?: 0
-                                        (banks.getChildAt(i - 1) as TextView).text = "●   BANCA %02d       SALDO —       W %d / L %d".format(i, w, l)
-                                    }
-                                }
-                                when { testData -> "Conectado: dados simulados, sem operações reais."; robotData -> "Conectado: robô PRACTICE (memória temporária)."; else -> "Conectado, mas origem dos dados desconhecida." }
-                            }
-                        }
-                    } finally { conn.disconnect() }
-                } catch (e: Exception) { "Conexão não concluída: ${e.javaClass.simpleName}" }
-                runOnUiThread { showResult(message); button.isEnabled = true }
-            }.start()
+            refreshAction?.invoke()
         }
     }
 }

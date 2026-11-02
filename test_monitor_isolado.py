@@ -48,14 +48,15 @@ class MonitorContractTests(unittest.TestCase):
         data = {"schema_version": 1, "conta": "PRACTICE", "modo": "somente_leitura",
                 "origem": "robo_practice_memoria_volatil",
                 "estatisticas": {"wins": 4, "losses": 1, "assertividade": 80.0},
-                "bancas": {f"BANCA {i}": {"wins": 0, "losses": 0, "saldo": None} for i in range(1, 11)}}
+                "bancas": {f"BANCA {i}": {"wins": 4 if i == 1 else 0, "losses": 1 if i == 1 else 0, "saldo": None} for i in range(1, 11)}}
         class FakeResponse:
             def __enter__(self): return self
             def __exit__(self, *args): pass
             def read(self, limit): return json.dumps(data).encode()
         with patch.dict(os.environ, {"MONITOR_API_TOKEN": "app-secret",
                                      "MONITOR_UPSTREAM_URL": "https://example.com/api/v1/monitor",
-                                     "MONITOR_UPSTREAM_TOKEN": "upstream-secret"}):
+                                     "MONITOR_UPSTREAM_TOKEN": "upstream-secret",
+                                     "MONITOR_UPSTREAM_ALLOWED_HOSTS": "example.com"}):
             with patch("monitor_test_app.urlopen", return_value=FakeResponse()) as upstream:
                 response = self.client.get("/api/v1/monitor", headers={"Authorization": "Bearer app-secret"})
         self.assertEqual(response.status_code, 200)
@@ -72,7 +73,8 @@ class MonitorContractTests(unittest.TestCase):
             def read(self, limit): return json.dumps(data).encode()
         with patch.dict(os.environ, {"MONITOR_API_TOKEN": "app-secret",
                                      "MONITOR_UPSTREAM_URL": "https://example.com/api/v1/monitor",
-                                     "MONITOR_UPSTREAM_TOKEN": "upstream-secret"}):
+                                     "MONITOR_UPSTREAM_TOKEN": "upstream-secret",
+                                     "MONITOR_UPSTREAM_ALLOWED_HOSTS": "example.com"}):
             with patch("monitor_test_app.urlopen", return_value=FakeResponse()):
                 response = self.client.get("/api/v1/monitor", headers={"Authorization": "Bearer app-secret"})
         self.assertEqual(response.status_code, 502)
@@ -80,3 +82,4 @@ class MonitorContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

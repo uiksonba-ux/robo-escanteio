@@ -21,6 +21,7 @@ def carregar_robo(variaveis=None):
     app.route.side_effect = lambda *args, **kwargs: lambda func: func
     flask.Flask = MagicMock(return_value=app)
     flask.jsonify = MagicMock(side_effect=lambda dados: dados)
+    flask.request = types.SimpleNamespace(headers={})
     requests = types.ModuleType("requests")
     requests.post = MagicMock()
     iqoption = types.ModuleType("iqoptionapi")
@@ -135,7 +136,9 @@ class GestaoGlobalTest(unittest.TestCase):
             self.assertEqual(contexto["primeira_ordem"], order_id)
             self.concluir(order_id, "draw", 0, banca)
         self.assertEqual(posicoes, list(range(10)) + [0, 1])
-        self.assertEqual(gales, posicoes)
+        # A posição global segue cíclica; as cinco faixas escolhem o limite
+        # de gales independentemente dessa posição (sem histórico: faixa 0–49).
+        self.assertEqual(gales, [4] * 12)
         self.assertEqual(numeros, list(range(1, 13)))
         self.assertEqual(self.robo.entradas_globais_aceitas, 12)
         self.assertEqual(len(self.robo.operacoes_concluidas), 12)
@@ -161,6 +164,7 @@ class GestaoGlobalTest(unittest.TestCase):
 
     def test_gales_dobram_sem_consumir_outra_posicao(self):
         self.robo.entradas_globais_aceitas = 3
+        self.robo.stats.update(wins=50, losses=50)
         ok, inicial, contexto = self.enviar()
         self.assertTrue(ok)
         self.assertEqual(contexto["gales"], 3)
@@ -512,8 +516,8 @@ class GestaoGlobalTest(unittest.TestCase):
             self.assertEqual(gestao["prejuizo_global"], 10)
             self.assertEqual(gestao["resultado_liquido_global"], -10)
             self.assertEqual(gestao["recuperacao_percentual"], 1)
-            self.assertEqual(gestao["gales_proximos"], 1)
-            self.assertEqual(gestao["sequencia_gales"], list(range(10)))
+            self.assertEqual(gestao["gales_proximos"], 4)
+            self.assertEqual(gestao["sequencia_gales"], [4])
             self.assertEqual(gestao["recuperacao_em_curso"], self.banca)
             self.assertEqual(gestao["ordens_pendentes"], 1)
         self.assertEqual(len(home["bancas"]), 10)
@@ -648,7 +652,7 @@ class IntegracoesTest(unittest.TestCase):
         self.assertIn("100%", mensagem)
         self.assertIn("10 bancas", mensagem)
         self.assertIn("GALE X2", mensagem)
-        self.assertIn("0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 0", mensagem)
+        self.assertIn("contador e prejuízo líquido globais", mensagem)
         self.assertNotIn("50%", mensagem)
         self.assertEqual(self.robo.obter_entrada_base(), 100)
 
@@ -707,4 +711,5 @@ class EstrategiaTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

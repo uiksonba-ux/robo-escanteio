@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+.gradle/
+**/build/
+android-app/local.properties
+*.jks
+*.keystore
+*.apk
+*.aab

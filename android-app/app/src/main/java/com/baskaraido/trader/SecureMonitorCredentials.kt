@@ -33,7 +33,8 @@ internal class SecureMonitorCredentials(private val context: Context) {
         prefs.edit().putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
             .putString("ciphertext", Base64.encodeToString(bytes, Base64.NO_WRAP)).apply()
     }
-    fun load(): String? = try {
+    fun load(): String? {
+        return try {
         val iv = prefs.getString("iv", null) ?: return null
         val encrypted = prefs.getString("ciphertext", null) ?: return null
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -42,6 +43,7 @@ internal class SecureMonitorCredentials(private val context: Context) {
     } catch (_: Exception) {
         clear()
         null
+        }
     }
     fun clear() { prefs.edit().clear().apply() }
 }

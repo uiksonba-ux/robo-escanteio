@@ -181,7 +181,8 @@ class PracticeEndToEndTests(unittest.TestCase):
     def test_wrong_robot_token_cannot_fetch_or_publish(self):
         self.assertIsNone(protocol.read_remote_snapshot(CONFIG_URL, "wrong-token"))
         self.assertIsNone(self.robot.config_practice_remota)
-        with patch.dict(os.environ, {"MONITOR_ROBOT_TOKEN": "wrong-token"}):
+        with patch.object(self.robot, "credenciais_monitor_practice",
+                          return_value=(CONFIG_URL, "wrong-token")):
             self.assertFalse(self.robot.sincronizar_monitor_practice())
         data = self.client.get("/api/v1/monitor", headers=self.headers).json
         self.assertEqual(data["origem"], "ambiente_de_teste_sem_dados_reais")

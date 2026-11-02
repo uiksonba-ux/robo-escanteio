@@ -18,7 +18,7 @@ from iqoptionapi.stable_api import IQ_Option
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-DIGITAL-10B-EXECUCAO-CONFIRMADA-REC100-PRACTICE"
+VERSAO = "IQ-DIGITAL-10B-FAIXAS-ASSERTIVIDADE-REC100-PRACTICE"
 
 app = Flask(__name__)
 
@@ -383,7 +383,7 @@ def telegram(texto):
 
         log.warning(
             "TELEGRAM ERRO | %s",
-            type(e).__name__
+            e
         )
 
 
@@ -391,190 +391,170 @@ def telegram(texto):
 # CONEXÃO
 # ============================================================
 
-# Chamadas de leitura/conexão da biblioteca não oficial podem esperar sem limite.
-# Cada chave tem um único worker; uma chamada atrasada nunca gera workers em série.
-_chamadas_api_lock = threading.Lock()
-_chamadas_api = {}
-_cliente_conectando = None
-_sessao_lock = threading.RLock()
-PRAZO_CONSULTA_API = 5.0
-PRAZO_ENVIO_DIGITAL = 10.0
-PRAZO_RESULTADO_DIGITAL = 900.0
-
-
-def chamada_api_limitada(chave, funcao, timeout=5.0, cliente=None):
-    cliente = cliente if cliente is not None else api
-    identificador = (id(cliente), chave)
-    with _chamadas_api_lock:
-        chamada = _chamadas_api.get(identificador)
-        if chamada is None:
-            chamada = {"evento": threading.Event(), "estado": None, "valor": None}
-            _chamadas_api[identificador] = chamada
-
-            def executar():
-                try:
-                    chamada["valor"] = funcao()
-                    chamada["estado"] = "ok"
-                except Exception as erro:
-                    # Mensagens de erro da corretora podem conter dados de sessão.
-                    chamada["valor"] = type(erro).__name__
-                    chamada["estado"] = "erro"
-                finally:
-                    chamada["evento"].set()
-
-            threading.Thread(target=executar, daemon=True,
-                             name="iq-consulta-" + str(chave)[:30]).start()
-    if not chamada["evento"].wait(max(0, timeout)):
-        return "timeout", None
-    with _chamadas_api_lock:
-        if _chamadas_api.get(identificador) is chamada:
-            _chamadas_api.pop(identificador, None)
-    return chamada["estado"], chamada["valor"]
-
-
 def conectado():
-    if api is None:
+
+    global api
+
+    try:
+
+        return (
+            api is not None
+            and bool(api.check_connect())
+        )
+
+    except Exception:
+
         return False
-    estado, resposta = chamada_api_limitada("check_connect", api.check_connect,
-                                            timeout=1.0)
-    return estado == "ok" and resposta is True
-
-
-def _confirmar_practice_sincrono(cliente):
-    # Deve executar sob _sessao_lock: connect/change_balance alteram um ID global no SDK.
-    modo = cliente.get_balance_mode()
-    if modo != "PRACTICE":
-        cliente.change_balance("PRACTICE")
-    return cliente.get_balance_mode() == "PRACTICE"
-
-
-def _confirmar_practice(cliente):
-    def confirmar():
-        with _sessao_lock:
-            return _confirmar_practice_sincrono(cliente)
-    estado, resposta = chamada_api_limitada("confirmar_practice", confirmar,
-                                            PRAZO_CONSULTA_API, cliente)
-    confirmado = estado == "ok" and resposta is True
-    if not confirmado:
-        log.error("CONTA PRACTICE NAO CONFIRMADA | estado=%s", estado)
-    return confirmado
-
-
-def _conectar_na_sessao(cliente):
-    with _sessao_lock:
-        return cliente.connect()
-
-
-class _EnvioNaoRealizado(Exception):
-    """Falha anterior à única invocação: nenhuma ordem saiu desta tentativa."""
-
-
-def _enviar_na_sessao_practice(cliente, funcao):
-    with _sessao_lock:
-        if api is not cliente or not _confirmar_practice_sincrono(cliente):
-            raise _EnvioNaoRealizado()
-        return funcao()
-
-
-def _saldo_practice_sincrono(cliente, exigir_atual=True):
-    with _sessao_lock:
-        if (exigir_atual and api is not cliente) or not _confirmar_practice_sincrono(cliente):
-            raise ValueError("practice_nao_confirmada")
-        return cliente.get_balance()
 
 
 def conectar():
-    global api, ultimo_saldo_practice, _cliente_conectando
+
+    global api, ultimo_saldo_practice
+
     if not IQ_EMAIL or not IQ_PASSWORD:
-        log.error("IQ_EMAIL/IQ_PASSWORD ausentes.")
+
+        log.error(
+            "IQ_EMAIL/IQ_PASSWORD ausentes."
+        )
+
         return False
-    if not connect_lock.acquire(timeout=1):
-        log.warning("CONEXAO EM ANDAMENTO | nova tentativa adiada")
-        return False
-    try:
+
+    with connect_lock:
+
         if conectado():
             return True
-        if _cliente_conectando is None:
-            _cliente_conectando = IQ_Option(IQ_EMAIL, IQ_PASSWORD)
-        nova = _cliente_conectando
-        estado, resposta = chamada_api_limitada("connect", lambda: _conectar_na_sessao(nova), 20.0, nova)
-        if estado != "ok":
-            log.error("CONEXAO IQ INDISPONIVEL | estado=%s", estado)
-            if estado != "timeout":
-                _cliente_conectando = None
-            return False
-        _cliente_conectando = None
-        ok = isinstance(resposta, (tuple, list)) and resposta and resposta[0] is True
-        log.info("CONNECT | confirmado=%s", ok)
-        if not ok or not _confirmar_practice(nova):
-            return False
-        estado, saldo = chamada_api_limitada("balance", lambda: _saldo_practice_sincrono(nova, exigir_atual=False),
-                                             PRAZO_CONSULTA_API, nova)
-        if estado != "ok" or isinstance(saldo, bool):
-            log.warning("SALDO PRACTICE INDISPONIVEL | estado=%s", estado)
-            return False
-        saldo = float(saldo)
-        if not math.isfinite(saldo) or saldo < 0:
-            return False
-        if not _sessao_lock.acquire(timeout=PRAZO_CONSULTA_API):
-            log.error("SESSAO OCUPADA | publicacao_da_conexao_adiada")
-            return False
+
         try:
+
+            log.info(
+                "CONECTANDO IQ OPTION..."
+            )
+
+            nova = IQ_Option(
+                IQ_EMAIL,
+                IQ_PASSWORD
+            )
+
+            ok, motivo = nova.connect()
+
+            log.info(
+                "CONNECT | ok=%s | motivo=%s",
+                ok,
+                motivo
+            )
+
+            if not ok:
+                return False
+
+            # PRACTICE OBRIGATÓRIO
+            nova.change_balance(
+                "PRACTICE"
+            )
+
+            time.sleep(1)
+
+            saldo = nova.get_balance()
+            with estado_lock:
+                ultimo_saldo_practice = float(saldo)
+
             api = nova
-        finally:
-            _sessao_lock.release()
-        with estado_lock:
-            ultimo_saldo_practice = saldo
-        entrada = obter_entrada_base(saldo)
-        log.info("IQ CONECTADA | conta=PRACTICE confirmada | saldo=%.2f", saldo)
-        telegram(
-            "🤖 ROBÔ IQ DIGITAL ONLINE\n"
-            "🧪 CONTA: PRACTICE confirmada\n"
-            f"💰 Saldo: {saldo:.2f}\n"
-            f"💵 Entrada-base: 1% do saldo PRACTICE, mínimo R${ENTRADA_MINIMA:.2f}; atual R${entrada:.2f}\n"
-            f"🏦 {QTD_BANCAS} bancas; contador e prejuízo líquido globais\n"
-            "⏱ M1 + M5 + M15\n📊 SOMENTE DIGITAL\n"
-            f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
-            "🛡 Gales por assertividade global: <50%=4; 50–59%=3; 60–69%=2; 70–79%=1; >=80%=0\n"
-            "♻️ Recuperação de 100% do prejuízo líquido global, limitada ao saldo disponível\n"
-            "♾️ CICLOS ILIMITADOS\n"
-            f"🔥 Score mínimo: {SCORE_MIN}\n↔️ Diferença mínima: {DIFERENCA_MINIMA}"
-        )
-        return True
-    except Exception as erro:
-        log.error("ERRO CONEXAO | tipo=%s", type(erro).__name__)
-        return False
-    finally:
-        connect_lock.release()
+
+            entrada = obter_entrada_base(saldo)
+
+            log.info(
+                "IQ CONECTADA | "
+                "PRACTICE | saldo=%s",
+                saldo
+            )
+
+            telegram(
+                "🤖 ROBÔ IQ DIGITAL ONLINE\n"
+                "🧪 CONTA: PRACTICE\n"
+                f"💰 Saldo: {saldo}\n"
+                f"💵 Entrada-base: 1% do saldo PRACTICE, mínimo R${ENTRADA_MINIMA:.2f}; atual R${entrada:.2f}\n"
+                f"🏦 {QTD_BANCAS} bancas; contador e prejuízo líquido globais\n"
+                "⏱ M1 + M5 + M15\n"
+                "📊 SOMENTE DIGITAL\n"
+                f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
+                "🛡 Gales por assertividade global: <50%=4; 50-59%=3; 60-69%=2; 70-79%=1; >=80%=0\n"
+                "♻️ Recuperação de 100% do prejuízo líquido global, reservada a uma operação por vez\n"
+                "♾️ CICLOS ILIMITADOS\n"
+                f"📈 Multiplicador fixo nesta versão: X{MULTIPLICADOR_GALE:g}\n\n"
+                f"🔥 Score mínimo: {SCORE_MIN}\n"
+                f"↔️ Diferença mínima: {DIFERENCA_MINIMA}"
+            )
+
+            return True
+
+        except Exception as e:
+
+            log.exception(
+                "ERRO CONEXÃO | %s",
+                e
+            )
+
+            return False
 
 
 def garantir_conexao():
-    return conectado() or conectar()
+
+    return (
+        conectado()
+        or conectar()
+    )
 
 
 def garantir_practice():
-    return garantir_conexao() and _confirmar_practice(api)
+
+    if not garantir_conexao():
+        return False
+
+    try:
+
+        with api_lock:
+
+            api.change_balance(
+                "PRACTICE"
+            )
+
+        return True
+
+    except Exception as e:
+
+        log.warning(
+            "ERRO AO GARANTIR PRACTICE | %s",
+            e
+        )
+
+        return False
 
 
 def obter_saldo_atual():
+
     global ultimo_saldo_practice
     try:
+
         if not garantir_practice():
             return None
-        cliente = api
-        estado, resposta = chamada_api_limitada("balance", lambda: _saldo_practice_sincrono(cliente),
-                                                PRAZO_CONSULTA_API, cliente)
-        if estado != "ok" or isinstance(resposta, bool):
-            log.warning("SALDO PRACTICE INDISPONIVEL | estado=%s", estado)
-            return None
-        saldo = float(resposta)
-        if not math.isfinite(saldo) or saldo < 0:
-            return None
+
+        with api_lock:
+
+            saldo = api.get_balance()
+
         with estado_lock:
-            ultimo_saldo_practice = saldo
-        return round(saldo, 2)
-    except Exception as erro:
-        log.warning("SALDO PRACTICE INDISPONIVEL | tipo=%s", type(erro).__name__)
+            ultimo_saldo_practice = float(saldo)
+        return round(
+            float(saldo),
+            2
+        )
+
+    except Exception as e:
+
+        log.warning(
+            "ERRO AO CONSULTAR SALDO | %s",
+            e
+        )
+
         return None
 
 
@@ -663,85 +643,6 @@ def bloquear(
 # CANDLES
 # ============================================================
 
-_candles_receptor_lock = threading.Lock()
-
-
-def _consultar_candles_correlacionados(cliente, ativo, segundos, quantidade, agora):
-    """Usa request_id do canal get-candles; None significa SDK incompatível."""
-    import json
-    import types
-
-    baixo = getattr(cliente, "api", None)
-    if not isinstance(getattr(baixo, "digital_option_placed_id", None), dict):
-        return None
-    websocket = getattr(baixo, "websocket", None)
-    enviar = getattr(baixo, "send_websocket_request", None)
-    if websocket is None or not callable(enviar):
-        return None
-    with _candles_receptor_lock:
-        receptor = getattr(websocket, "_robo_candles_receptor", None)
-        if receptor is None:
-            original = getattr(websocket, "on_message", None)
-            if not isinstance(original, types.MethodType):
-                return None
-            receptor = {"lock": threading.Lock(), "pedidos": {}}
-
-            def receber(_websocket, mensagem):
-                try:
-                    # Só conserva candles dos nossos pedidos ainda pendentes.
-                    # Não registra payloads de sessão ou de qualquer resposta.
-                    dados = json.loads(mensagem)
-                    if isinstance(dados, dict) and dados.get("name") == "candles":
-                        chave = str(dados.get("request_id", ""))
-                        with receptor["lock"]:
-                            pedido = receptor["pedidos"].get(chave)
-                            corpo = dados.get("msg")
-                            if pedido is not None and isinstance(corpo, dict):
-                                candles = corpo.get("candles")
-                                if isinstance(candles, list):
-                                    pedido["dados"] = candles
-                                    pedido["evento"].set()
-                except (ValueError, TypeError):
-                    pass
-                finally:
-                    original(mensagem)
-
-            # websocket-client 0.56.0 busca wss.on_message em cada frame e
-            # invoca callback bound com apenas message. Preserva essa assinatura.
-            websocket.on_message = types.MethodType(receber, websocket)
-            websocket._robo_candles_receptor = receptor
-
-    mapa = cliente.get_all_ACTIVES_OPCODE()
-    if not isinstance(mapa, dict) or ativo not in mapa:
-        return "ativo_sem_id_confirmado", None
-    request_id = "robo-candles-" + str(time.monotonic_ns())
-    pedido = {"evento": threading.Event(), "dados": None}
-    with receptor["lock"]:
-        receptor["pedidos"][request_id] = pedido
-    try:
-        corpo = {"name": "get-candles", "version": "2.0", "body": {
-            "active_id": int(mapa[ativo]), "split_normalization": True,
-            "size": segundos, "to": int(agora), "count": quantidade,
-            "": mapa[ativo]}}
-
-        def enviar_pedido():
-            enviar(name="sendMessage", msg=corpo, request_id=request_id)
-            return request_id
-
-        estado, enviado = chamada_api_limitada("candles_raw:envio", enviar_pedido,
-                                               PRAZO_CONSULTA_API, cliente)
-        if estado != "ok":
-            return estado, None
-        if enviado != request_id:
-            return "envio_anterior_concluido", None
-        if not pedido["evento"].wait(PRAZO_CONSULTA_API):
-            return "timeout_resposta_sem_request_id_confirmado", None
-        return "ok", pedido["dados"]
-    finally:
-        with receptor["lock"]:
-            receptor["pedidos"].pop(request_id, None)
-
-
 def obter_candles(
     ativo,
     segundos,
@@ -757,40 +658,14 @@ def obter_candles(
             time.time()
         )
 
-        cliente = api
-        resposta_raw = _consultar_candles_correlacionados(
-            cliente, ativo, segundos, quantidade, agora)
-        if resposta_raw is not None:
-            estado, dados = resposta_raw
-        else:
-            # O wrapper pode reconectar e mudar o balance_id global do SDK.
-            # Nessa compatibilidade, a sessão permanece protegida até concluir,
-            # mesmo no timeout. O canal raw fixado acima não tem esse bloqueio.
-            consulta = (ativo, segundos, quantidade, agora)
-            log.warning("CANDLES SDK COMPATIBILIDADE | ativo=%s | sessao_protegida_ate_conclusao=true", ativo)
+        with api_lock:
 
-            def consultar_wrapper():
-                with _sessao_lock:
-                    if cliente is not api:
-                        return consulta, []
-                    return consulta, cliente.get_candles(
-                        ativo, segundos, quantidade, agora)
-
-            estado, resposta = chamada_api_limitada(
-                "candles", consultar_wrapper,
-                timeout=PRAZO_CONSULTA_API,
-                cliente=cliente,
+            dados = api.get_candles(
+                ativo,
+                segundos,
+                quantidade,
+                agora
             )
-            if estado == "ok":
-                origem, dados = resposta
-                if origem != consulta:
-                    log.info("CANDLES RESPOSTA TARDIA DESCARTADA | ativo=%s | segundos=%s",
-                             ativo, segundos)
-                    return []
-        if estado != "ok":
-            log.warning("CANDLES INDISPONIVEIS | ativo=%s | segundos=%s | estado=%s",
-                        ativo, segundos, estado)
-            return []
 
         if not dados:
             return []
@@ -852,7 +727,7 @@ def obter_candles(
         log.debug(
             "CANDLES ERRO | %s | %s",
             ativo,
-            type(e).__name__
+            e
         )
 
         return []
@@ -1300,406 +1175,267 @@ def listar_ativos_otc():
     return list(ATIVOS)
 
 def ativo_digital_disponivel(ativo):
-    agora = time.monotonic()
-    cliente = api
+    agora = time.time()
     with _disponibilidade_lock:
         dados = _disponibilidade_cache["dados"]
-        mesma_sessao = _disponibilidade_cache.get("sessao", id(cliente)) == id(cliente)
-        if mesma_sessao and dados is not None and time.time() < _disponibilidade_cache["ate"]:
+        if dados is not None and agora < _disponibilidade_cache["ate"]:
             info = dados.get(ativo)
-            return info.get("open") if isinstance(info, dict) and isinstance(info.get("open"), bool) else False
-    # get_all_open_time também espera binárias/forex e pode nunca retornar.
-    # Consultamos somente o catálogo DIGITAL publicado pela própria corretora.
-    estado, resposta = chamada_api_limitada("digital_underlying",
-        cliente.get_digital_underlying_list_data, PRAZO_CONSULTA_API, cliente)
-    if estado != "ok" or not isinstance(resposta, dict) or not isinstance(resposta.get("underlying"), list):
-        log.warning("DISPONIBILIDADE DIGITAL NAO CONFIRMADA | estado=%s", estado)
-        return None
-    dados = {}
-    agora_servidor = time.time()
-    for instrumento in resposta["underlying"]:
-        if not isinstance(instrumento, dict) or not isinstance(instrumento.get("underlying"), str):
-            continue
-        aberto = False
-        for horario in instrumento.get("schedule", []):
-            if isinstance(horario, dict):
-                inicio, fim = horario.get("open"), horario.get("close")
-                if isinstance(inicio, (int, float)) and isinstance(fim, (int, float)):
-                    aberto = aberto or inicio < agora_servidor < fim
-        dados[instrumento["underlying"]] = {"open": aberto}
-    with _disponibilidade_lock:
-        _disponibilidade_cache.update(dados=dados, ate=time.time() + 30,
-                                      sessao=id(cliente), consultando=False)
-    log.info("DISPONIBILIDADE DIGITAL | instrumentos=%s | duracao_ms=%s",
-             len(dados), int((time.monotonic() - agora) * 1000))
-    info = dados.get(ativo)
-    return info["open"] if info else False
-
-
-_payout_cache = {}
-_envios_digitais = {}
-_clientes_por_ordem = {}
-_envios_digitais_lock = threading.Lock()
-
-
-def obter_payout_digital(ativo, expiracao):
-    cliente = api
-    chave = (id(cliente), ativo, expiracao)
-    registro = _payout_cache.get(chave)
-    if registro and time.monotonic() < registro["ate"]:
-        return registro["payout"]
-    baixo = getattr(cliente, "api", None)
-    dados = getattr(baixo, "instrument_quites_generated_data", None)
-    tempos = getattr(baixo, "instrument_quites_generated_timestamp", None)
-    if isinstance(dados, dict) and isinstance(tempos, dict):
-        # O handler instrument-quotes-generated do SDK publica payout percentual
-        # por ativo/período. get_digital_payout depende de outro buffer que certas
-        # versões não atualizam. CALL e PUT podem diferir: usar o menor é conservador.
-        estado, _ = chamada_api_limitada("subscribe_payout:" + ativo + ":" + str(expiracao),
-            lambda: cliente.subscribe_strike_list(ativo, expiracao), PRAZO_CONSULTA_API, cliente)
-        if estado != "ok":
+            if isinstance(info, dict) and "open" in info:
+                return bool(info["open"])
             return None
-        try:
-            limite = time.monotonic() + min(2.0, PRAZO_CONSULTA_API)
-            while time.monotonic() < limite:
-                precos = dict(dados.get(ativo, {}).get(expiracao * 60, {}))
-                vencimento = tempos.get(ativo, {}).get(expiracao * 60)
-                if (isinstance(vencimento, (int, float)) and not isinstance(vencimento, bool)
-                        and math.isfinite(vencimento) and vencimento > time.time() + 30):
-                    lados = {}
-                    for instrumento, percentual in precos.items():
-                        if not isinstance(instrumento, str) or not instrumento.endswith(("CSPT", "PSPT")):
-                            continue
-                        if isinstance(percentual, (int, float)) and not isinstance(percentual, bool):
-                            if math.isfinite(percentual) and 0 < percentual <= 100:
-                                lados["call" if instrumento.endswith("CSPT") else "put"] = percentual / 100.0
-                    if "call" in lados and "put" in lados:
-                        payout = min(lados.values())
-                        validade = min(30.0, vencimento - time.time() - 30)
-                        _payout_cache[chave] = {"payout": payout, "ate": time.monotonic() + validade}
-                        log.info("PAYOUT DIGITAL CONFIRMADO | ativo=%s | expiracao=%s | payout=%.4f | fonte=quotes_spt",
-                                 ativo, expiracao, payout)
-                        return payout
-                time.sleep(.1)
-            return None
-        finally:
-            # O wrapper unsubscribe_strike_list apaga TODOS os períodos do ativo.
-            # O canal direto cancela só esta assinatura, preservando M1/M5/M15.
-            chamada_api_limitada("unsubscribe_payout:" + ativo + ":" + str(expiracao),
-                lambda: baixo.unsubscribe_instrument_quites_generated(ativo, expiracao),
-                PRAZO_CONSULTA_API, cliente)
-    metodo = getattr(cliente, "get_digital_payout", None)
-    if not callable(metodo):
-        return None
-    estado, valor = chamada_api_limitada("payout:" + ativo,
-        lambda: metodo(ativo, seconds=2), PRAZO_CONSULTA_API, cliente)
-    if estado != "ok" or isinstance(valor, bool):
-        return None
+        if not _disponibilidade_cache["consultando"]:
+            _disponibilidade_cache["consultando"] = True
+            def consultar():
+                try:
+                    # Sem api_lock: evita travar as operações caso a API bloqueie.
+                    resposta = api.get_all_open_time()
+                    digital = resposta.get("digital", {}) if isinstance(resposta, dict) else {}
+                    if not isinstance(digital, dict):
+                        digital = {}
+                    with _disponibilidade_lock:
+                        _disponibilidade_cache.update(dados=digital, ate=time.time() + 120)
+                    log.info("DISPONIBILIDADE DIGITAL | instrumentos=%s", len(digital))
+                except Exception as e:
+                    log.warning("DISPONIBILIDADE DIGITAL INDISPONIVEL | %s", e)
+                finally:
+                    with _disponibilidade_lock:
+                        _disponibilidade_cache["consultando"] = False
+            threading.Thread(target=consultar, daemon=True, name="consulta-digital").start()
+    # Sem confirmação de disponibilidade, não presumimos que esteja fechado.
+    return None
+
+
+# ============================================================
+# ORDEM DIGITAL
+# ============================================================
+
+def executar_ordem(
+    banca,
+    ativo,
+    valor,
+    direcao,
+    expiracao
+):
+
+    if not EXECUTAR_ORDENS:
+        return (False, "EXECUTAR_ORDENS=false")
+
+    if esta_bloqueado(ativo, expiracao):
+        return (False, "ativo_bloqueado")
+
+    # PRACTICE OBRIGATÓRIO
+    if not garantir_practice():
+        return (False, "sem_conexao")
+
+    ativo = str(ativo).strip().upper()
+    direcao = str(direcao).strip().lower()
+    valor = round(float(valor), 2)
+    expiracao = int(expiracao)
     try:
-        payout = float(valor) / 100.0
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(payout) or not 0 <= payout <= 1:
-        return None
-    _payout_cache[chave] = {"payout": payout, "ate": time.monotonic() + 30}
-    return payout
+        with api_lock:
+            saldo_disponivel = float(api.get_balance())
+    except Exception:
+        return (False, "saldo_indisponivel")
+    if not math.isfinite(valor) or not math.isfinite(saldo_disponivel):
+        return (False, "valor_ou_saldo_invalido")
+    if valor > saldo_disponivel or valor < ENTRADA_MINIMA:
+        log.warning("%s | ORDEM BLOQUEADA POR SALDO | valor=%.2f | saldo=%.2f", banca, valor, saldo_disponivel)
+        return (False, "saldo_insuficiente")
 
+    if direcao not in ("call", "put"):
+        return (False, f"direcao_invalida:{direcao}")
 
-def _motivo_recusa_seguro(resposta):
-    # Não registrar payload arbitrário, que pode incluir dados da conta/sessão.
-    codigos = {"error_place_digital_order", "insufficient_funds", "not_enough_money",
-               "instrument_not_found", "instrument_expired", "instrument_suspended"}
-    mensagens = {"rejected", "not enough money", "insufficient funds", "instrument not found"}
-    if isinstance(resposta, dict):
-        codigo = resposta.get("code")
-        mensagem = resposta.get("message")
-        return ((codigo if isinstance(codigo, str) and codigo in codigos else "recusa_iq_option") +
-                (":" + mensagem if isinstance(mensagem, str) and mensagem in mensagens else ""))
-    return "recusa_iq_option"
+    # Consulta assíncrona com cache: nunca bloqueia a thread de operações.
+    disponibilidade = ativo_digital_disponivel(ativo)
+    if disponibilidade is False:
+        log.info("DIGITAL FECHADO | %s | M%s | ordem ignorada", ativo, expiracao)
+        bloquear(ativo, expiracao, "instrumento digital fechado na IQ Option")
+        return (False, "instrumento_digital_fechado")
+    if disponibilidade is None:
+        log.info("DISPONIBILIDADE DIGITAL NAO CONFIRMADA | %s | validacao pela resposta da ordem", ativo)
+    if expiracao not in (1, 5, 15):
+        motivo = f"expiracao_digital_invalida:{expiracao}"
+        log.warning("EXPIRACAO DIGITAL INVALIDA | %s | %s", ativo, expiracao)
+        return (False, motivo)
 
+    # Diagnóstico seguro: não envia ordem adicional.
+    # Registra contexto mínimo para distinguir instrumento inválido de rejeição.
+    log.info(
+        "DIAGNOSTICO DIGITAL | banca=%s | ativo=%s | direcao=%s | expiracao=%s | valor=%.2f | conta=PRACTICE",
+        banca, ativo, direcao, expiracao, valor
+    )
 
-def _normalizar_confirmacao(resposta):
-    if isinstance(resposta, (tuple, list)) and len(resposta) >= 2:
-        ok, identificador = resposta[:2]
-        if ok is False:
-            return False, _motivo_recusa_seguro(identificador)
-        if ok is not True:
-            return None, "resposta_de_envio_sem_confirmacao"
-    elif isinstance(resposta, int) and not isinstance(resposta, bool):
-        identificador = resposta
-        if identificador <= 0:
-            return False, "recusa_iq_option"
-    elif isinstance(resposta, dict):
-        if isinstance(resposta.get("code"), str) and resposta.get("code") in {"error_place_digital_order", "insufficient_funds", "not_enough_money",
-                                    "instrument_not_found", "instrument_expired", "instrument_suspended"}:
-            return False, _motivo_recusa_seguro(resposta)
-        return None, "resposta_de_envio_sem_confirmacao"
-    else:
-        return None, "resposta_de_envio_sem_confirmacao"
-    valido = ((isinstance(identificador, int) and not isinstance(identificador, bool) and identificador > 0)
-              or (isinstance(identificador, str) and identificador.isdigit() and int(identificador) > 0))
-    return (True, identificador) if valido else (None, "identificador_de_ordem_nao_confirmado")
+    log.info(
+        "BUY DIGITAL V2 | %s | %s | M%s | %s | %.2f",
+        banca, ativo, expiracao, direcao.upper(), valor
+    )
 
+    # IMPORTANTE: não usa buy_digital_spot() clássico.
+    # Nesta biblioteca ele pode bloquear a thread indefinidamente.
+    metodo = getattr(api, "buy_digital_spot_v2", None)
 
-def consultar_confirmacao_envio(banca):
-    with _envios_digitais_lock:
-        envio = _envios_digitais.get(banca)
-    if envio is None:
-        return None, "envio_sem_registro"
-    if envio.get("falha_envio"):
-        return None, "excecao_no_envio_sem_confirmacao"
-    if "resposta_terminal" in envio:
-        ok, resultado = _normalizar_confirmacao(envio["resposta_terminal"])
-    elif envio["modo"] == "raw_v2":
-        if envio.get("request_id") is None:
-            estado, request_id = chamada_api_limitada(envio["chave"], envio["funcao"],
-                                                       timeout=0, cliente=envio["cliente"])
-            if estado != "ok":
-                if estado == "erro" and request_id == "_EnvioNaoRealizado":
-                    with _envios_digitais_lock:
-                        _envios_digitais.pop(banca, None)
-                    return False, "practice_ou_sessao_alterada_antes_do_envio"
-                if estado == "erro":
-                    envio["falha_envio"] = True
-                return None, "envio_v2_sem_confirmacao"
-            if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
-                envio["falha_envio"] = True
-                return None, "request_id_nao_confirmado"
-            envio["request_id"] = request_id
-        if envio["request_id"] in envio.get("request_ids_anteriores", ()):
-            envio["falha_envio"] = True
-            return None, "request_id_reutilizado_sem_confirmacao"
-        respostas = envio["cliente"].api.digital_option_placed_id
-        resposta = respostas.get(envio["request_id"])
-        if resposta is None:
-            return None, "aguardando_confirmacao_iq_option"
-        ok, resultado = _normalizar_confirmacao(resposta)
-    else:
-        estado, resposta = chamada_api_limitada(envio["chave"], envio["funcao"],
-                                               timeout=0, cliente=envio["cliente"])
-        if estado != "ok":
-            if estado == "erro" and resposta == "_EnvioNaoRealizado":
-                with _envios_digitais_lock:
-                    _envios_digitais.pop(banca, None)
-                return False, "practice_ou_sessao_alterada_antes_do_envio"
-            if estado == "erro":
-                envio["falha_envio"] = True
-            return None, "envio_v2_sem_confirmacao"
-        envio["resposta_terminal"] = resposta
-        ok, resultado = _normalizar_confirmacao(resposta)
-    if ok is not None:
-        with _envios_digitais_lock:
-            _envios_digitais.pop(banca, None)
-        if ok:
-            _clientes_por_ordem[resultado] = envio["cliente"]
+    if not callable(metodo):
+        motivo = "biblioteca_sem_buy_digital_spot_v2"
+        with estado_lock:
+            stats["ordens_recusadas"] += 1
+            estado_frentes[banca]["ordens_recusadas"] += 1
+        bloquear(ativo, expiracao, motivo)
+        return (False, motivo)
+
+    try:
+        with api_lock:
+            resposta = metodo(
+                ativo,
+                valor,
+                direcao,
+                expiracao,
+            )
+
+        log.info("DIAGNOSTICO RESPOSTA | ativo=%s | expiracao=%s | tipo=%s", ativo, expiracao, type(resposta).__name__)
+        log.info(
+            "RESPOSTA buy_digital_spot_v2 | %s | %s",
+            ativo, resposta
+        )
+
+        ok = False
+        order_id = None
+
+        if isinstance(resposta, (tuple, list)):
+            if len(resposta) >= 1:
+                ok = bool(resposta[0])
+            if len(resposta) >= 2:
+                order_id = resposta[1]
+        elif isinstance(resposta, int) and not isinstance(resposta, bool):
+            ok = resposta > 0
+            order_id = resposta
+
+        if ok and order_id:
             with estado_lock:
                 stats["ordens_aceitas"] += 1
                 estado_frentes[banca]["ordens_aceitas"] += 1
-            log.info("ORDEM ACEITA | banca=%s | ativo=%s | order_id=%s | conta=PRACTICE",
-                     banca, envio["ativo"], resultado)
-        else:
-            with estado_lock:
-                stats["ordens_recusadas"] += 1
-                estado_frentes[banca]["ordens_recusadas"] += 1
-            log.warning("ORDEM RECUSADA | banca=%s | ativo=%s | motivo=%s",
-                        banca, envio["ativo"], resultado)
-            bloquear(envio["ativo"], envio["expiracao"], resultado)
-    return ok, resultado
 
+            log.info(
+                "ORDEM DIGITAL ACEITA | V2 | %s | ID=%s",
+                ativo, order_id
+            )
+            return (True, order_id)
 
-def _preparar_envio_v2(cliente, ativo, valor, direcao, expiracao):
-    baixo = getattr(cliente, "api", None)
-    # Protocolo v2 verificado no SDK. Acesso direto evita o while/pass sem
-    # timeout de buy_digital_spot_v2; não muda produto nem reenvia a ordem.
-    if isinstance(getattr(baixo, "digital_option_placed_id", None), dict):
-        mapa = cliente.get_all_ACTIVES_OPCODE()
-        if not isinstance(mapa, dict) or ativo not in mapa:
-            return None, "ativo_sem_id_confirmado"
-        timestamp = float(baixo.timesync.server_timestamp)
-        if not math.isfinite(timestamp) or abs(timestamp - time.time()) > 120:
-            return None, "relogio_da_sessao_desatualizado"
-        periodo = expiracao * 60
-        vencimento = (int(timestamp) // periodo + 1) * periodo
-        if vencimento - timestamp <= 30:
-            vencimento += periodo
-        data = datetime.fromtimestamp(vencimento, timezone.utc).strftime("%Y%m%d%H%M")
-        ativo_id = str(mapa[ativo])
-        instrumento = ("do" + ativo_id + "A" + data[:8] + "D" + data[8:] +
-                       "00T" + str(expiracao) + "M" + ("C" if direcao == "call" else "P") + "SPT")
-        log.info("INSTRUMENTO DIGITAL V2 | ativo=%s | expiracao=%s | vencimento_utc=%s",
-                 ativo, expiracao, datetime.fromtimestamp(vencimento, timezone.utc).isoformat())
-        return {"modo": "raw_v2", "funcao": lambda: baixo.place_digital_option_v2(
-                    instrumento, ativo_id, valor), "request_id": None,
-                 "request_ids_anteriores": frozenset(baixo.digital_option_placed_id)}, None
-    metodo = getattr(cliente, "buy_digital_spot_v2", None)
-    if not callable(metodo):
-        return None, "biblioteca_sem_buy_digital_spot_v2"
-    # Compatibilidade com versões sem o canal v2 público: worker single-flight.
-    return {"modo": "wrapper_v2", "funcao": lambda: metodo(ativo, valor, direcao, expiracao)}, None
+        recusa_confirmada = (
+            isinstance(resposta, (tuple, list)) and len(resposta) >= 1
+            and resposta[0] is False
+        ) or (isinstance(resposta, int) and not isinstance(resposta, bool) and resposta <= 0)
+        if not recusa_confirmada:
+            return (None, "resposta_de_envio_sem_confirmacao")
 
+        motivo = str(order_id if order_id is not None else resposta)
 
-def executar_ordem(banca, ativo, valor, direcao, expiracao):
-    def recusar(motivo):
-        log.warning("ORDEM NAO ENVIADA | banca=%s | ativo=%s | motivo=%s", banca, ativo, motivo)
-        return False, motivo
-    with _envios_digitais_lock:
-        pendente = banca in _envios_digitais
-    if pendente:
-        return consultar_confirmacao_envio(banca)
-    if not EXECUTAR_ORDENS:
-        return recusar("EXECUTAR_ORDENS=false")
-    try:
-        ativo = str(ativo).strip().upper()
-        direcao = str(direcao).strip().lower()
-        valor = round(float(valor), 2)
-        expiracao = int(expiracao)
-    except (TypeError, ValueError, OverflowError):
-        return recusar("parametros_invalidos")
-    if not math.isfinite(valor):
-        return recusar("valor_ou_saldo_invalido")
-    if direcao not in ("call", "put"):
-        return recusar("direcao_invalida")
-    if expiracao not in (1, 5, 15):
-        return recusar("expiracao_digital_invalida")
-    if esta_bloqueado(ativo, expiracao):
-        return recusar("ativo_bloqueado")
-    if not garantir_practice():
-        return recusar("sem_conexao")
-    cliente = api
-    estado, saldo = chamada_api_limitada("balance", lambda: _saldo_practice_sincrono(cliente),
-                                         PRAZO_CONSULTA_API, cliente)
-    try:
-        saldo = float(saldo) if estado == "ok" and not isinstance(saldo, bool) else float("nan")
-    except (TypeError, ValueError, OverflowError):
-        saldo = float("nan")
-    if not math.isfinite(saldo) or saldo < 0:
-        return recusar("saldo_indisponivel")
-    if valor > saldo or valor < ENTRADA_MINIMA:
-        return recusar("saldo_insuficiente")
-    try:
-        disponibilidade = ativo_digital_disponivel(ativo)
-    except Exception as erro:
-        log.warning("DISPONIBILIDADE DIGITAL INDISPONIVEL | tipo=%s", type(erro).__name__)
-        return recusar("disponibilidade_digital_nao_confirmada")
-    if disponibilidade is False:
-        bloquear(ativo, expiracao, "instrumento digital fechado na IQ Option")
-        return recusar("instrumento_digital_fechado")
-    if disponibilidade is not True:
-        return recusar("disponibilidade_digital_nao_confirmada")
-    try:
-        payout = obter_payout_digital(ativo, expiracao)
-    except Exception as erro:
-        log.warning("PAYOUT DIGITAL INDISPONIVEL | tipo=%s", type(erro).__name__)
-        return recusar("payout_digital_nao_confirmado")
-    if payout is None:
-        return recusar("payout_digital_nao_confirmado")
-    if payout <= 0:
-        return recusar("payout_digital_indisponivel")
-    try:
-        envio, motivo = _preparar_envio_v2(cliente, ativo, valor, direcao, expiracao)
-    except Exception as erro:
-        log.warning("PREFLIGHT DIGITAL FALHOU | tipo=%s", type(erro).__name__)
-        return recusar("instrumento_ou_sessao_invalido")
-    if envio is None:
-        return recusar(motivo)
-    funcao_envio = envio["funcao"]
-    def invocar_envio():
-        log.info("ORDEM ENVIADA | banca=%s | ativo=%s | direcao=%s | expiracao=%s | valor=%.2f | payout=%.2f | conta=PRACTICE",
-                 banca, ativo, direcao, expiracao, valor, payout)
-        return funcao_envio()
-    envio.update(cliente=cliente, ativo=ativo, expiracao=expiracao, chave="envio_v2:" + banca,
-                 funcao=lambda: _enviar_na_sessao_practice(cliente, invocar_envio))
-    # Reconfirmar o modo após consultas e imediatamente antes da única chamada.
-    if not garantir_practice():
-        return recusar("practice_nao_confirmada_antes_do_envio")
-    with _envios_digitais_lock:
-        _envios_digitais[banca] = envio
-    estado, resposta = chamada_api_limitada(envio["chave"], envio["funcao"],
-                                           PRAZO_ENVIO_DIGITAL, envio["cliente"])
-    if estado == "erro" and resposta == "_EnvioNaoRealizado":
-        with _envios_digitais_lock:
-            _envios_digitais.pop(banca, None)
-        return recusar("practice_ou_sessao_alterada_antes_do_envio")
-    if estado == "ok":
-        if envio["modo"] == "raw_v2":
-            if not isinstance(resposta, (str, int)) or isinstance(resposta, bool):
-                envio["falha_envio"] = True
-                return None, "request_id_nao_confirmado"
-            envio["request_id"] = resposta
-        else:
-            # A consulta terminal compartilha o normalizador e o bookkeeping.
-            envio["resposta_terminal"] = resposta
-            ok, resultado = consultar_confirmacao_envio(banca)
-            if ok is None:
-                log.error("ORDEM INDETERMINADA | banca=%s | motivo=%s | nao_reenviar=sim", banca, resultado)
-            return ok, resultado
-        inicio = time.monotonic()
-        while time.monotonic() - inicio < PRAZO_ENVIO_DIGITAL:
-            ok, resultado = consultar_confirmacao_envio(banca)
-            if ok is not None:
-                return ok, resultado
-            time.sleep(0.1)
-    if estado == "erro":
-        envio["falha_envio"] = True
-    log.error("ORDEM INDETERMINADA | banca=%s | ativo=%s | estado=%s | nao_reenviar=sim",
-              banca, ativo, estado)
-    return None, "envio_v2_sem_confirmacao"
+    except Exception as e:
+        motivo = str(e)
+        log.exception(
+            "ERRO buy_digital_spot_v2 | %s | %s",
+            ativo, e
+        )
+        return (None, "excecao_no_envio_sem_confirmacao")
+
+    with estado_lock:
+        stats["ordens_recusadas"] += 1
+        estado_frentes[banca]["ordens_recusadas"] += 1
+
+    bloquear(ativo, expiracao, motivo)
+    return (False, motivo)
 
 
 # ============================================================
 # RESULTADO DIGITAL
 # ============================================================
 
-def _ler_resultado_digital(cliente, order_id):
-    baixo = getattr(cliente, "api", None)
-    if isinstance(getattr(baixo, "order_async", None), dict):
-        dados = baixo.order_async.get(order_id, {}).get("position-changed", {}).get("msg")
-        if not isinstance(dados, dict) or dados.get("status") != "closed":
-            return False, None
-        if dados.get("close_reason") == "expired":
-            try:
-                if isinstance(dados["close_profit"], bool) or isinstance(dados["invest"], bool):
-                    return False, None
-                return True, float(dados["close_profit"]) - float(dados["invest"])
-            except (KeyError, TypeError, ValueError):
-                return False, None
-        if dados.get("close_reason") == "default":
-            return True, dados.get("pnl_realized")
-        return False, None
-    estado, resposta = chamada_api_limitada("resultado:" + str(order_id),
-        lambda: cliente.check_win_digital_v2(order_id), PRAZO_CONSULTA_API, cliente)
-    return resposta if estado == "ok" else (False, None)
+def aguardar_resultado(
+    order_id
+):
 
+    inicio = time.time()
 
-def aguardar_resultado(order_id):
-    inicio = time.monotonic()
-    while time.monotonic() - inicio < PRAZO_RESULTADO_DIGITAL:
+    while (
+        time.time() - inicio
+        < 900
+    ):
+
         try:
+
             if not garantir_conexao():
+
                 time.sleep(2)
                 continue
-            cliente_original = _clientes_por_ordem.get(order_id)
-            resposta = _ler_resultado_digital(cliente_original or api, order_id)
-            fechado = isinstance(resposta, (tuple, list)) and len(resposta) >= 2 and resposta[0] is True
-            if not fechado and cliente_original is not None and cliente_original is not api:
-                resposta = _ler_resultado_digital(api, order_id)
-            if isinstance(resposta, (tuple, list)) and len(resposta) >= 2 and resposta[0] is True:
-                if isinstance(resposta[1], bool):
-                    raise ValueError("resultado booleano")
-                lucro = float(resposta[1])
-                if not math.isfinite(lucro):
-                    raise ValueError("resultado nao finito")
-                resultado = "win" if lucro > 0 else "loss" if lucro < 0 else "draw"
-                log.info("RESULTADO %s | order_id=%s | lucro=%.2f | fonte=IQ_OPTION",
-                         resultado.upper(), order_id, lucro)
-                _clientes_por_ordem.pop(order_id, None)
-                return resultado, lucro
-        except Exception as erro:
-            log.warning("RESULTADO AINDA NAO CONFIRMADO | order_id=%s | tipo=%s",
-                         order_id, type(erro).__name__)
+
+            with api_lock:
+
+                resposta = (
+                    api.check_win_digital_v2(
+                        order_id
+                    )
+                )
+
+            if (
+                isinstance(
+                    resposta,
+                    (tuple, list)
+                )
+                and len(resposta) >= 2
+            ):
+
+                fechado = resposta[0]
+                valor = resposta[1]
+
+                if fechado:
+
+                    try:
+
+                        lucro = float(
+                            valor
+                        )
+
+                    except (TypeError, ValueError):
+                        log.warning("RESULTADO FINANCEIRO INVÁLIDO | aguardando confirmação da mesma ordem")
+                        time.sleep(1)
+                        continue
+
+                    if not math.isfinite(lucro):
+                        log.warning("RESULTADO FINANCEIRO NÃO FINITO | aguardando confirmação da mesma ordem")
+                        time.sleep(1)
+                        continue
+
+                    if lucro > 0:
+
+                        return (
+                            "win",
+                            lucro
+                        )
+
+                    if lucro < 0:
+
+                        return (
+                            "loss",
+                            lucro
+                        )
+
+                    return (
+                        "draw",
+                        0
+                    )
+
+        except Exception as e:
+
+            log.debug(
+                "CHECK RESULTADO | %s",
+                e
+            )
+
         time.sleep(1)
-    log.warning("RESULTADO PENDENTE | order_id=%s | prazo_esgotado_sem_liquidacao", order_id)
-    return "timeout", 0
+
+    return (
+        "timeout",
+        0
+    )
 
 
 # ============================================================
@@ -1844,13 +1580,10 @@ def prejuizo_global_atual():
         return max(0, -resultado_global_centavos) / 100
 
 
-def calcular_entrada_recuperacao(prejuizo, saldo=None, payout=None):
-    """Base percentual + alvo de 100% da dívida ao payout informado."""
+def calcular_entrada_recuperacao(prejuizo, saldo=None):
+    """Base percentual + alvo de 100% da dívida ao payout configurado."""
     alvo = max(Decimal("0"), Decimal(str(prejuizo)))
-    taxa_payout = Decimal(str(PAYOUT_RECUPERACAO if payout is None else payout))
-    if not taxa_payout.is_finite() or taxa_payout <= 0:
-        raise ValueError("Payout de recuperação inválido")
-    adicional = (alvo / taxa_payout).quantize(
+    adicional = (alvo / Decimal(str(PAYOUT_RECUPERACAO))).quantize(
         Decimal("0.01"), rounding=ROUND_UP)
     return float(Decimal(str(obter_entrada_base(saldo))) + adicional)
 
@@ -1899,46 +1632,24 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
         with estado_lock:
             contexto = operacoes_ativas.get(banca)
             if envio_indeterminado:
-                log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=envio_indeterminado | reconciliar com a corretora", banca, ativo)
                 return False, "gestao_pausada_envio_indeterminado", contexto
             if any(o["banca"] == banca for o in ordens_pendentes.values()):
-                log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=ordem_ja_pendente", banca, ativo)
                 return False, "ordem_ja_pendente", contexto
             if (nivel == 0 and contexto is not None) or (nivel > 0 and contexto is None):
-                log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=operacao_incompativel", banca, ativo)
                 return False, "operacao_incompativel", contexto
             if nivel > 0 and (nivel != contexto["ultimo_nivel"] + 1 or nivel > contexto["gales"]):
-                log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=nivel_invalido | nivel=%s", banca, ativo, nivel)
                 return False, "nivel_invalido", contexto
 
         if not garantir_practice():
-            log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=sem_conexao_practice", banca, ativo)
             return False, "sem_conexao_practice", contexto
         try:
-            saldo = float(obter_saldo_atual())
+            with api_lock:
+                saldo = float(api.get_balance())
             if not math.isfinite(saldo) or saldo < 0:
                 raise ValueError("saldo inválido")
         except Exception:
             log.warning("SALDO PRACTICE INDISPONÍVEL | %s", banca)
             return False, "saldo_indisponivel", contexto
-
-        # A consulta pode bloquear até seu prazo; nunca segurar estado_lock
-        # durante I/O. O ledger é relido abaixo antes de reservar a dívida.
-        with estado_lock:
-            consultar_payout = nivel == 0 and recuperacao_em_curso is None and resultado_global_centavos < 0
-        payout_real = None
-        payout_efetivo = None
-        if consultar_payout:
-            try:
-                resposta_payout = obter_payout_digital(ativo, expiracao)
-                if isinstance(resposta_payout, bool):
-                    raise ValueError("payout booleano")
-                payout_real = float(resposta_payout)
-                if not math.isfinite(payout_real) or not 0 < payout_real <= 1:
-                    raise ValueError("payout inválido")
-                payout_efetivo = min(PAYOUT_RECUPERACAO, payout_real)
-            except Exception:
-                payout_real = None
 
         with estado_lock:
             ultimo_saldo_practice = saldo
@@ -1946,130 +1657,59 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 assertividade_atual = taxa_ponderada(stats["wins"], stats["losses"])
                 posicao = gales_por_assertividade(assertividade_atual)
                 alvo = max(0, -resultado_global_centavos) / 100 if recuperacao_em_curso is None else 0.0
-                if alvo > 0 and payout_efetivo is None:
-                    log.warning("RECUPERACAO ADIADA | banca=%s | ativo=%s | motivo=payout_nao_confirmado | prejuizo=%.2f | divida_preservada=true", banca, ativo, alvo)
-                    alvo = 0.0
                 contexto = {"posicao": posicao, "numero": entradas_globais_aceitas + 1,
                             "gales": posicao, "assertividade_global": assertividade_atual,
                             "base": obter_entrada_base(saldo),
-                            "entrada": calcular_entrada_recuperacao(alvo, saldo, payout_efetivo),
+                            "entrada": calcular_entrada_recuperacao(alvo, saldo),
                             "prejuizo_alocado": alvo, "resultado_centavos": 0,
-                            "payout_recuperacao": payout_efetivo if alvo > 0 else None,
-                            "payout_real": payout_real,
                             "primeira_ordem": None, "ultimo_nivel": -1, "ativo": ativo}
             valor = valores_do_ciclo(contexto["entrada"], nivel)[nivel]
             # Conservador enquanto a atualização de saldo da corretora pode estar atrasada.
             comprometido = sum(o["valor"] for o in ordens_pendentes.values())
             disponivel = saldo - comprometido - sum(reservas_pendentes.values())
-            if nivel == 0 and contexto["prejuizo_alocado"] > 0 and valor > disponivel:
-                # O alvo continua sendo 100% da dívida. Não alocar uma recuperação
-                # que não cabe permite aos sinais normais continuarem pela base;
-                # somente resultados confirmados podem reduzir o ledger.
-                log.warning("RECUPERACAO ADIADA | banca=%s | ativo=%s | motivo=saldo_insuficiente_para_recuperacao_integral | prejuizo=%.2f | entrada_recuperacao=%.2f | disponivel=%.2f | entrada_normal=%.2f | divida_preservada=true",
-                            banca, ativo, contexto["prejuizo_alocado"], valor, disponivel, contexto["base"])
-                contexto["entrada"] = contexto["base"]
-                contexto["prejuizo_alocado"] = 0.0
-                contexto["payout_recuperacao"] = None
-                valor = contexto["base"]
             if valor > disponivel or valor < ENTRADA_MINIMA:
-                log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=saldo_insuficiente | nivel=%s | valor=%.2f | saldo=%.2f | comprometido=%.2f | disponivel=%.2f", banca, ativo, nivel, valor, saldo, comprometido, disponivel)
+                log.warning("SALDO INSUFICIENTE | %s | valor=%.2f disponível=%.2f", banca, valor, disponivel)
                 return False, "saldo_insuficiente", operacoes_ativas.get(banca)
             if nivel == 0 and contexto["prejuizo_alocado"] > 0:
                 recuperacao_em_curso = banca
-                log.info("RECUPERACAO DIMENSIONADA | banca=%s | ativo=%s | prejuizo=%.2f | entrada=%.2f | payout_real=%.4f | payout_recuperacao=%.4f | alvo=100%% | conta=PRACTICE", banca, ativo, contexto["prejuizo_alocado"], valor, contexto["payout_real"], contexto["payout_recuperacao"])
             reservas_pendentes[banca] = valor
-            log.info("SALDO RESERVADO | banca=%s | ativo=%s | nivel=%s | valor=%.2f | saldo=%.2f | disponivel=%.2f | recuperacao=%.2f | conta=PRACTICE", banca, ativo, nivel, valor, saldo, disponivel, contexto["prejuizo_alocado"])
 
         try:
             ok, order_id = executar_ordem(banca, ativo, valor, direcao, expiracao)
         except Exception as erro:
-            ok, order_id = None, type(erro).__name__
+            ok, order_id = None, str(erro)
 
         with estado_lock:
             if ok is None:
                 # Reserva financeira e lease permanecem enquanto o envio é incerto.
                 marcar_envio_indeterminado(banca, ativo, nivel, valor, order_id)
-                envio_indeterminado["contexto"] = dict(contexto)
                 return None, order_id, contexto
             if not ok:
                 reservas_pendentes.pop(banca, None)
                 if nivel == 0 and recuperacao_em_curso == banca:
                     recuperacao_em_curso = None
-                log.warning("RESERVA LIBERADA | banca=%s | ativo=%s | nivel=%s | motivo=ordem_nao_aceita", banca, ativo, nivel)
                 return False, order_id, operacoes_ativas.get(banca)
-            return confirmar_ordem_gerida(banca, ativo, nivel, valor, order_id, contexto)
-
-
-def confirmar_ordem_gerida(banca, ativo, nivel, valor, order_id, contexto):
-    """Confirmação imediata ou tardia compartilha a mesma transição contábil."""
-    global entradas_globais_aceitas
-    with estado_lock:
-        if not isinstance(order_id, (int, str)) or isinstance(order_id, bool) or not order_id or order_id in ordens_pendentes or order_id in ordens_liquidadas:
-            marcar_envio_indeterminado(banca, ativo, nivel, valor, "identificador de ordem inválido ou repetido")
-            return None, "order_id_invalido_ou_repetido", contexto
-        reservas_pendentes.pop(banca, None)
-        if nivel == 0:
-            entradas_globais_aceitas += 1
-            contexto["primeira_ordem"] = order_id
-            operacoes_ativas[banca] = contexto
-            dados = estado_frentes[banca]
-            dados["entradas_janela"] += 1
-            if dados["entradas_janela"] >= 100:
-                dados["wins_base_janela"] = dados["wins"]
-                dados["losses_base_janela"] = dados["losses"]
-                dados["entradas_janela"] = 0
-        contexto["ultimo_nivel"] = nivel
-        ordens_pendentes[order_id] = {"banca": banca, "valor": valor, "nivel": nivel}
-        estado_frentes[banca].update(order_id=order_id, entrada_atual=contexto["entrada"],
-                                     gales_reativos=contexto["gales"],
-                                     ciclo_gestao=contexto["numero"],
-                                     em_recuperacao=contexto["prejuizo_alocado"] > 0)
-        return True, order_id, dict(contexto)
-
-
-def reconciliar_envio_gerido(banca):
-    """Consulta a requisição original; timeout nunca libera uma ordem incerta."""
-    global envio_indeterminado, recuperacao_em_curso
-    with contador_entrada_lock:
-        with estado_lock:
-            pendente = envio_indeterminado
-            if not pendente or pendente["banca"] != banca:
-                return False, "sem_envio_indeterminado", operacoes_ativas.get(banca)
-            contexto = operacoes_ativas.get(banca) if pendente["nivel"] > 0 else pendente.get("contexto")
-            if contexto is None:
-                return None, "reconciliacao_manual_necessaria", None
-        try:
-            ok, resposta = consultar_confirmacao_envio(banca)
-        except Exception as erro:
-            log.warning("CONFIRMACAO PENDENTE | banca=%s | motivo=%s", banca, type(erro).__name__)
-            return None, "confirmacao_indisponivel", contexto
-        with estado_lock:
-            if ok is None:
-                return None, resposta, contexto
-            if ok:
-                confirmado = confirmar_ordem_gerida(banca, pendente["ativo"], pendente["nivel"],
-                                                    pendente["valor"], resposta, contexto)
-                if confirmado[0] is not True:
-                    return confirmado
-                log.info("ORDEM ACEITA TARDIA | banca=%s | ativo=%s | order_id=%s | conta=PRACTICE", banca, pendente["ativo"], resposta)
-            else:
-                reservas_pendentes.pop(banca, None)
-                if pendente["nivel"] == 0 and recuperacao_em_curso == banca:
-                    recuperacao_em_curso = None
-                confirmado = (False, resposta, operacoes_ativas.get(banca))
-                log.warning("ORDEM RECUSADA TARDIA | banca=%s | ativo=%s | reserva_liberada=true | conta=PRACTICE", banca, pendente["ativo"])
-            envio_indeterminado = None
-            estado_frentes[banca]["envio_indeterminado"] = False
-            return confirmado
-
-
-def aguardar_confirmacao_envio_gerido(banca):
-    while True:
-        ok, resposta, contexto = reconciliar_envio_gerido(banca)
-        if ok is not None:
-            return ok, resposta, contexto
-        log.warning("CONFIRMACAO PENDENTE | banca=%s | reserva_mantida=true | mesmo_envio=true", banca)
-        time.sleep(5)
+            if not isinstance(order_id, (int, str)) or isinstance(order_id, bool) or not order_id or order_id in ordens_pendentes or order_id in ordens_liquidadas:
+                marcar_envio_indeterminado(banca, ativo, nivel, valor, "identificador de ordem inválido ou repetido")
+                return None, "order_id_invalido_ou_repetido", contexto
+            reservas_pendentes.pop(banca, None)
+            if nivel == 0:
+                entradas_globais_aceitas += 1
+                contexto["primeira_ordem"] = order_id
+                operacoes_ativas[banca] = contexto
+                dados = estado_frentes[banca]
+                dados["entradas_janela"] += 1
+                if dados["entradas_janela"] >= 100:
+                    dados["wins_base_janela"] = dados["wins"]
+                    dados["losses_base_janela"] = dados["losses"]
+                    dados["entradas_janela"] = 0
+            contexto["ultimo_nivel"] = nivel
+            ordens_pendentes[order_id] = {"banca": banca, "valor": valor, "nivel": nivel}
+            estado_frentes[banca].update(order_id=order_id, entrada_atual=contexto["entrada"],
+                                         gales_reativos=contexto["gales"],
+                                         ciclo_gestao=contexto["numero"],
+                                         em_recuperacao=contexto["prejuizo_alocado"] > 0)
+            return True, order_id, dict(contexto)
 
 
 def registrar_resultado_ordem(order_id, resultado, lucro):
@@ -2107,7 +1747,6 @@ def finalizar_operacao_global(banca):
         if recuperacao_em_curso == banca:
             recuperacao_em_curso = None
         estado_frentes[banca]["em_recuperacao"] = False
-        log.info("OPERACAO CONCILIADA | banca=%s | primeira_ordem=%s | resultado_liquido=%.2f | resultado_global=%.2f | prejuizo_global=%.2f", banca, contexto["primeira_ordem"], contexto["resultado_centavos"] / 100, resultado_global_centavos / 100, max(0, -resultado_global_centavos) / 100)
         return snapshot_gestao_global()
 
 
@@ -2135,8 +1774,8 @@ def aguardar_resultado_confirmado(order_id):
                         (resultado == "draw" and valor == 0)):
                     return resultado, valor / 100
         except Exception as erro:
-            log.warning("RESULTADO PENDENTE | order_id=%s | motivo=%s | reconciliando_mesma_ordem=true", order_id, type(erro).__name__)
-        log.warning("ORDEM SEM RESULTADO CONFIRMADO | order_id=%s | banca e ativo mantidos reservados; outras bancas podem executar sinais normais", order_id)
+            log.warning("RESULTADO PENDENTE | reconciliação da mesma ordem | %s", erro)
+        log.warning("ORDEM SEM RESULTADO CONFIRMADO | banca e ativo mantidos reservados")
         time.sleep(5)
 
 
@@ -2150,8 +1789,6 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         dados["ciclo_em_execucao"] = True
     try:
         ok, order_id, contexto = enviar_ordem_gerida(banca, ativo, direcao, expiracao)
-        if ok is None:
-            ok, order_id, contexto = aguardar_confirmacao_envio_gerido(banca)
         if not ok:
             return
         gales = contexto["gales"]
@@ -2181,16 +1818,14 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         for nivel in range(gales + 1):
             if nivel > 0:
                 ok, order_id, _ = enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel)
-                if ok is None:
-                    ok, order_id, _ = aguardar_confirmacao_envio_gerido(banca)
                 if not ok:
                     log.warning("CICLO INTERROMPIDO | %s | %s", banca, order_id)
                     return
             resultado, lucro = aguardar_resultado_confirmado(order_id)
             if not registrar_resultado_ordem(order_id, resultado, lucro):
                 return
-            log.info("RESULTADO %s | banca=%s | ativo=%s | order_id=%s | M%s | nivel=%s | lucro=%.2f | conta=PRACTICE",
-                     resultado.upper(), banca, ativo, order_id, timeframe_analise, nivel, lucro)
+            log.info("RESULTADO | %s | %s | M%s | nivel=%s | %s | %.2f",
+                     banca, ativo, timeframe_analise, nivel, resultado, lucro)
             if resultado == "loss" and nivel < gales:
                 time.sleep(1)
                 continue
@@ -2228,8 +1863,6 @@ def reservar_banca(ativo, direcao, score, timeframe, expiracao):
     ativo = str(ativo).strip().upper()
     with estado_lock:
         if envio_indeterminado or ativo in ativos_em_uso:
-            motivo = "envio_indeterminado" if envio_indeterminado else "ativo_em_uso"
-            log.warning("SINAL SEM RESERVA | ativo=%s | M%s | motivo=%s", ativo, timeframe, motivo)
             return None
         for banca in BANCAS:
             dados = estado_frentes[banca]
@@ -2239,23 +1872,16 @@ def reservar_banca(ativo, direcao, score, timeframe, expiracao):
                           "score": score, "timeframe": timeframe, "expiracao": expiracao})
             ativos_em_uso.add(ativo)
             return banca
-        log.warning("SINAL SEM RESERVA | ativo=%s | M%s | motivo=sem_banca_livre", ativo, timeframe)
     return None
 
 def disparar_sinal(ativo, direcao, score, timeframe, expiracao):
     ativo = str(ativo).strip().upper()
-    log.info("SINAL APROVADO | ativo=%s | direcao=%s | M%s | expiracao=%s | score=%s", ativo, direcao, timeframe, expiracao, score)
     banca = reservar_banca(ativo, direcao, score, timeframe, expiracao)
     if banca is None:
         return False
-    log.info("SINAL APROVADO E DISTRIBUÍDO | banca=%s | ativo=%s | direcao=%s | M%s | expiracao=%s | reserva_banca=true", banca, ativo, direcao, timeframe, expiracao)
-    try:
-        threading.Thread(target=ciclo, args=(banca, ativo, direcao, score, timeframe, expiracao),
-                         daemon=True, name=f"operacao-{banca}-M{timeframe}-{ativo}").start()
-    except Exception as erro:
-        liberar_banca(banca, ativo)
-        log.error("SINAL NAO INICIADO | banca=%s | ativo=%s | motivo=falha_thread | tipo=%s", banca, ativo, type(erro).__name__)
-        return False
+    log.info("SINAL RESERVADO | %s | %s | %s | M%s", banca, ativo, direcao, timeframe)
+    threading.Thread(target=ciclo, args=(banca, ativo, direcao, score, timeframe, expiracao),
+                     daemon=True, name=f"operacao-{banca}-M{timeframe}-{ativo}").start()
     return True
 
 # ============================================================
@@ -2290,9 +1916,6 @@ def scanner_timeframe(
 
         try:
 
-            with scanner_threads_lock:
-                scanner_atividade[timeframe] = time.monotonic()
-
             if not garantir_conexao():
 
                 time.sleep(10)
@@ -2307,9 +1930,6 @@ def scanner_timeframe(
             )
 
             for ativo in listar_ativos_otc():
-
-                with scanner_threads_lock:
-                    scanner_atividade[timeframe] = time.monotonic()
 
                 with estado_lock:
 
@@ -2372,7 +1992,7 @@ def scanner_timeframe(
                         ]
                     )
 
-                    disparar_sinal(
+                    reservado = disparar_sinal(
                         ativo,
                         resultado[
                             "direcao"
@@ -2384,6 +2004,17 @@ def scanner_timeframe(
                         expiracao
                     )
 
+                    if reservado:
+
+                        log.info(
+                            "SINAL APROVADO E "
+                            "DISTRIBUÍDO | "
+                            "%s | M%s",
+
+                            ativo,
+                            timeframe
+                        )
+
                 time.sleep(
                     INTERVALO_ENTRE_ATIVOS
                 )
@@ -2394,10 +2025,10 @@ def scanner_timeframe(
 
         except Exception as e:
 
-            log.error(
+            log.exception(
                 "SCANNER M%s ERRO | %s",
                 timeframe,
-                type(e).__name__
+                e
             )
 
             time.sleep(5)
@@ -2408,7 +2039,6 @@ def scanner_timeframe(
 # ============================================================
 
 scanner_threads = {}
-scanner_atividade = {}
 
 scanner_threads_lock = (
     threading.RLock()
@@ -2448,7 +2078,6 @@ def iniciar_scanner(
         scanner_threads[
             timeframe
         ] = thread
-        scanner_atividade.setdefault(timeframe, time.monotonic())
 
     log.info(
         "SCANNER M%s CRIADO | %s",
@@ -2465,27 +2094,15 @@ def supervisor():
         "SUPERVISOR V10 INICIADO"
     )
 
-    ultimo_alerta = {}
-    ultima_telemetria = None
     while True:
 
         try:
-            instante = time.monotonic()
-            if ultima_telemetria is None or instante - ultima_telemetria >= 60:
-                with estado_lock:
-                    log.info("ESTADO EXECUCAO | conta=PRACTICE | habilitada=%s | aceitas=%s | recusadas=%s | wins=%s | losses=%s | pendentes=%s | envio_indeterminado=%s | prejuizo_global=%.2f | recuperacao_banca=%s",
-                             EXECUTAR_ORDENS, stats["ordens_aceitas"], stats["ordens_recusadas"],
-                             stats["wins"], stats["losses"], len(ordens_pendentes),
-                             envio_indeterminado is not None, max(0, -resultado_global_centavos) / 100,
-                             recuperacao_em_curso)
-                ultima_telemetria = instante
 
             with scanner_threads_lock:
 
                 snapshot = dict(
                     scanner_threads
                 )
-                atividade = dict(scanner_atividade)
 
             for timeframe in TIMEFRAMES:
 
@@ -2508,24 +2125,14 @@ def supervisor():
                         timeframe,
                         0
                     )
-                else:
-                    agora = time.monotonic()
-                    atraso = agora - atividade.get(timeframe, agora)
-                    limite = max(120, INTERVALO_ANALISE * 3)
-                    if atraso > limite and agora - ultimo_alerta.get(timeframe, 0) >= 60:
-                        # Thread viva não é prova de progresso. Não cria outra
-                        # varredura concorrente sobre a sessão ainda ocupada.
-                        log.error("SCANNER SEM PROGRESSO | M%s | segundos=%.0f | thread_viva=true",
-                                  timeframe, atraso)
-                        ultimo_alerta[timeframe] = agora
 
             time.sleep(15)
 
         except Exception as e:
 
-            log.error(
+            log.exception(
                 "SUPERVISOR ERRO | %s",
-                type(e).__name__
+                e
             )
 
             time.sleep(5)
@@ -2755,13 +2362,6 @@ def monitor_practice():
 @app.route("/health")
 def health():
 
-    with estado_lock:
-        estatisticas = dict(stats)
-    with scanner_threads_lock:
-        instante = time.monotonic()
-        scanners = {str(tf): {"thread_viva": thread.is_alive(),
-                             "segundos_sem_progresso": round(max(0, instante - scanner_atividade.get(tf, instante)), 1)}
-                    for tf, thread in scanner_threads.items()}
     return jsonify({
 
         "status":
@@ -2777,9 +2377,6 @@ def health():
             "DIGITAL",
 
         **snapshot_gestao_global(),
-        "estatisticas_ordens": estatisticas,
-        "scanners": scanners,
-        "persistencia": "memoria_volatil_reinicia_com_processo",
 
         "score_min":
             SCORE_MIN,
@@ -2851,7 +2448,7 @@ log.info(
 log.info(
     "GESTÃO | "
     "GALE X%s | "
-    "GALES POR ASSERTIVIDADE GLOBAL <50=4, 50-59=3, 60-69=2, 70-79=1, >=80=0; INICIAL=%s | "
+    "GALES GLOBAIS 0..9; INICIAL=%s | "
     "CICLOS ILIMITADOS | "
     "RECUPERAÇÃO %g%%",
 
@@ -2897,6 +2494,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
-
 
 

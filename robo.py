@@ -162,7 +162,6 @@ RECUPERACAO_PERCENTUAL = 1.0
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 
 QTD_BANCAS = 10
-PERCENTUAL_ENTRADA = 0.01
 
 # Entrada fixa por faixa de assertividade global (0 a 4 gales).
 # Configuravel no Render sem substituir outras variaveis.
@@ -192,14 +191,10 @@ def agora_brasil():
 # ============================================================
 
 def obter_entrada_base(saldo=None):
-    if saldo is None:
-        saldo = ultimo_saldo_practice or 0
-    valor = Decimal(str(saldo))
-    if not valor.is_finite():
-        raise ValueError("Saldo PRACTICE não finito")
-    return float(max(Decimal(str(ENTRADA_MINIMA)),
-                     valor * Decimal(str(PERCENTUAL_ENTRADA))).quantize(
-                         Decimal("0.01"), rounding=ROUND_HALF_UP))
+    """Valor fixo conforme a faixa global; não depende do saldo."""
+    with estado_lock:
+        percentual = taxa_ponderada(stats["wins"], stats["losses"])
+    return ENTRADAS_POR_GALE[gales_por_assertividade(percentual)]
 
 
 # ============================================================
@@ -542,7 +537,7 @@ def conectar():
             "🤖 ROBÔ IQ DIGITAL ONLINE\n"
             "🧪 CONTA: PRACTICE confirmada\n"
             f"💰 Saldo: {saldo:.2f}\n"
-            f"💵 Entrada-base: 1% do saldo PRACTICE, mínimo R${ENTRADA_MINIMA:.2f}; atual R${entrada:.2f}\n"
+            f"💵 Entrada-base fixa pela assertividade global: R${entrada:.2f}\n"
             f"🏦 {QTD_BANCAS} bancas; contador e prejuízo líquido globais\n"
             "⏱ M1 + M5 + M15\n📊 SOMENTE DIGITAL\n"
             f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
@@ -1856,7 +1851,7 @@ def prejuizo_global_atual():
 
 
 def calcular_entrada_recuperacao(prejuizo, saldo=None, payout=None):
-    """Base percentual + alvo de 100% da dívida ao payout informado."""
+    """Entrada fixa da faixa + alvo de 100% da dívida ao payout informado."""
     alvo = max(Decimal("0"), Decimal(str(prejuizo)))
     taxa_payout = Decimal(str(PAYOUT_RECUPERACAO if payout is None else payout))
     if not taxa_payout.is_finite() or taxa_payout <= 0:
@@ -1870,7 +1865,7 @@ def snapshot_gestao_global():
     with estado_lock:
         return {
             "entrada_base": obter_entrada_base(),
-            "entrada_percentual": PERCENTUAL_ENTRADA,
+            "entrada_percentual": None,
             "entrada_minima": ENTRADA_MINIMA,
             "saldo_practice_referencia": ultimo_saldo_practice,
             "resultado_liquido_global": resultado_global_centavos / 100,
@@ -1964,11 +1959,8 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 contexto = {"posicao": posicao, "numero": entradas_globais_aceitas + 1,
                             "gales": posicao, "assertividade_global": assertividade_atual,
                             "base": ENTRADAS_POR_GALE[posicao],
-                            "entrada": round(
-                                ENTRADAS_POR_GALE[posicao]
-                                + (calcular_entrada_recuperacao(alvo, saldo, payout_efetivo)
-                                   - obter_entrada_base(saldo)), 2
-                            ) if alvo > 0 else ENTRADAS_POR_GALE[posicao],
+                            "entrada": calcular_entrada_recuperacao(alvo, saldo, payout_efetivo)
+                            if alvo > 0 else ENTRADAS_POR_GALE[posicao],
                             "prejuizo_alocado": alvo, "resultado_centavos": 0,
                             "payout_recuperacao": payout_efetivo if alvo > 0 else None,
                             "payout_real": payout_real,
@@ -2860,7 +2852,7 @@ log.info(
 )
 
 log.info(
-    "ENTRADA BASE = 1%% do saldo PRACTICE; mínimo R$%.2f",
+    "ENTRADA BASE FIXA PELA ASSERTIVIDADE = R$%.2f",
     entrada_inicial
 )
 

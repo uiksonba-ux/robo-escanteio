@@ -164,6 +164,17 @@ PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 QTD_BANCAS = 10
 PERCENTUAL_ENTRADA = 0.01
 
+# Entrada fixa por faixa de assertividade global (0 a 4 gales).
+# Configuravel no Render sem substituir outras variaveis.
+ENTRADAS_POR_GALE = {
+    0: env_float("ENTRADA_FAIXA_0", 2.50, ENTRADA_MINIMA),
+    1: env_float("ENTRADA_FAIXA_1", 5.00, ENTRADA_MINIMA),
+    2: env_float("ENTRADA_FAIXA_2", 10.00, ENTRADA_MINIMA),
+    3: env_float("ENTRADA_FAIXA_3", 5.00, ENTRADA_MINIMA),
+    4: env_float("ENTRADA_FAIXA_4", 2.50, ENTRADA_MINIMA),
+}
+
+
 
 # ============================================================
 # HORÁRIO BRASIL
@@ -1869,6 +1880,7 @@ def snapshot_gestao_global():
             "assertividade_global": taxa_ponderada(stats["wins"], stats["losses"]),
             "gales_proximos": gales_por_assertividade(taxa_ponderada(stats["wins"], stats["losses"])),
             "sequencia_gales": [4, 3, 2, 1, 0],
+            "entradas_por_gale": dict(ENTRADAS_POR_GALE),
             "multiplicador_gale": MULTIPLICADOR_GALE,
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "payout_recuperacao": PAYOUT_RECUPERACAO,
@@ -1951,8 +1963,12 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                     alvo = 0.0
                 contexto = {"posicao": posicao, "numero": entradas_globais_aceitas + 1,
                             "gales": posicao, "assertividade_global": assertividade_atual,
-                            "base": obter_entrada_base(saldo),
-                            "entrada": calcular_entrada_recuperacao(alvo, saldo, payout_efetivo),
+                            "base": ENTRADAS_POR_GALE[posicao],
+                            "entrada": round(
+                                ENTRADAS_POR_GALE[posicao]
+                                + (calcular_entrada_recuperacao(alvo, saldo, payout_efetivo)
+                                   - obter_entrada_base(saldo)), 2
+                            ) if alvo > 0 else ENTRADAS_POR_GALE[posicao],
                             "prejuizo_alocado": alvo, "resultado_centavos": 0,
                             "payout_recuperacao": payout_efetivo if alvo > 0 else None,
                             "payout_real": payout_real,

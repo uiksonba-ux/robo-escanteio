@@ -404,7 +404,6 @@ _chamadas_api = {}
 _cliente_conectando = None
 _sessao_lock = threading.RLock()
 PRAZO_CONSULTA_API = 5.0
-PRAZO_DISPONIBILIDADE_DIGITAL = env_float("PRAZO_DISPONIBILIDADE_DIGITAL", 60.0, 5.0)
 PRAZO_ENVIO_DIGITAL = 10.0
 PRAZO_RESULTADO_DIGITAL = 900.0
 
@@ -1318,7 +1317,7 @@ def ativo_digital_disponivel(ativo):
     # get_all_open_time também espera binárias/forex e pode nunca retornar.
     # Consultamos somente o catálogo DIGITAL publicado pela própria corretora.
     estado, resposta = chamada_api_limitada("digital_underlying",
-        cliente.get_digital_underlying_list_data, PRAZO_DISPONIBILIDADE_DIGITAL, cliente)
+        cliente.get_digital_underlying_list_data, PRAZO_CONSULTA_API, cliente)
     if estado != "ok" or not isinstance(resposta, dict) or not isinstance(resposta.get("underlying"), list):
         log.warning("DISPONIBILIDADE DIGITAL NAO CONFIRMADA | estado=%s", estado)
         return None

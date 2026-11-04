@@ -1285,7 +1285,7 @@ def analisar(candles):
 # Consulta de disponibilidade em thread daemon: a biblioteca não oficial
 # pode bloquear nesta chamada. Cache impede consultas concorrentes repetidas.
 _disponibilidade_lock = threading.Lock()
-_disponibilidade_cache = {"dados": None, "ate": 0.0, "consultando": False}
+_disponibilidade_cache = {"dados": None, "ate": 0.0, "consultando": False, "tentar_apos": 0.0}
 
 def listar_ativos_otc():
     """Retorna todos os instrumentos digitais OTC abertos, de qualquer categoria.
@@ -1306,40 +1306,72 @@ def listar_ativos_otc():
     return list(ATIVOS)
 
 def ativo_digital_disponivel(ativo):
-    agora = time.monotonic()
+    """Confirma disponibilidade OTC somente com catálogo digital válido e recente."""
+    if not isinstance(ativo, str) or not ativo.upper().endswith("-OTC"):
+        return False
     cliente = api
+    if cliente is None:
+        return None
+    agora = time.time()
     with _disponibilidade_lock:
         dados = _disponibilidade_cache["dados"]
-        mesma_sessao = _disponibilidade_cache.get("sessao", id(cliente)) == id(cliente)
-        if mesma_sessao and dados is not None and time.time() < _disponibilidade_cache["ate"]:
+        mesma_sessao = _disponibilidade_cache.get("sessao") == id(cliente)
+        if mesma_sessao and dados is not None and agora < _disponibilidade_cache["ate"]:
             info = dados.get(ativo)
-            return info.get("open") if isinstance(info, dict) and isinstance(info.get("open"), bool) else False
-    # get_all_open_time também espera binárias/forex e pode nunca retornar.
-    # Consultamos somente o catálogo DIGITAL publicado pela própria corretora.
-    estado, resposta = chamada_api_limitada("digital_underlying",
-        cliente.get_digital_underlying_list_data, PRAZO_CONSULTA_API, cliente)
+            return info["open"] if isinstance(info, dict) and isinstance(info.get("open"), bool) else None
+        # Evita tempestade de consultas após timeout/resposta vazia.
+        if mesma_sessao and agora < _disponibilidade_cache.get("tentar_apos", 0):
+            return None
+        _disponibilidade_cache["sessao"] = id(cliente)
+
+    estado, resposta = chamada_api_limitada(
+        "digital_underlying", cliente.get_digital_underlying_list_data,
+        PRAZO_CONSULTA_API, cliente)
     if estado != "ok" or not isinstance(resposta, dict) or not isinstance(resposta.get("underlying"), list):
-        log.warning("DISPONIBILIDADE DIGITAL NAO CONFIRMADA | estado=%s", estado)
+        tipo = type(resposta).__name__
+        with _disponibilidade_lock:
+            if _disponibilidade_cache.get("sessao") == id(cliente):
+                _disponibilidade_cache["tentar_apos"] = time.time() + 5
+        log.warning("DISPONIBILIDADE DIGITAL NAO CONFIRMADA | estado=%s | resposta_tipo=%s | prazo=%.1fs",
+                    estado, tipo, PRAZO_CONSULTA_API)
         return None
+
     dados = {}
     agora_servidor = time.time()
     for instrumento in resposta["underlying"]:
-        if not isinstance(instrumento, dict) or not isinstance(instrumento.get("underlying"), str):
+        if not isinstance(instrumento, dict):
             continue
-        aberto = False
-        for horario in instrumento.get("schedule", []):
-            if isinstance(horario, dict):
-                inicio, fim = horario.get("open"), horario.get("close")
-                if isinstance(inicio, (int, float)) and isinstance(fim, (int, float)):
-                    aberto = aberto or inicio < agora_servidor < fim
-        dados[instrumento["underlying"]] = {"open": aberto}
+        nome = instrumento.get("underlying")
+        if not isinstance(nome, str) or not nome.upper().endswith("-OTC"):
+            continue
+        horarios = instrumento.get("schedule")
+        if not isinstance(horarios, list):
+            continue
+        intervalos_validos = [
+            (h.get("open"), h.get("close")) for h in horarios
+            if isinstance(h, dict)
+            and isinstance(h.get("open"), (int, float))
+            and isinstance(h.get("close"), (int, float))
+        ]
+        if not intervalos_validos:
+            continue
+        dados[nome] = {"open": any(inicio < agora_servidor < fim
+                                    for inicio, fim in intervalos_validos)}
+    if not dados:
+        with _disponibilidade_lock:
+            if _disponibilidade_cache.get("sessao") == id(cliente):
+                _disponibilidade_cache["tentar_apos"] = time.time() + 5
+        log.warning("DISPONIBILIDADE DIGITAL NAO CONFIRMADA | catalogo_otc_vazio_ou_invalido")
+        return None
     with _disponibilidade_lock:
-        _disponibilidade_cache.update(dados=dados, ate=time.time() + 30,
-                                      sessao=id(cliente), consultando=False)
-    log.info("DISPONIBILIDADE DIGITAL | instrumentos=%s | duracao_ms=%s",
-             len(dados), int((time.monotonic() - agora) * 1000))
+        if api is not cliente:
+            return None
+        _disponibilidade_cache.update(
+            dados=dados, ate=time.time() + 15,
+            sessao=id(cliente), consultando=False, tentar_apos=0)
+    log.info("DISPONIBILIDADE DIGITAL | instrumentos_otc=%s", len(dados))
     info = dados.get(ativo)
-    return info["open"] if info else False
+    return info["open"] if info else None
 
 
 _payout_cache = {}

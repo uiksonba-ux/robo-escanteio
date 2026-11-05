@@ -1,0 +1,40 @@
+name: Identificar conta Deriv DEMO (sem ordens)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/baskaraido-deriv-demo
+    paths:
+      - '.github/workflows/deriv-demo-discovery.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  identificar-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Baixar branch
+        uses: actions/checkout@v4
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Instalar requests
+        run: python -m pip install 'requests>=2.31,<3'
+      - name: Validar segredos configurados
+        env:
+          DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
+          DERIV_TOKEN: ${{ secrets.DERIV_TOKEN }}
+        run: |
+          if [ -z "$DERIV_APP_ID" ] || [ -z "$DERIV_TOKEN" ]; then
+            echo "::error::Configure DERIV_APP_ID e DERIV_TOKEN em Settings > Secrets and variables > Actions antes de executar."
+            exit 1
+          fi
+      - name: Consultar conta Options DEMO (somente leitura)
+        env:
+          DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
+          DERIV_TOKEN: ${{ secrets.DERIV_TOKEN }}
+        run: python deriv-demo/discover_demo_account.py

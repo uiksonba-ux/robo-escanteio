@@ -7,30 +7,46 @@ on:
       - feature/baskaraido-deriv-demo
     paths:
       - '.github/workflows/deriv-demo-discovery.yml'
+      - 'deriv-demo/**'
 
 permissions:
   contents: read
 
+concurrency:
+  group: deriv-demo-discovery-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   identificar-demo:
+    if: github.repository == 'uiksonba-ux/robo-escanteio' && github.ref == 'refs/heads/feature/baskaraido-deriv-demo'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Baixar branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - name: Configurar Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
       - name: Instalar requests
-        run: python -m pip install 'requests>=2.31,<3'
+        run: python -m pip install 'requests==2.32.5'
+      - name: Validar testes offline (sem credenciais)
+        run: python -m unittest discover -s deriv-demo -p 'test_*.py' -v
       - name: Validar segredos configurados
         env:
           DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
           DERIV_TOKEN: ${{ secrets.DERIV_TOKEN }}
         run: |
-          if [ -z "$DERIV_APP_ID" ] || [ -z "$DERIV_TOKEN" ]; then
-            echo "::error::Configure DERIV_APP_ID e DERIV_TOKEN em Settings > Secrets and variables > Actions antes de executar."
+          missing=0
+          for name in DERIV_APP_ID DERIV_TOKEN; do
+            if [ -z "${!name//[[:space:]]/}" ]; then
+              echo "::error::Secret $name ausente ou vazio. Cadastre em Settings > Secrets and variables > Actions > New repository secret."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
             exit 1
           fi
       - name: Consultar conta Options DEMO (somente leitura)

@@ -40,9 +40,9 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             }
             robo.estado_frentes[banca]["envio_indeterminado"] = True
 
-    def test_other_nine_banks_can_take_distinct_signals(self):
+    def test_other_available_bank_can_take_distinct_signal(self):
         reserved = []
-        for index in range(9):
+        for index in range(len(robo.BANCAS) - 1):
             banca = robo.reservar_banca(
                 f"TEST{index}", "call", 80, 1, 1
             )
@@ -50,7 +50,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             reserved.append(banca)
 
         self.assertEqual(reserved, robo.BANCAS[1:])
-        self.assertEqual(len(set(reserved)), 9)
+        self.assertEqual(len(set(reserved)), len(robo.BANCAS) - 1)
         self.assertEqual(robo.estado_frentes[robo.BANCAS[0]]["ativo"], "WLDAUD")
         self.assertIn("WLDAUD", robo.ativos_em_uso)
 

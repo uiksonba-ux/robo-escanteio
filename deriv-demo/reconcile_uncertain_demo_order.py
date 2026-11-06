@@ -17,6 +17,8 @@ from discover_demo_account import discover_demo_account
 
 TARGET_FROM = int(datetime(2026, 11, 6, 2, 0, tzinfo=timezone.utc).timestamp())
 TARGET_TO = int(datetime(2026, 11, 6, 2, 5, tzinfo=timezone.utc).timestamp())
+TARGET_ORDER_TIME = int(datetime(2026, 11, 6, 2, 2, 8, tzinfo=timezone.utc).timestamp())
+TARGET_STAKE = 0.37
 WS_TIMEOUT = 12
 
 
@@ -71,13 +73,17 @@ def main():
         if not isinstance(transactions, list):
             raise RuntimeError("INVALID_STATEMENT_RESPONSE")
 
+        # Match the exact order logged by Render: R_25 CALL, sent at
+        # 02:02:08 UTC for 0.37 USD. Statement descriptions can use a display
+        # name rather than the internal symbol, so correlate by time and stake.
         target = [
             row for row in transactions
             if isinstance(row, dict)
             and row.get("action_type") == "buy"
             and type(row.get("transaction_time")) is int
-            and TARGET_FROM <= row["transaction_time"] <= TARGET_TO
-            and is_r25(row)
+            and abs(row["transaction_time"] - TARGET_ORDER_TIME) <= 30
+            and isinstance(row.get("amount"), (int, float))
+            and abs(abs(float(row["amount"])) - TARGET_STAKE) < 0.005
         ]
 
         reviewed = []
@@ -100,13 +106,14 @@ def main():
                 "transaction_time_utc": datetime.fromtimestamp(row["transaction_time"], timezone.utc).isoformat(),
                 "contract_id": contract_id if type(contract_id) is int else None,
                 "stake": row.get("amount") if isinstance(row.get("amount"), (int, float)) else None,
-                "contract": row.get("shortcode") if isinstance(row.get("shortcode"), str) else None,
+                "contract": row.get("shortcode") if isinstance(row.get("shortcode"), str) else (row.get("longcode") if isinstance(row.get("longcode"), str) else None),
                 **contract_summary,
             })
 
         result = {
             "read_only": True,
-            "target": "R_25",
+            "target": "R_25 CALL, 0.37 USD",
+            "correlation_window_seconds": 30,
             "window_utc": [
                 datetime.fromtimestamp(TARGET_FROM, timezone.utc).isoformat(),
                 datetime.fromtimestamp(TARGET_TO, timezone.utc).isoformat(),

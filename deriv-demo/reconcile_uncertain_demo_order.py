@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 import websocket
 from deriv_client import DerivOptionsClient, DEMO_WS_PATH
+from discover_demo_account import discover_demo_account
 
 TARGET_FROM = int(datetime(2026, 11, 6, 2, 0, tzinfo=timezone.utc).timestamp())
 TARGET_TO = int(datetime(2026, 11, 6, 2, 5, tzinfo=timezone.utc).timestamp())
@@ -42,11 +43,11 @@ def is_r25(row):
 def main():
     app_id = os.environ.get("DERIV_APP_ID", "").strip()
     token = os.environ.get("DERIV_TOKEN", "").strip()
-    account_id = os.environ.get("DERIV_DEMO_ACCOUNT_ID", "").strip()
-    if not app_id or not token or not account_id:
+    if not app_id or not token:
         raise RuntimeError("MISSING_REQUIRED_SECRET")
 
-    client = DerivOptionsClient(app_id, token, account_id)
+    account = discover_demo_account(app_id, token)
+    client = DerivOptionsClient(app_id, token, account["account_id"])
     client._validate_demo_account()
     url = client._new_otp_url()
     parsed = urlparse(url)

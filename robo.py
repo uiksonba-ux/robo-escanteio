@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-REC100"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-REC150"
 
 app = Flask(__name__)
 

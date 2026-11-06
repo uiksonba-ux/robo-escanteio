@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-2B-USD035-GALE3-REC100"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-2B-USD035-GALE3-REC100-INDEPENDENT-BANKS"
 
 app = Flask(__name__)
 
@@ -155,7 +155,7 @@ ENTRADA_MINIMA = 0.01
 
 MULTIPLICADOR_GALE = 3.0  # multiplicador fixo da progressão
 
-# Faixas de assertividade global (WINs / operações concluídas), compartilhadas pelas 2 bancas.
+# Faixas de assertividade e recuperação calculadas separadamente para cada banca.
 GALES_POR_CICLO = 4
 MAX_GALES = 4
 
@@ -260,7 +260,7 @@ losses_base_ponderada = 0
 contador_entrada_lock = threading.Lock()
 resultado_global_centavos = 0
 ultimo_saldo_demo = None
-recuperacao_em_curso = None
+recuperacoes_em_curso = set()
 operacoes_ativas = {}
 ordens_pendentes = {}
 ordens_liquidadas = set()
@@ -326,7 +326,7 @@ estado_frentes = {
 
         "ultimo_sinal": None,
 
-        "ciclo_gestao": 1,
+        "ciclo_gestao": 0,
 
         "entrada_atual": ENTRADA_MINIMA,
         "gales_reativos": GALES_POR_CICLO,
@@ -530,12 +530,12 @@ def conectar():
             "🧪 Corretora: Deriv | Conta: DEMO confirmada\n"
             f"💰 Saldo DEMO: {saldo:.2f} {moeda}\n"
             f"💵 Entrada-base: USD {entrada:.2f}\n"
-            f"🏦 {QTD_BANCAS} bancas compartilhadas\n"
+            f"🏦 {QTD_BANCAS} bancas | gestão individual\n"
             "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
-            "🛡 Gales por assertividade: <50%=4; 50–59%=3; 60–69%=2; 70–79%=1; ≥80%=0\n"
-            f"♻️ Recuperação global de {RECUPERACAO_PERCENTUAL:.0%} do prejuízo acumulado\n"
+            "🛡 Gales pela assertividade individual de cada banca\n"
+            f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} do próprio prejuízo\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
         return True
@@ -1585,9 +1585,19 @@ def gales_por_assertividade(percentual):
 
 
 def taxa_ponderada(wins, losses):
-    """Taxa real das ordens desde o ultimo reset de 100 entradas iniciais."""
+    """Taxa agregada das ordens, usada apenas para estatísticas gerais."""
     return taxa(max(0, wins - wins_base_ponderada),
                 max(0, losses - losses_base_ponderada))
+
+
+def taxa_banca_ponderada(banca):
+    """Assertividade individual da banca desde sua própria janela de 100 entradas."""
+    with estado_lock:
+        dados = estado_frentes[banca]
+        return taxa(
+            max(0, dados["wins"] - dados["wins_base_janela"]),
+            max(0, dados["losses"] - dados["losses_base_janela"]),
+        )
 
 
 def registrar_win(
@@ -1679,7 +1689,7 @@ def valores_do_ciclo(
 
 
 # ============================================================
-# GESTÃO GLOBAL E CICLO
+# GESTÃO INDIVIDUAL POR BANCA E RESUMO GLOBAL
 # ============================================================
 
 def em_centavos(valor):
@@ -1691,11 +1701,16 @@ def em_centavos(valor):
 
 def prejuizo_global_atual():
     with estado_lock:
-        return max(0, -resultado_global_centavos) / 100
+        return sum(estado_frentes[banca]["prejuizo_acumulado"] for banca in BANCAS)
+
+
+def prejuizo_banca_atual(banca):
+    with estado_lock:
+        return estado_frentes[banca]["prejuizo_acumulado"]
 
 
 def calcular_alvo_recuperacao(prejuizo):
-    """Aplica o percentual configurado ao prejuízo global confirmado."""
+    """Aplica o percentual configurado ao prejuízo confirmado da banca."""
     valor = Decimal(str(prejuizo))
     percentual = Decimal(str(RECUPERACAO_PERCENTUAL))
     if not valor.is_finite() or not percentual.is_finite():
@@ -1716,17 +1731,31 @@ def calcular_entrada_recuperacao(prejuizo, saldo=None, payout=None):
 
 def snapshot_gestao_global():
     with estado_lock:
+        assertividade_por_banca = {
+            banca: taxa_banca_ponderada(banca)
+            for banca in BANCAS
+        }
+        prejuizo_por_banca = {
+            banca: estado_frentes[banca]["prejuizo_acumulado"]
+            for banca in BANCAS
+        }
         return {
             "entrada_base": obter_entrada_base(),
             "entrada_percentual": None,
             "entrada_minima": ENTRADA_MINIMA,
             "saldo_practice_referencia": ultimo_saldo_demo,
             "resultado_liquido_global": resultado_global_centavos / 100,
-            "prejuizo_global": max(0, -resultado_global_centavos) / 100,
-            "recuperacao_em_curso": recuperacao_em_curso,
+            "prejuizo_global": sum(prejuizo_por_banca.values()),
+            "recuperacoes_em_curso": sorted(recuperacoes_em_curso),
             "entradas_globais_aceitas": entradas_globais_aceitas,
             "assertividade_global": taxa_ponderada(stats["wins"], stats["losses"]),
             "gales_proximos": gales_por_assertividade(taxa_ponderada(stats["wins"], stats["losses"])),
+            "assertividade_por_banca": assertividade_por_banca,
+            "gales_por_banca": {
+                banca: gales_por_assertividade(assertividade)
+                for banca, assertividade in assertividade_por_banca.items()
+            },
+            "prejuizo_por_banca": prejuizo_por_banca,
             "sequencia_gales": [4, 3, 2, 1, 0],
             "entradas_por_gale": {nivel: obter_entrada_base() for nivel in range(MAX_GALES + 1)},
             "multiplicador_gale": MULTIPLICADOR_GALE,
@@ -1737,8 +1766,8 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Faixas de assertividade global: <50%=4, <60%=3, <70%=2, <80%=1, >=80%=0 gales",
-            "regra_recuperacao": f"{RECUPERACAO_PERCENTUAL:.0%} do prejuízo líquido global; uma recuperação por vez",
+            "regra_gales": "Faixas de assertividade calculadas por banca: <50%=4, <60%=3, <70%=2, <80%=1, >=80%=0 gales",
+            "regra_recuperacao": f"{RECUPERACAO_PERCENTUAL:.0%} do prejuízo líquido acumulado de cada banca; recuperação independente",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }
@@ -1755,7 +1784,7 @@ def marcar_envio_indeterminado(banca, ativo, nivel, valor, motivo):
 
 def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
     """Escolha, envio e confirmação serializados; a recusa não consome posição."""
-    global entradas_globais_aceitas, recuperacao_em_curso, ultimo_saldo_demo
+    global entradas_globais_aceitas, ultimo_saldo_demo
     with contador_entrada_lock:
         with estado_lock:
             contexto = operacoes_ativas.get(banca)
@@ -1786,7 +1815,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
         # A consulta pode bloquear até seu prazo; nunca segurar estado_lock
         # durante I/O. O ledger é relido abaixo antes de reservar a dívida.
         with estado_lock:
-            consultar_payout = nivel == 0 and recuperacao_em_curso is None and resultado_global_centavos < 0
+            consultar_payout = nivel == 0 and estado_frentes[banca]["prejuizo_acumulado"] > 0
         payout_real = None
         payout_efetivo = None
         if consultar_payout:
@@ -1804,14 +1833,15 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
         with estado_lock:
             ultimo_saldo_demo = saldo
             if nivel == 0:
-                assertividade_atual = taxa_ponderada(stats["wins"], stats["losses"])
+                assertividade_atual = taxa_banca_ponderada(banca)
                 posicao = gales_por_assertividade(assertividade_atual)
-                alvo = calcular_alvo_recuperacao(max(0, -resultado_global_centavos) / 100) if recuperacao_em_curso is None else 0.0
+                prejuizo_banca = estado_frentes[banca]["prejuizo_acumulado"]
+                alvo = calcular_alvo_recuperacao(prejuizo_banca)
                 if alvo > 0 and payout_efetivo is None:
                     log.warning("RECUPERACAO ADIADA | banca=%s | ativo=%s | motivo=payout_nao_confirmado | prejuizo=%.2f | divida_preservada=true", banca, ativo, alvo)
                     alvo = 0.0
-                contexto = {"posicao": posicao, "numero": entradas_globais_aceitas + len(reservas_pendentes) + 1,
-                            "gales": posicao, "assertividade_global": assertividade_atual,
+                contexto = {"posicao": posicao, "numero": estado_frentes[banca]["ciclo_gestao"] + 1,
+                            "gales": posicao, "assertividade_banca": assertividade_atual,
                             "base": obter_entrada_base(saldo),
                             "entrada": calcular_entrada_recuperacao(alvo, saldo, payout_efetivo)
                             if alvo > 0 else obter_entrada_base(saldo),
@@ -1837,7 +1867,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=saldo_insuficiente | nivel=%s | valor=%.2f | saldo=%.2f | comprometido=%.2f | disponivel=%.2f", banca, ativo, nivel, valor, saldo, comprometido, disponivel)
                 return False, "saldo_insuficiente", operacoes_ativas.get(banca)
             if nivel == 0 and contexto["prejuizo_alocado"] > 0:
-                recuperacao_em_curso = banca
+                recuperacoes_em_curso.add(banca)
                 log.info("RECUPERACAO DIMENSIONADA | banca=%s | ativo=%s | prejuizo_alvo=%.2f | entrada=%.2f | payout_real=%.4f | payout_recuperacao=%.4f | alvo=%.0f%% | conta=DEMO", banca, ativo, contexto["prejuizo_alocado"], valor, contexto["payout_real"], contexto["payout_recuperacao"], RECUPERACAO_PERCENTUAL * 100)
             reservas_pendentes[banca] = valor
             log.info("SALDO RESERVADO | banca=%s | ativo=%s | nivel=%s | valor=%.2f | saldo=%.2f | disponivel=%.2f | recuperacao=%.2f | conta=DEMO", banca, ativo, nivel, valor, saldo, disponivel, contexto["prejuizo_alocado"])
@@ -1855,8 +1885,8 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 return None, order_id, contexto
             if not ok:
                 reservas_pendentes.pop(banca, None)
-                if nivel == 0 and recuperacao_em_curso == banca:
-                    recuperacao_em_curso = None
+                if nivel == 0 and banca in recuperacoes_em_curso:
+                    recuperacoes_em_curso.discard(banca)
                 log.warning("RESERVA LIBERADA | banca=%s | ativo=%s | nivel=%s | motivo=ordem_nao_aceita", banca, ativo, nivel)
                 return False, order_id, operacoes_ativas.get(banca)
             return confirmar_ordem_gerida(banca, ativo, nivel, valor, order_id, contexto)
@@ -1892,7 +1922,6 @@ def confirmar_ordem_gerida(banca, ativo, nivel, valor, order_id, contexto):
 
 def reconciliar_envio_gerido(banca):
     """Consulta a requisição original; timeout nunca libera uma ordem incerta."""
-    global recuperacao_em_curso
     with contador_entrada_lock:
         with estado_lock:
             pendente = envios_indeterminados.get(banca)
@@ -1917,8 +1946,8 @@ def reconciliar_envio_gerido(banca):
                 log.info("ORDEM ACEITA TARDIA | banca=%s | ativo=%s | order_id=%s | conta=DEMO", banca, pendente["ativo"], resposta)
             else:
                 reservas_pendentes.pop(banca, None)
-                if pendente["nivel"] == 0 and recuperacao_em_curso == banca:
-                    recuperacao_em_curso = None
+                if pendente["nivel"] == 0 and banca in recuperacoes_em_curso:
+                    recuperacoes_em_curso.discard(banca)
                 confirmado = (False, resposta, operacoes_ativas.get(banca))
                 log.warning("ORDEM RECUSADA TARDIA | banca=%s | ativo=%s | reserva_liberada=true | conta=DEMO", banca, pendente["ativo"])
             envios_indeterminados.pop(banca, None)
@@ -1954,7 +1983,7 @@ def registrar_resultado_ordem(order_id, resultado, lucro):
 
 def finalizar_operacao_global(banca):
     """Soma P&L líquido uma vez e libera a recuperação, sem apagar créditos."""
-    global resultado_global_centavos, recuperacao_em_curso
+    global resultado_global_centavos
     with estado_lock:
         contexto = operacoes_ativas.get(banca)
         if contexto is None or estado_frentes[banca]["envio_indeterminado"] or any(o["banca"] == banca for o in ordens_pendentes.values()):
@@ -1967,10 +1996,9 @@ def finalizar_operacao_global(banca):
             dados["resultado_liquido"] = local / 100
             dados["prejuizo_acumulado"] = max(0, -local) / 100
         operacoes_ativas.pop(banca)
-        if recuperacao_em_curso == banca:
-            recuperacao_em_curso = None
+        recuperacoes_em_curso.discard(banca)
         estado_frentes[banca]["em_recuperacao"] = False
-        log.info("OPERACAO CONCILIADA | banca=%s | primeira_ordem=%s | resultado_liquido=%.2f | resultado_global=%.2f | prejuizo_global=%.2f", banca, contexto["primeira_ordem"], contexto["resultado_centavos"] / 100, resultado_global_centavos / 100, max(0, -resultado_global_centavos) / 100)
+        log.info("OPERACAO CONCILIADA | banca=%s | primeira_ordem=%s | resultado_liquido_banca=%.2f | prejuizo_banca=%.2f | prejuizo_total_bancas=%.2f", banca, contexto["primeira_ordem"], contexto["resultado_centavos"] / 100, estado_frentes[banca]["prejuizo_acumulado"], prejuizo_global_atual())
         return snapshot_gestao_global()
 
 
@@ -2019,15 +2047,15 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             return
         gales = contexto["gales"]
         valores = valores_do_ciclo(contexto["entrada"], gales)
-        log.info("GESTÃO GLOBAL | %s | operação=%s | posição=%s | gales=%s | base=%.2f | entrada=%.2f | X%s | recuperação=%.2f",
-                 banca, contexto["numero"], contexto["posicao"], gales,
+        log.info("GESTÃO DA BANCA | %s | operação=%s | assertividade=%.2f%% | gales=%s | base=%.2f | entrada=%.2f | X%s | recuperação_da_banca=%.2f",
+                 banca, contexto["numero"], contexto["assertividade_banca"], gales,
                  contexto["base"], contexto["entrada"], f"{MULTIPLICADOR_GALE:g}",
                  contexto["prejuizo_alocado"])
         with estado_lock:
             estado_frentes[banca]["ultimo_sinal"] = {
                 "ativo": ativo, "direcao": direcao, "score": score,
                 "timeframe": timeframe_analise, "expiracao": expiracao,
-                "ciclo": contexto["numero"], "posicao_global": contexto["posicao"],
+                "ciclo": contexto["numero"], "posicao": contexto["posicao"], "assertividade_banca": contexto["assertividade_banca"],
                 "entrada": contexto["entrada"], "gales": gales,
                 "multiplicador": MULTIPLICADOR_GALE,
                 "recuperacao": contexto["prejuizo_alocado"] > 0,
@@ -2038,9 +2066,9 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         telegram("📊 NOVO SINAL | Baskaraido Trader PRO\n"
                  f"🏦 {banca}\n💱 {ativo}\n🎯 {direcao.upper()}\n"
                  f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n🔥 Score: {score}/100\n"
-                 f"🔢 Operação global: {contexto['numero']} / posição {contexto['posicao']}\n"
-                 f"🛡 Gales: {gales} | X{MULTIPLICADOR_GALE:g}\n💰 {sequencia}\n"
-                 f"♻️ Recuperação global reservada: {getattr(api, 'currency', 'USD')} {contexto['prejuizo_alocado']:.2f}\n🧪 Deriv DEMO")
+                 f"🔢 Operação da {banca}: {contexto['numero']} / assertividade {contexto['assertividade_banca']:.2f}%\n"
+                 f"🛡 Gales desta banca: {gales} | X{MULTIPLICADOR_GALE:g}\n💰 {sequencia}\n"
+                 f"♻️ Recuperação própria reservada: {getattr(api, 'currency', 'USD')} {contexto['prejuizo_alocado']:.2f}\n🧪 Deriv DEMO")
 
         for nivel in range(gales + 1):
             if nivel > 0:
@@ -2072,10 +2100,10 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             telegram(f"🤖 Deriv DEMO | {'✅ WIN' if resultado == 'win' else '❌ LOSS COMPLETO' if resultado == 'loss' else '➖ EMPATE'}\n"
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                      f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                     f"📉 Prejuízo líquido global: {getattr(api, 'currency', 'USD')} {gestao['prejuizo_global']:.2f}\n"
-                     f"🛡 Próxima posição global: {gestao['gales_proximos']} gales\n"
-                     f"📊 Global: {stats['wins']} WIN / {stats['losses']} LOSS\n"
-                     f"🎯 Assertividade: {taxa_ponderada(stats['wins'], stats['losses'])}%\n"
+                     f"📉 Prejuízo desta banca: {getattr(api, 'currency', 'USD')} {estado_frentes[banca]['prejuizo_acumulado']:.2f}\n"
+                     f"🛡 Próxima faixa desta banca: {gales_por_assertividade(taxa_banca_ponderada(banca))} gales\n"
+                     f"📊 Total geral: {stats['wins']} WIN / {stats['losses']} LOSS\n"
+                     f"🎯 Assertividade da {banca}: {taxa_banca_ponderada(banca)}%\n"
                      f"💰 Saldo Deriv DEMO: {texto_saldo()} {getattr(api, 'currency', '')}")
             return
     finally:
@@ -2337,11 +2365,11 @@ def supervisor():
             instante = time.monotonic()
             if ultima_telemetria is None or instante - ultima_telemetria >= 60:
                 with estado_lock:
-                    log.info("ESTADO EXECUCAO | conta=DEMO | habilitada=%s | aceitas=%s | recusadas=%s | wins=%s | losses=%s | pendentes=%s | envios_indeterminados=%s | prejuizo_global=%.2f | recuperacao_banca=%s",
+                    log.info("ESTADO EXECUCAO | conta=DEMO | habilitada=%s | aceitas=%s | recusadas=%s | wins=%s | losses=%s | pendentes=%s | envios_indeterminados=%s | prejuizo_global=%.2f | recuperacoes_em_curso=%s",
                              EXECUTAR_ORDENS, stats["ordens_aceitas"], stats["ordens_recusadas"],
                              stats["wins"], stats["losses"], len(ordens_pendentes),
-                             bool(envios_indeterminados), max(0, -resultado_global_centavos) / 100,
-                             recuperacao_em_curso)
+                             bool(envios_indeterminados), prejuizo_global_atual(),
+                             sorted(recuperacoes_em_curso))
                 ultima_telemetria = instante
 
             with scanner_threads_lock:
@@ -2462,11 +2490,10 @@ def home():
 
                 **dados,
 
-                "assertividade":
-                    taxa(
-                        dados["wins"],
-                        dados["losses"]
-                    ),
+                "assertividade": taxa_banca_ponderada(nome),
+                "gales_proximos": gales_por_assertividade(taxa_banca_ponderada(nome)),
+                "prejuizo_acumulado": dados["prejuizo_acumulado"],
+                "em_recuperacao": dados["em_recuperacao"],
             }
 
             for nome, dados
@@ -2549,7 +2576,7 @@ def home():
 
         "distribuicao":
             (
-                f"{QTD_BANCAS} bancas paralelas; sequência de gales e recuperação globais"
+                f"{QTD_BANCAS} bancas paralelas; assertividade e recuperação independentes por banca"
             ),
 
         "estatisticas":
@@ -2596,6 +2623,10 @@ def monitor_practice():
             nome: {
                 "wins": int(dados.get("wins", 0)),
                 "losses": int(dados.get("losses", 0)),
+                "assertividade": taxa_banca_ponderada(nome),
+                "gales_proximos": gales_por_assertividade(taxa_banca_ponderada(nome)),
+                "prejuizo_acumulado": float(dados.get("prejuizo_acumulado", 0.0)),
+                "em_recuperacao": bool(dados.get("em_recuperacao", False)),
                 # O robô não mantém saldo individual verificável por banca.
                 "saldo": None,
             }
@@ -2715,11 +2746,11 @@ log.info(
 )
 
 log.info(
-    "GESTÃO | "
+    "GESTÃO INDIVIDUAL POR BANCA | "
     "GALE X%s | "
-    "GALES POR ASSERTIVIDADE GLOBAL <50=4, 50-59=3, 60-69=2, 70-79=1, >=80=0; INICIAL=%s | "
+    "FAIXAS DE ASSERTIVIDADE POR BANCA <50=4, 50-59=3, 60-69=2, 70-79=1, >=80=0; INICIAL=%s | "
     "CICLOS ILIMITADOS | "
-    "RECUPERAÇÃO %g%%",
+    "RECUPERAÇÃO PRÓPRIA %g%%",
 
     f"{MULTIPLICADOR_GALE:g}",
     GALES_POR_CICLO,

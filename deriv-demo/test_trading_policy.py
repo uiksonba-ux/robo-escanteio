@@ -1,8 +1,34 @@
 import unittest
-from trading_policy import TradeCandidate, validate_candidate, validate_demo_websocket_url, safe_proposal_payload
+from trading_policy import (TradeCandidate, validate_candidate, validate_demo_websocket_url, safe_proposal_payload, gales_for_accuracy, stake_for_gale, stake_for_full_recovery)
 
 
 class TestTradingPolicy(unittest.TestCase):
+
+    def test_accuracy_bands_choose_zero_to_four_gales(self):
+        cases = ((0, 4), (49.99, 4), (50, 3), (59.99, 3), (60, 2),
+                 (69.99, 2), (70, 1), (79.99, 1), (80, 0), (100, 0))
+        for accuracy, expected in cases:
+            with self.subTest(accuracy=accuracy):
+                self.assertEqual(gales_for_accuracy(accuracy), expected)
+
+    def test_invalid_accuracy_is_blocked(self):
+        for accuracy in (-0.01, 100.01, float("nan"), float("inf")):
+            with self.subTest(accuracy=accuracy), self.assertRaises(ValueError):
+                gales_for_accuracy(accuracy)
+
+    def test_x2_stake_progression_is_limited_by_accuracy_band(self):
+        self.assertEqual([stake_for_gale(2, level, 4) for level in range(5)],
+                         [2, 4, 8, 16, 32])
+        with self.assertRaises(ValueError):
+            stake_for_gale(2, 4, 3)
+
+    def test_full_recovery_stake_uses_confirmed_profit_ratio(self):
+        self.assertEqual(stake_for_full_recovery(2, 10, 0.8), 14.5)
+        self.assertEqual(stake_for_full_recovery(2, 0, 0), 2)
+        for args in ((2, 10, 0), (0, 10, 0.8), (2, -1, 0.8)):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                stake_for_full_recovery(*args)
+
     def candidate(self, **overrides):
         fields = dict(market="synthetic_index", symbol="R_50", contract_type="CALL",
                       duration=5, duration_unit="m", exchange_is_open=True)

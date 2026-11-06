@@ -47,6 +47,33 @@ class TestDerivOptionsClientReadOnly(unittest.TestCase):
                 with self.assertRaises(DerivAPIError):
                     client.get_candles("R_50", granularity, 100, 1_800_000_100)
 
+    def test_explicit_usd_base_stake_is_not_fx_converted(self):
+        client = DerivOptionsClient(
+            "app", "token", "demo-account",
+            base_stake_amount=0.35, base_stake_currency="USD",
+        )
+        client.currency = "USD"
+        client._rest_json = Mock(side_effect=AssertionError("no conversion needed"))
+
+        client._refresh_exchange_rate()
+
+        self.assertEqual(client.base_stake, 0.35)
+        client._rest_json.assert_not_called()
+
+    def test_legacy_brl_base_stake_still_converts_to_account_currency(self):
+        client = DerivOptionsClient("app", "token", "demo-account", base_stake_brl=2.0)
+        client.currency = "USD"
+        client._rest_json = Mock(return_value={"data": {"exchange_rate": "0.18"}})
+
+        client._refresh_exchange_rate()
+
+        self.assertEqual(client.base_stake, 0.36)
+        client._rest_json.assert_called_once_with(
+            "GET",
+            "/wallet/v1/exchange-rate",
+            params={"source_currency": "BRL", "destination_currency": "USD"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

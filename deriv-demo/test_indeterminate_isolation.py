@@ -59,6 +59,22 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         )
         self.assertIn("WLDAUD", robo.ativos_em_uso)
 
+    def test_invalid_confirmed_id_keeps_context_for_reconciliation(self):
+        banca = robo.BANCAS[0]
+        contexto = {"numero": 1, "entrada": 2.0, "gales": 4}
+        with robo.estado_lock:
+            robo.envios_indeterminados.clear()
+            robo.estado_frentes[banca]["envio_indeterminado"] = False
+            robo.ordens_pendentes[12345] = {"banca": robo.BANCAS[1], "valor": 2.0, "nivel": 0}
+
+        ok, motivo, _ = robo.confirmar_ordem_gerida(
+            banca, "WLDAUD", 0, 2.0, 12345, contexto
+        )
+
+        self.assertIsNone(ok)
+        self.assertEqual(motivo, "order_id_invalido_ou_repetido")
+        self.assertEqual(robo.envios_indeterminados[banca]["contexto"], contexto)
+
 
 if __name__ == "__main__":
     unittest.main()

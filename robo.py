@@ -2056,7 +2056,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             with estado_lock:
                 liquido = operacoes_ativas[banca]["resultado_centavos"] / 100
             gestao = finalizar_operacao_global(banca)
-            telegram(f"{'✅ WIN' if resultado == 'win' else '❌ LOSS COMPLETO' if resultado == 'loss' else '➖ EMPATE'}\n"
+            telegram(f"🤖 Deriv DEMO | {'✅ WIN' if resultado == 'win' else '❌ LOSS COMPLETO' if resultado == 'loss' else '➖ EMPATE'}\n"
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                      f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
                      f"📉 Prejuízo líquido global: {getattr(api, 'currency', 'USD')} {gestao['prejuizo_global']:.2f}\n"

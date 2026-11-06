@@ -1,4 +1,4 @@
-"""Read-only reconciliation of the uncertain Deriv DEMO purchase from 2026-11-06 02:02 UTC.
+"""Read-only reconciliation of the uncertain Deriv DEMO purchase from 2026-11-06 07:16 UTC.
 
 This utility never sends a buy/sell request and never prints credentials or raw API payloads.
 """
@@ -15,9 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from deriv_client import DerivOptionsClient, DEMO_WS_PATH
 from discover_demo_account import discover_demo_account
 
-TARGET_FROM = int(datetime(2026, 11, 6, 2, 0, tzinfo=timezone.utc).timestamp())
-TARGET_TO = int(datetime(2026, 11, 6, 2, 5, tzinfo=timezone.utc).timestamp())
-TARGET_ORDER_TIME = int(datetime(2026, 11, 6, 2, 2, 8, tzinfo=timezone.utc).timestamp())
+TARGET_FROM = int(datetime(2026, 11, 6, 7, 15, tzinfo=timezone.utc).timestamp())
+TARGET_TO = int(datetime(2026, 11, 6, 7, 20, tzinfo=timezone.utc).timestamp())
+TARGET_ORDER_TIME = int(datetime(2026, 11, 6, 7, 16, 57, tzinfo=timezone.utc).timestamp())
 TARGET_STAKE = 0.37
 WS_TIMEOUT = 12
 
@@ -36,11 +36,10 @@ def safe_call(ws, request_id, payload):
         return response
 
 
-def is_r25(row):
+def is_wldaud(row):
     text = " ".join(str(row.get(key) or "") for key in ("shortcode", "longcode"))
     return bool(
-        re.search(r"(?:^|_)R_?25(?:_|$)", text, re.I)
-        or re.search(r"Volatility\\s+25\\s+Index", text, re.I)
+        re.search(r"(?:^|_)WLDAUD(?:_|$)", text, re.I)
     )
 
 
@@ -73,17 +72,17 @@ def main():
         if not isinstance(transactions, list):
             raise RuntimeError("INVALID_STATEMENT_RESPONSE")
 
-        # Match the exact order logged by Render: R_25 CALL, sent at
-        # 02:02:08 UTC for 0.37 USD. Statement descriptions can use a display
+        # Match the exact order logged by Render: WLDAUD PUT sent at
+        # 07:16:57 UTC for 0.37 USD. Statement descriptions can use a display
         # name rather than the internal symbol, so correlate by time and stake.
-        # Match only the asset and stake from Render's uncertain R_25 CALL.
+        # Match only the asset and stake from Render's uncertain WLDAUD PUT.
         target = [
             row for row in transactions
             if isinstance(row, dict)
             and row.get("action_type") == "buy"
             and type(row.get("transaction_time")) is int
             and abs(row["transaction_time"] - TARGET_ORDER_TIME) <= 120
-            and is_r25(row)
+            and is_wldaud(row)
             and isinstance(row.get("amount"), (int, float))
             and abs(abs(float(row["amount"])) - TARGET_STAKE) < 0.005
         ]

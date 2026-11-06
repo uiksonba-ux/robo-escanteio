@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-2B-USD035-GALE3-REC100-INDEPENDENT-BANKS"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-2B-USD035-GALE3-REC100-LAST-OP-LOSS"
 
 app = Flask(__name__)
 
@@ -160,7 +160,6 @@ GALES_POR_CICLO = 4
 MAX_GALES = 4
 
 RECUPERACAO_PERCENTUAL = 1.0
-PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 
 QTD_BANCAS = 2
 
@@ -332,6 +331,7 @@ estado_frentes = {
         "gales_reativos": GALES_POR_CICLO,
 
         "prejuizo_acumulado": 0.0,
+        "recuperacao_pendente": 0.0,
         "entradas_recuperacao_restantes": 0,
         "recuperacao_estendida": False,
 
@@ -535,7 +535,7 @@ def conectar():
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
             "🛡 Gales pela assertividade individual de cada banca\n"
-            f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} do próprio prejuízo\n"
+            f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} da perda da operação anterior\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
         return True
@@ -1699,18 +1699,26 @@ def em_centavos(valor):
     return int((numero * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
-def prejuizo_global_atual():
+def recuperacao_pendente_total():
     with estado_lock:
-        return sum(estado_frentes[banca]["prejuizo_acumulado"] for banca in BANCAS)
+        return sum(estado_frentes[banca]["recuperacao_pendente"] for banca in BANCAS)
+
+
+def recuperacao_pendente_banca(banca):
+    with estado_lock:
+        return estado_frentes[banca]["recuperacao_pendente"]
+
+
+def prejuizo_global_atual():
+    return recuperacao_pendente_total()
 
 
 def prejuizo_banca_atual(banca):
-    with estado_lock:
-        return estado_frentes[banca]["prejuizo_acumulado"]
+    return recuperacao_pendente_banca(banca)
 
 
 def calcular_alvo_recuperacao(prejuizo):
-    """Aplica o percentual configurado ao prejuízo confirmado da banca."""
+    """Aplica o percentual à perda da última operação concluída da banca."""
     valor = Decimal(str(prejuizo))
     percentual = Decimal(str(RECUPERACAO_PERCENTUAL))
     if not valor.is_finite() or not percentual.is_finite():
@@ -1718,13 +1726,12 @@ def calcular_alvo_recuperacao(prejuizo):
     return float(max(Decimal("0"), valor) * percentual)
 
 
-def calcular_entrada_recuperacao(prejuizo, saldo=None, payout=None):
-    """Calcula a entrada fixa mais o alvo de recuperação pelo payout informado."""
-    alvo = max(Decimal("0"), Decimal(str(prejuizo)))
-    taxa_payout = Decimal(str(PAYOUT_RECUPERACAO if payout is None else payout))
-    if not taxa_payout.is_finite() or taxa_payout <= 0:
-        raise ValueError("Payout de recuperação inválido")
-    adicional = (alvo / taxa_payout).quantize(
+def calcular_entrada_recuperacao(perda_anterior, saldo=None):
+    """Soma a entrada-base a 100% da perda da operação anterior da mesma banca."""
+    adicional = max(Decimal("0"), Decimal(str(perda_anterior)))
+    if not adicional.is_finite():
+        raise ValueError("Perda anterior inválida")
+    adicional = (adicional * Decimal(str(RECUPERACAO_PERCENTUAL))).quantize(
         Decimal("0.01"), rounding=ROUND_UP)
     return float(Decimal(str(obter_entrada_base(saldo))) + adicional)
 
@@ -1736,7 +1743,7 @@ def snapshot_gestao_global():
             for banca in BANCAS
         }
         prejuizo_por_banca = {
-            banca: estado_frentes[banca]["prejuizo_acumulado"]
+            banca: estado_frentes[banca]["recuperacao_pendente"]
             for banca in BANCAS
         }
         return {
@@ -1746,6 +1753,12 @@ def snapshot_gestao_global():
             "saldo_practice_referencia": ultimo_saldo_demo,
             "resultado_liquido_global": resultado_global_centavos / 100,
             "prejuizo_global": sum(prejuizo_por_banca.values()),
+            "prejuizo_neto_por_banca": {
+                banca: estado_frentes[banca]["prejuizo_acumulado"]
+                for banca in BANCAS
+            },
+            "recuperacao_pendente_global": sum(prejuizo_por_banca.values()),
+            "recuperacao_pendente_por_banca": prejuizo_por_banca,
             "recuperacoes_em_curso": sorted(recuperacoes_em_curso),
             "entradas_globais_aceitas": entradas_globais_aceitas,
             "assertividade_global": taxa_ponderada(stats["wins"], stats["losses"]),
@@ -1760,14 +1773,13 @@ def snapshot_gestao_global():
             "entradas_por_gale": {nivel: obter_entrada_base() for nivel in range(MAX_GALES + 1)},
             "multiplicador_gale": MULTIPLICADOR_GALE,
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
-            "payout_recuperacao": PAYOUT_RECUPERACAO,
             "envio_indeterminado": dict(next(iter(envios_indeterminados.values()))) if envios_indeterminados else None,
             "envios_indeterminados": [dict(item) for item in envios_indeterminados.values()],
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
             "regra_gales": "Faixas de assertividade calculadas por banca: <50%=4, <60%=3, <70%=2, <80%=1, >=80%=0 gales",
-            "regra_recuperacao": f"{RECUPERACAO_PERCENTUAL:.0%} do prejuízo líquido acumulado de cada banca; recuperação independente",
+            "regra_recuperacao": f"{RECUPERACAO_PERCENTUAL:.0%} da perda líquida da última operação concluída por banca; vitórias antigas não compensam; recuperação independente",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }
@@ -1812,43 +1824,29 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             log.warning("SALDO DEMO INDISPONÍVEL | %s", banca)
             return False, "saldo_indisponivel", contexto
 
-        # A consulta pode bloquear até seu prazo; nunca segurar estado_lock
-        # durante I/O. O ledger é relido abaixo antes de reservar a dívida.
-        with estado_lock:
-            consultar_payout = nivel == 0 and estado_frentes[banca]["prejuizo_acumulado"] > 0
-        payout_real = None
-        payout_efetivo = None
-        if consultar_payout:
-            try:
-                resposta_payout = obter_payout_digital(ativo, expiracao)
-                if isinstance(resposta_payout, bool):
-                    raise ValueError("payout booleano")
-                payout_real = float(resposta_payout)
-                if not math.isfinite(payout_real) or not 0 < payout_real <= 1:
-                    raise ValueError("payout inválido")
-                payout_efetivo = min(PAYOUT_RECUPERACAO, payout_real)
-            except Exception:
-                payout_real = None
-
+        # Recuperação usa somente a perda da operação anterior desta banca.
+        # Não consulta payout nem compensa a perda com vitórias antigas.
         with estado_lock:
             ultimo_saldo_demo = saldo
             if nivel == 0:
                 assertividade_atual = taxa_banca_ponderada(banca)
                 posicao = gales_por_assertividade(assertividade_atual)
-                prejuizo_banca = estado_frentes[banca]["prejuizo_acumulado"]
-                alvo = calcular_alvo_recuperacao(prejuizo_banca)
-                if alvo > 0 and payout_efetivo is None:
-                    log.warning("RECUPERACAO ADIADA | banca=%s | ativo=%s | motivo=payout_nao_confirmado | prejuizo=%.2f | divida_preservada=true", banca, ativo, alvo)
-                    alvo = 0.0
-                contexto = {"posicao": posicao, "numero": estado_frentes[banca]["ciclo_gestao"] + 1,
-                            "gales": posicao, "assertividade_banca": assertividade_atual,
-                            "base": obter_entrada_base(saldo),
-                            "entrada": calcular_entrada_recuperacao(alvo, saldo, payout_efetivo)
-                            if alvo > 0 else obter_entrada_base(saldo),
-                            "prejuizo_alocado": alvo, "resultado_centavos": 0,
-                            "payout_recuperacao": payout_efetivo if alvo > 0 else None,
-                            "payout_real": payout_real,
-                            "primeira_ordem": None, "ultimo_nivel": -1, "ativo": ativo}
+                perda_anterior = estado_frentes[banca]["recuperacao_pendente"]
+                alvo = calcular_alvo_recuperacao(perda_anterior)
+                base = obter_entrada_base(saldo)
+                contexto = {"posicao": posicao,
+                            "numero": estado_frentes[banca]["ciclo_gestao"] + 1,
+                            "gales": posicao,
+                            "assertividade_banca": assertividade_atual,
+                            "base": base,
+                            "entrada": calcular_entrada_recuperacao(alvo, saldo)
+                            if alvo > 0 else base,
+                            "prejuizo_alocado": alvo,
+                            "recuperacao_diferida": False,
+                            "resultado_centavos": 0,
+                            "primeira_ordem": None,
+                            "ultimo_nivel": -1,
+                            "ativo": ativo}
             valor = valores_do_ciclo(contexto["entrada"], nivel)[nivel]
             # Conservador enquanto a atualização de saldo da corretora pode estar atrasada.
             comprometido = sum(o["valor"] for o in ordens_pendentes.values())
@@ -1861,14 +1859,14 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                             banca, ativo, contexto["prejuizo_alocado"], valor, disponivel, contexto["base"])
                 contexto["entrada"] = contexto["base"]
                 contexto["prejuizo_alocado"] = 0.0
-                contexto["payout_recuperacao"] = None
+                contexto["recuperacao_diferida"] = True
                 valor = contexto["base"]
             if valor > disponivel or valor < ENTRADA_MINIMA:
                 log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=saldo_insuficiente | nivel=%s | valor=%.2f | saldo=%.2f | comprometido=%.2f | disponivel=%.2f", banca, ativo, nivel, valor, saldo, comprometido, disponivel)
                 return False, "saldo_insuficiente", operacoes_ativas.get(banca)
             if nivel == 0 and contexto["prejuizo_alocado"] > 0:
                 recuperacoes_em_curso.add(banca)
-                log.info("RECUPERACAO DIMENSIONADA | banca=%s | ativo=%s | prejuizo_alvo=%.2f | entrada=%.2f | payout_real=%.4f | payout_recuperacao=%.4f | alvo=%.0f%% | conta=DEMO", banca, ativo, contexto["prejuizo_alocado"], valor, contexto["payout_real"], contexto["payout_recuperacao"], RECUPERACAO_PERCENTUAL * 100)
+                log.info("RECUPERACAO DIMENSIONADA | banca=%s | ativo=%s | perda_operacao_anterior=%.2f | entrada_com_recuperacao=%.2f | alvo=%.0f%% | conta=DEMO", banca, ativo, contexto["prejuizo_alocado"], valor, RECUPERACAO_PERCENTUAL * 100)
             reservas_pendentes[banca] = valor
             log.info("SALDO RESERVADO | banca=%s | ativo=%s | nivel=%s | valor=%.2f | saldo=%.2f | disponivel=%.2f | recuperacao=%.2f | conta=DEMO", banca, ativo, nivel, valor, saldo, disponivel, contexto["prejuizo_alocado"])
 
@@ -1982,7 +1980,7 @@ def registrar_resultado_ordem(order_id, resultado, lucro):
 
 
 def finalizar_operacao_global(banca):
-    """Soma P&L líquido uma vez e libera a recuperação, sem apagar créditos."""
+    """Atualiza o P&L e a perda da última operação, de forma independente por banca."""
     global resultado_global_centavos
     with estado_lock:
         contexto = operacoes_ativas.get(banca)
@@ -1992,13 +1990,28 @@ def finalizar_operacao_global(banca):
             resultado_global_centavos += contexto["resultado_centavos"]
             operacoes_concluidas.add(contexto["primeira_ordem"])
             dados = estado_frentes[banca]
-            local = em_centavos(dados["resultado_liquido"]) + contexto["resultado_centavos"]
+            resultado_operacao = contexto["resultado_centavos"]
+            local = em_centavos(dados["resultado_liquido"]) + resultado_operacao
             dados["resultado_liquido"] = local / 100
             dados["prejuizo_acumulado"] = max(0, -local) / 100
+
+            # O ledger de recuperação representa somente a operação recém-concluída.
+            # Ganhos anteriores permanecem no P&L, mas nunca compensam uma perda nova.
+            if resultado_operacao < 0:
+                perda_atual = abs(resultado_operacao) / 100
+                if contexto.get("recuperacao_diferida"):
+                    dados["recuperacao_pendente"] += perda_atual
+                else:
+                    dados["recuperacao_pendente"] = perda_atual
+            elif contexto.get("prejuizo_alocado", 0) > 0 and resultado_operacao > 0:
+                dados["recuperacao_pendente"] = 0.0
         operacoes_ativas.pop(banca)
         recuperacoes_em_curso.discard(banca)
         estado_frentes[banca]["em_recuperacao"] = False
-        log.info("OPERACAO CONCILIADA | banca=%s | primeira_ordem=%s | resultado_liquido_banca=%.2f | prejuizo_banca=%.2f | prejuizo_total_bancas=%.2f", banca, contexto["primeira_ordem"], contexto["resultado_centavos"] / 100, estado_frentes[banca]["prejuizo_acumulado"], prejuizo_global_atual())
+        log.info("OPERACAO CONCILIADA | banca=%s | primeira_ordem=%s | resultado_liquido_operacao=%.2f | resultado_liquido_banca=%.2f | recuperacao_pendente=%.2f | recuperacao_total_bancas=%.2f",
+                 banca, contexto["primeira_ordem"], contexto["resultado_centavos"] / 100,
+                 estado_frentes[banca]["resultado_liquido"],
+                 estado_frentes[banca]["recuperacao_pendente"], prejuizo_global_atual())
         return snapshot_gestao_global()
 
 
@@ -2068,7 +2081,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                  f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n🔥 Score: {score}/100\n"
                  f"🔢 Operação da {banca}: {contexto['numero']} / assertividade {contexto['assertividade_banca']:.2f}%\n"
                  f"🛡 Gales desta banca: {gales} | X{MULTIPLICADOR_GALE:g}\n💰 {sequencia}\n"
-                 f"♻️ Recuperação própria reservada: {getattr(api, 'currency', 'USD')} {contexto['prejuizo_alocado']:.2f}\n🧪 Deriv DEMO")
+                 f"♻️ Perda da operação anterior reservada: {getattr(api, 'currency', 'USD')} {contexto['prejuizo_alocado']:.2f}\n🧪 Deriv DEMO")
 
         for nivel in range(gales + 1):
             if nivel > 0:
@@ -2100,7 +2113,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             telegram(f"🤖 Deriv DEMO | {'✅ WIN' if resultado == 'win' else '❌ LOSS COMPLETO' if resultado == 'loss' else '➖ EMPATE'}\n"
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                      f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                     f"📉 Prejuízo desta banca: {getattr(api, 'currency', 'USD')} {estado_frentes[banca]['prejuizo_acumulado']:.2f}\n"
+                     f"♻️ Recuperação pendente da operação anterior: {getattr(api, 'currency', 'USD')} {estado_frentes[banca]['recuperacao_pendente']:.2f}\n"
                      f"🛡 Próxima faixa desta banca: {gales_por_assertividade(taxa_banca_ponderada(banca))} gales\n"
                      f"📊 Total geral: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                      f"🎯 Assertividade da {banca}: {taxa_banca_ponderada(banca)}%\n"
@@ -2493,6 +2506,7 @@ def home():
                 "assertividade": taxa_banca_ponderada(nome),
                 "gales_proximos": gales_por_assertividade(taxa_banca_ponderada(nome)),
                 "prejuizo_acumulado": dados["prejuizo_acumulado"],
+                "recuperacao_pendente": dados["recuperacao_pendente"],
                 "em_recuperacao": dados["em_recuperacao"],
             }
 
@@ -2626,6 +2640,7 @@ def monitor_practice():
                 "assertividade": taxa_banca_ponderada(nome),
                 "gales_proximos": gales_por_assertividade(taxa_banca_ponderada(nome)),
                 "prejuizo_acumulado": float(dados.get("prejuizo_acumulado", 0.0)),
+                "recuperacao_pendente": float(dados.get("recuperacao_pendente", 0.0)),
                 "em_recuperacao": bool(dados.get("em_recuperacao", False)),
                 # O robô não mantém saldo individual verificável por banca.
                 "saldo": None,
@@ -2750,7 +2765,7 @@ log.info(
     "GALE X%s | "
     "FAIXAS DE ASSERTIVIDADE POR BANCA <50=4, 50-59=3, 60-69=2, 70-79=1, >=80=0; INICIAL=%s | "
     "CICLOS ILIMITADOS | "
-    "RECUPERAÇÃO PRÓPRIA %g%%",
+    "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%%",
 
     f"{MULTIPLICADOR_GALE:g}",
     GALES_POR_CICLO,

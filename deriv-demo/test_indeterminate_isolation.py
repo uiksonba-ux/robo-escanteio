@@ -76,14 +76,11 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(motivo, "order_id_invalido_ou_repetido")
         self.assertEqual(robo.envios_indeterminados[banca]["contexto"], contexto)
 
-    def test_100_percent_recovery_target(self):
+    def test_100_percent_recovery_adds_previous_loss_to_base(self):
         with mock.patch.object(robo, "obter_entrada_base", return_value=1.0):
             alvo = robo.calcular_alvo_recuperacao(1.0)
             self.assertEqual(alvo, 1.0)
-            self.assertEqual(
-                robo.calcular_entrada_recuperacao(alvo, payout=0.80),
-                2.25,
-            )
+            self.assertEqual(robo.calcular_entrada_recuperacao(alvo), 2.0)
 
     def test_requested_base_gale_and_recovery_settings(self):
         self.assertEqual(robo.QTD_BANCAS, 2)
@@ -95,6 +92,51 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             robo.valores_do_ciclo(0.35, quantidade_gales=4),
             [0.35, 1.05, 3.15, 9.45, 28.35],
         )
+
+    def test_successful_recovery_clears_only_that_bank_pending_loss(self):
+        banca_a, banca_b = robo.BANCAS
+        with robo.estado_lock:
+            robo.operacoes_ativas.clear()
+            robo.ordens_pendentes.clear()
+            robo.operacoes_concluidas.clear()
+            robo.recuperacoes_em_curso.clear()
+            for banca in robo.BANCAS:
+                robo.estado_frentes[banca].update(
+                    recuperacao_pendente=0.0,
+                    envio_indeterminado=False,
+                )
+            robo.estado_frentes[banca_a]["recuperacao_pendente"] = 0.35
+            robo.operacoes_ativas[banca_a] = {
+                "primeira_ordem": "TEST-RECOVERY-WIN",
+                "resultado_centavos": 12,
+                "prejuizo_alocado": 0.35,
+            }
+        robo.finalizar_operacao_global(banca_a)
+        self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.0)
+        self.assertEqual(robo.prejuizo_banca_atual(banca_b), 0.0)
+
+    def test_deferred_recovery_keeps_previous_loss_and_adds_new_loss(self):
+        banca_a, banca_b = robo.BANCAS
+        with robo.estado_lock:
+            robo.operacoes_ativas.clear()
+            robo.ordens_pendentes.clear()
+            robo.operacoes_concluidas.clear()
+            robo.recuperacoes_em_curso.clear()
+            for banca in robo.BANCAS:
+                robo.estado_frentes[banca].update(
+                    recuperacao_pendente=0.0,
+                    envio_indeterminado=False,
+                )
+            robo.estado_frentes[banca_a]["recuperacao_pendente"] = 0.35
+            robo.operacoes_ativas[banca_a] = {
+                "primeira_ordem": "TEST-DEFERRED-LOSS",
+                "resultado_centavos": -35,
+                "prejuizo_alocado": 0.0,
+                "recuperacao_diferida": True,
+            }
+        robo.finalizar_operacao_global(banca_a)
+        self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.70)
+        self.assertEqual(robo.prejuizo_banca_atual(banca_b), 0.0)
 
     def test_assertiveness_and_recovery_ledgers_are_independent_per_bank(self):
         banca_a, banca_b = robo.BANCAS
@@ -117,6 +159,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
                     entradas_janela=0,
                     resultado_liquido=0.0,
                     prejuizo_acumulado=0.0,
+                    recuperacao_pendente=0.0,
                     envio_indeterminado=False,
                     em_recuperacao=False,
                 )
@@ -137,28 +180,29 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         )
 
         with robo.estado_lock:
+            # A banca vinha lucrativa, mas uma perda nova gera recuperação própria.
+            robo.estado_frentes[banca_a]["resultado_liquido"] = 0.62
             robo.operacoes_ativas[banca_a] = {
                 "primeira_ordem": "TEST-LOSS-A",
-                "resultado_centavos": -100,
+                "resultado_centavos": -35,
+                "prejuizo_alocado": 0.0,
             }
 
         robo.finalizar_operacao_global(banca_a)
-        self.assertEqual(robo.prejuizo_banca_atual(banca_a), 1.0)
+        self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.35)
         self.assertEqual(robo.prejuizo_banca_atual(banca_b), 0.0)
-        self.assertEqual(robo.prejuizo_global_atual(), 1.0)
+        self.assertEqual(robo.prejuizo_global_atual(), 0.35)
+        self.assertAlmostEqual(robo.estado_frentes[banca_a]["resultado_liquido"], 0.27)
 
         with mock.patch.object(robo, "obter_entrada_base", return_value=0.35):
             entrada_a = robo.calcular_entrada_recuperacao(
-                robo.calcular_alvo_recuperacao(robo.prejuizo_banca_atual(banca_a)),
-                payout=0.80,
+                robo.calcular_alvo_recuperacao(robo.prejuizo_banca_atual(banca_a))
             )
             entrada_b = robo.calcular_entrada_recuperacao(
-                robo.calcular_alvo_recuperacao(robo.prejuizo_banca_atual(banca_b)),
-                payout=0.80,
+                robo.calcular_alvo_recuperacao(robo.prejuizo_banca_atual(banca_b))
             )
-        self.assertEqual(entrada_a, 1.60)
+        self.assertEqual(entrada_a, 0.70)
         self.assertEqual(entrada_b, 0.35)
-
 
 if __name__ == "__main__":
     unittest.main()

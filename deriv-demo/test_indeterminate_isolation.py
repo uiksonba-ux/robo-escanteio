@@ -76,14 +76,23 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(motivo, "order_id_invalido_ou_repetido")
         self.assertEqual(robo.envios_indeterminados[banca]["contexto"], contexto)
 
-    def test_150_percent_global_recovery_target(self):
+    def test_100_percent_global_recovery_target(self):
         with mock.patch.object(robo, "obter_entrada_base", return_value=1.0):
             alvo = robo.calcular_alvo_recuperacao(1.0)
-            self.assertEqual(alvo, 1.5)
+            self.assertEqual(alvo, 1.0)
             self.assertEqual(
                 robo.calcular_entrada_recuperacao(alvo, payout=0.80),
-                2.88,
+                2.25,
             )
+
+    def test_requested_base_gale_and_recovery_settings(self):
+        self.assertEqual(robo.ENTRADA_BASE_USD, 0.35)
+        self.assertEqual(robo.MULTIPLICADOR_GALE, 3.0)
+        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
+        self.assertEqual(
+            robo.valores_do_ciclo(0.35, quantidade_gales=4),
+            [0.35, 1.05, 3.15, 9.45, 28.35],
+        )
 
 
 if __name__ == "__main__":

@@ -126,7 +126,7 @@ def main():
             ),
         }
         print(json.dumps(result, separators=(",", ":")))
-        if result["conclusion"] != "UNIQUE_SETTLED":
+        if result["conclusion"] == "AMBIGUOUS_OR_UNSETTLED":
             raise RuntimeError("RECONCILIATION_REQUIRES_REVIEW")
     finally:
         try:

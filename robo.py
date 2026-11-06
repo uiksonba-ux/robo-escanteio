@@ -1718,7 +1718,7 @@ def snapshot_gestao_global():
             "assertividade_global": taxa_ponderada(stats["wins"], stats["losses"]),
             "gales_proximos": gales_por_assertividade(taxa_ponderada(stats["wins"], stats["losses"])),
             "sequencia_gales": [4, 3, 2, 1, 0],
-            "entradas_por_gale": dict(ENTRADAS_POR_GALE),
+            "entradas_por_gale": {nivel: obter_entrada_base() for nivel in range(MAX_GALES + 1)},
             "multiplicador_gale": MULTIPLICADOR_GALE,
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "payout_recuperacao": PAYOUT_RECUPERACAO,
@@ -2495,6 +2495,8 @@ def home():
         "conta":
             "DEMO",
 
+        "moeda": getattr(api, "currency", None),
+
         "saldo":
             saldo,
 
@@ -2529,7 +2531,7 @@ def home():
                 "Digital M5",
 
             "M15":
-                "Digital M5",
+                "Digital M15",
         },
 
         "distribuicao":

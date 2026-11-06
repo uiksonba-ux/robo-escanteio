@@ -11,14 +11,14 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, request
-from iqoptionapi.stable_api import IQ_Option
+from deriv_client import DerivOptionsClient
 
 
 # ============================================================
 # VERSÃO
 # ============================================================
 
-VERSAO = "IQ-DIGITAL-10B-EXECUCAO-CONFIRMADA-REC100-PRACTICE"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-REC100"
 
 app = Flask(__name__)
 
@@ -27,7 +27,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
-log = logging.getLogger("iq-v10")
+log = logging.getLogger("baskaraido-deriv")
 
 
 # ============================================================
@@ -83,8 +83,9 @@ def env_bool(nome, padrao=False):
 # CONFIGURAÇÕES
 # ============================================================
 
-IQ_EMAIL = os.getenv("IQ_EMAIL", "").strip()
-IQ_PASSWORD = os.getenv("IQ_PASSWORD", "").strip()
+DERIV_APP_ID = os.getenv("DERIV_APP_ID", "").strip()
+DERIV_TOKEN = os.getenv("DERIV_TOKEN", "").strip()
+DERIV_DEMO_ACCOUNT_ID = os.getenv("DERIV_DEMO_ACCOUNT_ID", "").strip()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -98,7 +99,7 @@ PORT = env_int("PORT", 10000, 1)
 
 # CONTA FIXA DE TREINO.
 # NÃO transformar em variável de ambiente.
-CONTA = "PRACTICE"
+CONTA = "DEMO"
 
 EXECUTAR_ORDENS = env_bool(
     "EXECUTAR_ORDENS",
@@ -150,7 +151,7 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_MINIMA = 2.0
+ENTRADA_MINIMA = 0.01
 
 MULTIPLICADOR_GALE = 2.0  # multiplicador fixo da progressão
 
@@ -163,15 +164,8 @@ PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 
 QTD_BANCAS = 10
 
-# Entrada fixa por faixa de assertividade global (0 a 4 gales).
-# Configuravel no Render sem substituir outras variaveis.
-ENTRADAS_POR_GALE = {
-    0: env_float("ENTRADA_FAIXA_0", 2.50, ENTRADA_MINIMA),
-    1: env_float("ENTRADA_FAIXA_1", 5.00, ENTRADA_MINIMA),
-    2: env_float("ENTRADA_FAIXA_2", 10.00, ENTRADA_MINIMA),
-    3: env_float("ENTRADA_FAIXA_3", 5.00, ENTRADA_MINIMA),
-    4: env_float("ENTRADA_FAIXA_4", 2.50, ENTRADA_MINIMA),
-}
+# A assertividade define apenas a quantidade de gales; entrada-base fixa em BRL.
+ENTRADA_BASE_BRL = 2.00
 
 
 
@@ -191,10 +185,12 @@ def agora_brasil():
 # ============================================================
 
 def obter_entrada_base(saldo=None):
-    """Valor fixo conforme a faixa global; não depende do saldo."""
-    with estado_lock:
-        percentual = taxa_ponderada(stats["wins"], stats["losses"])
-    return ENTRADAS_POR_GALE[gales_por_assertividade(percentual)]
+    """Entrada equivalente a R$ 2, convertida para a moeda da conta DEMO."""
+    cliente = api
+    valor = getattr(cliente, "base_stake", None) if cliente is not None else None
+    if isinstance(valor, (int, float)) and not isinstance(valor, bool) and math.isfinite(valor) and valor > 0:
+        return float(valor)
+    return float(ENTRADA_BASE_BRL)
 
 
 # ============================================================
@@ -215,7 +211,7 @@ TIMEFRAMES = {
 
     15: {
         "segundos": 900,
-        "expiracao": 5,
+        "expiracao": 15,
     },
 }
 
@@ -237,19 +233,7 @@ BANCAS = [
 # ATIVOS
 # ============================================================
 
-# Quatro ativos OTC removidos após logs da biblioteca: "not found on consts".
-# Não se cria mapeamento de IDs sem confirmação da corretora.
-ATIVOS = [
-    "EURUSD-OTC",
-    "GBPUSD-OTC",
-    "EURGBP-OTC",
-    "USDJPY-OTC",
-    "USDCHF-OTC",
-    "EURJPY-OTC",
-    "GBPJPY-OTC",
-    "AUDCAD-OTC",
-    "NZDUSD-OTC",
-]
+# Catálogo dinâmico dos ativos disponíveis pela API Deriv Options.\nATIVOS = []
 
 
 # ============================================================
@@ -275,7 +259,7 @@ wins_base_ponderada = 0
 losses_base_ponderada = 0
 contador_entrada_lock = threading.Lock()
 resultado_global_centavos = 0
-ultimo_saldo_practice = None
+ultimo_saldo_demo = None
 recuperacao_em_curso = None
 operacoes_ativas = {}
 ordens_pendentes = {}
@@ -447,28 +431,19 @@ def conectado():
 
 
 def _confirmar_practice_sincrono(cliente):
-    # Deve executar sob _sessao_lock: connect/change_balance alteram um ID global no SDK.
-    modo = cliente.get_balance_mode()
-    if modo != "PRACTICE":
-        cliente.change_balance("PRACTICE")
-    return cliente.get_balance_mode() == "PRACTICE"
+    # O adapter só abre o endpoint de opções DEMO e valida o account_id configurado.
+    return cliente.get_balance_mode() == "DEMO"
 
 
 def _confirmar_practice(cliente):
-    def confirmar():
-        with _sessao_lock:
-            return _confirmar_practice_sincrono(cliente)
-    estado, resposta = chamada_api_limitada("confirmar_practice", confirmar,
-                                            PRAZO_CONSULTA_API, cliente)
-    confirmado = estado == "ok" and resposta is True
+    confirmado = cliente is not None and cliente.check_connect() and _confirmar_practice_sincrono(cliente)
     if not confirmado:
-        log.error("CONTA PRACTICE NAO CONFIRMADA | estado=%s", estado)
+        log.error("CONTA DERIV DEMO NAO CONFIRMADA")
     return confirmado
 
 
 def _conectar_na_sessao(cliente):
-    with _sessao_lock:
-        return cliente.connect()
+    return cliente.connect()
 
 
 class _EnvioNaoRealizado(Exception):
@@ -485,74 +460,89 @@ def _enviar_na_sessao_practice(cliente, funcao):
 def _saldo_practice_sincrono(cliente, exigir_atual=True):
     with _sessao_lock:
         if (exigir_atual and api is not cliente) or not _confirmar_practice_sincrono(cliente):
-            raise ValueError("practice_nao_confirmada")
+            raise ValueError("demo_nao_confirmada")
         return cliente.get_balance()
 
 
 def conectar():
-    global api, ultimo_saldo_practice, _cliente_conectando
-    if not IQ_EMAIL or not IQ_PASSWORD:
-        log.error("IQ_EMAIL/IQ_PASSWORD ausentes.")
+    global api, ultimo_saldo_practice, _cliente_conectando, ATIVOS
+    if not DERIV_APP_ID or not DERIV_TOKEN or not DERIV_DEMO_ACCOUNT_ID:
+        log.error("DERIV_APP_ID, DERIV_TOKEN ou DERIV_DEMO_ACCOUNT_ID ausente.")
         return False
     if not connect_lock.acquire(timeout=1):
-        log.warning("CONEXAO EM ANDAMENTO | nova tentativa adiada")
+        log.warning("CONEXAO DERIV EM ANDAMENTO | nova tentativa adiada")
         return False
     try:
         if conectado():
             return True
         if _cliente_conectando is None:
-            _cliente_conectando = IQ_Option(IQ_EMAIL, IQ_PASSWORD)
+            _cliente_conectando = DerivOptionsClient(
+                DERIV_APP_ID, DERIV_TOKEN, DERIV_DEMO_ACCOUNT_ID,
+                base_stake_brl=ENTRADA_BASE_BRL,
+            )
         nova = _cliente_conectando
-        estado, resposta = chamada_api_limitada("connect", lambda: _conectar_na_sessao(nova), 20.0, nova)
+        estado, resposta = chamada_api_limitada(
+            "connect", lambda: _conectar_na_sessao(nova), 30.0, nova
+        )
         if estado != "ok":
-            log.error("CONEXAO IQ INDISPONIVEL | estado=%s", estado)
+            log.error("CONEXAO DERIV INDISPONIVEL | estado=%s", estado)
             if estado != "timeout":
                 _cliente_conectando = None
             return False
         _cliente_conectando = None
-        ok = isinstance(resposta, (tuple, list)) and resposta and resposta[0] is True
-        log.info("CONNECT | confirmado=%s", ok)
+        ok = isinstance(resposta, (tuple, list)) and len(resposta) >= 1 and resposta[0] is True
         if not ok or not _confirmar_practice(nova):
             return False
-        estado, saldo = chamada_api_limitada("balance", lambda: _saldo_practice_sincrono(nova, exigir_atual=False),
-                                             PRAZO_CONSULTA_API, nova)
+
+        estado, saldo = chamada_api_limitada("balance", nova.get_balance, PRAZO_CONSULTA_API, nova)
         if estado != "ok" or isinstance(saldo, bool):
-            log.warning("SALDO PRACTICE INDISPONIVEL | estado=%s", estado)
+            log.warning("SALDO DEMO INDISPONIVEL | estado=%s", estado)
             return False
         saldo = float(saldo)
         if not math.isfinite(saldo) or saldo < 0:
             return False
+
+        estado, simbolos = chamada_api_limitada(
+            "active_symbols", lambda: nova.get_active_symbols(refresh=True),
+            PRAZO_CONSULTA_API, nova
+        )
+        if estado != "ok" or not isinstance(simbolos, dict) or not simbolos:
+            log.error("CATALOGO DERIV INDISPONIVEL | nenhuma ordem será iniciada")
+            return False
+        ativos = sorted(simbolos)
         if not _sessao_lock.acquire(timeout=PRAZO_CONSULTA_API):
             log.error("SESSAO OCUPADA | publicacao_da_conexao_adiada")
             return False
         try:
             api = nova
+            ATIVOS = ativos
         finally:
             _sessao_lock.release()
         with estado_lock:
             ultimo_saldo_practice = saldo
+
         entrada = obter_entrada_base(saldo)
-        log.info("IQ CONECTADA | conta=PRACTICE confirmada | saldo=%.2f", saldo)
+        moeda = nova.currency
+        log.info("DERIV CONECTADA | conta=DEMO confirmada | moeda=%s | ativos=%s", moeda, len(ativos))
         telegram(
-            "🤖 ROBÔ IQ DIGITAL ONLINE\n"
-            "🧪 CONTA: PRACTICE confirmada\n"
-            f"💰 Saldo: {saldo:.2f}\n"
-            f"💵 Entrada-base fixa pela assertividade global: R${entrada:.2f}\n"
-            f"🏦 {QTD_BANCAS} bancas; contador e prejuízo líquido globais\n"
-            "⏱ M1 + M5 + M15\n📊 SOMENTE DIGITAL\n"
+            "🤖 Baskaraido Trader PRO ONLINE\n"
+            "🧪 Corretora: Deriv | Conta: DEMO confirmada\n"
+            f"💰 Saldo DEMO: {saldo:.2f} {moeda}\n"
+            f"💵 Entrada-base: R$ {ENTRADA_BASE_BRL:.2f} (≈ {entrada:.2f} {moeda})\n"
+            f"🏦 {QTD_BANCAS} bancas compartilhadas\n"
+            "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
+            f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
-            "🛡 Gales por assertividade global: <50%=4; 50–59%=3; 60–69%=2; 70–79%=1; >=80%=0\n"
-            "♻️ Recuperação de 100% do prejuízo líquido global, limitada ao saldo disponível\n"
-            "♾️ CICLOS ILIMITADOS\n"
-            f"🔥 Score mínimo: {SCORE_MIN}\n↔️ Diferença mínima: {DIFERENCA_MINIMA}"
+            "🛡 Gales por assertividade: <50%=4; 50–59%=3; 60–69%=2; 70–79%=1; ≥80%=0\n"
+            "♻️ Recuperação de 100% do prejuízo global\n"
+            f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
         return True
     except Exception as erro:
-        log.error("ERRO CONEXAO | tipo=%s", type(erro).__name__)
+        log.error("ERRO CONEXAO DERIV | tipo=%s", type(erro).__name__)
         return False
     finally:
         connect_lock.release()
-
 
 def garantir_conexao():
     return conectado() or conectar()
@@ -571,7 +561,7 @@ def obter_saldo_atual():
         estado, resposta = chamada_api_limitada("balance", lambda: _saldo_practice_sincrono(cliente),
                                                 PRAZO_CONSULTA_API, cliente)
         if estado != "ok" or isinstance(resposta, bool):
-            log.warning("SALDO PRACTICE INDISPONIVEL | estado=%s", estado)
+            log.warning("SALDO DEMO INDISPONIVEL | estado=%s", estado)
             return None
         saldo = float(resposta)
         if not math.isfinite(saldo) or saldo < 0:
@@ -580,7 +570,7 @@ def obter_saldo_atual():
             ultimo_saldo_practice = saldo
         return round(saldo, 2)
     except Exception as erro:
-        log.warning("SALDO PRACTICE INDISPONIVEL | tipo=%s", type(erro).__name__)
+        log.warning("SALDO DEMO INDISPONIVEL | tipo=%s", type(erro).__name__)
         return None
 
 
@@ -591,7 +581,7 @@ def texto_saldo():
     if saldo is None:
         return "indisponível"
 
-    return f"{saldo:.2f}"
+    return f"{saldo:.2f} {getattr(api, 'currency', '')}".strip()
 
 
 # ============================================================
@@ -748,120 +738,43 @@ def _consultar_candles_correlacionados(cliente, ativo, segundos, quantidade, ago
             receptor["pedidos"].pop(request_id, None)
 
 
-def obter_candles(
-    ativo,
-    segundos,
-    quantidade=100
-):
-
+def obter_candles(ativo, segundos, quantidade=100):
     if not garantir_conexao():
         return []
-
     try:
-
-        agora = int(
-            time.time()
-        )
-
         cliente = api
-        resposta_raw = _consultar_candles_correlacionados(
-            cliente, ativo, segundos, quantidade, agora)
-        if resposta_raw is not None:
-            estado, dados = resposta_raw
-        else:
-            # O wrapper pode reconectar e mudar o balance_id global do SDK.
-            # Nessa compatibilidade, a sessão permanece protegida até concluir,
-            # mesmo no timeout. O canal raw fixado acima não tem esse bloqueio.
-            consulta = (ativo, segundos, quantidade, agora)
-            log.warning("CANDLES SDK COMPATIBILIDADE | ativo=%s | sessao_protegida_ate_conclusao=true", ativo)
-
-            def consultar_wrapper():
-                with _sessao_lock:
-                    if cliente is not api:
-                        return consulta, []
-                    return consulta, cliente.get_candles(
-                        ativo, segundos, quantidade, agora)
-
-            estado, resposta = chamada_api_limitada(
-                "candles", consultar_wrapper,
-                timeout=PRAZO_CONSULTA_API,
-                cliente=cliente,
-            )
-            if estado == "ok":
-                origem, dados = resposta
-                if origem != consulta:
-                    log.info("CANDLES RESPOSTA TARDIA DESCARTADA | ativo=%s | segundos=%s",
-                             ativo, segundos)
-                    return []
-        if estado != "ok":
-            log.warning("CANDLES INDISPONIVEIS | ativo=%s | segundos=%s | estado=%s",
-                        ativo, segundos, estado)
+        if not ativo_digital_disponivel(ativo):
             return []
-
-        if not dados:
+        estado, dados = chamada_api_limitada(
+            "candles:" + ativo + ":" + str(segundos),
+            lambda: cliente.get_candles(ativo, segundos, quantidade, int(time.time())),
+            PRAZO_CONSULTA_API, cliente
+        )
+        if estado != "ok" or not isinstance(dados, list):
+            log.warning("CANDLES INDISPONIVEIS | ativo=%s | segundos=%s | estado=%s", ativo, segundos, estado)
             return []
-
+        agora = int(time.time())
         candles = []
-
-        agora = int(
-            time.time()
-        )
-
-        for c in dados:
-
+        for candle in dados:
             try:
-
-                inicio = int(
-                    c.get("from", 0)
-                )
-
-                if (
-                    inicio + segundos
-                    > agora
-                ):
+                inicio = int(candle.get("from", 0))
+                if inicio + segundos > agora:
                     continue
-
                 candles.append({
-
-                    "from":
-                        inicio,
-
-                    "open":
-                        float(c["open"]),
-
-                    "close":
-                        float(c["close"]),
-
-                    "max":
-                        float(c["max"]),
-
-                    "min":
-                        float(c["min"]),
+                    "from": inicio, "open": float(candle["open"]),
+                    "close": float(candle["close"]), "max": float(candle["max"]),
+                    "min": float(candle["min"]),
                 })
-
-            except Exception:
-
-                pass
-
+            except (TypeError, ValueError, KeyError, OverflowError):
+                continue
         if len(candles) >= 60:
-
             with estado_lock:
-
-                ativos_validos.add(
-                    ativo
-                )
-
+                ativos_validos.add(ativo)
         return candles
-
-    except Exception as e:
-
-        log.debug(
-            "CANDLES ERRO | %s | %s",
-            ativo,
-            type(e).__name__
-        )
-
+    except Exception as erro:
+        log.debug("CANDLES DERIV ERRO | %s | %s", ativo, type(erro).__name__)
         return []
+
 
 
 # ============================================================
@@ -1288,90 +1201,26 @@ _disponibilidade_lock = threading.Lock()
 _disponibilidade_cache = {"dados": None, "ate": 0.0, "consultando": False, "tentar_apos": 0.0}
 
 def listar_ativos_otc():
-    """Retorna todos os instrumentos digitais OTC abertos, de qualquer categoria.
-    Inclui ações (como Google/Amazon), índices e moedas quando publicados pela API.
-    """
-    with _disponibilidade_lock:
-        dados = _disponibilidade_cache["dados"]
-        valido = dados is not None and time.time() < _disponibilidade_cache["ate"]
-    if valido:
-        return sorted(
-            ativo for ativo, info in dados.items()
-            if isinstance(ativo, str)
-            and "OTC" in ativo.upper()
-            and isinstance(info, dict)
-            and info.get("open") is True
-        )
-    ativo_digital_disponivel(ATIVOS[0])
-    return list(ATIVOS)
-
-def ativo_digital_disponivel(ativo):
-    """Confirma disponibilidade OTC somente com catálogo digital válido e recente."""
-    if not isinstance(ativo, str) or not ativo.upper().endswith("-OTC"):
-        return False
+    """Retorna os símbolos abertos autorizados pelo catálogo Deriv Options."""
     cliente = api
     if cliente is None:
-        return None
-    agora = time.time()
-    with _disponibilidade_lock:
-        dados = _disponibilidade_cache["dados"]
-        mesma_sessao = _disponibilidade_cache.get("sessao") == id(cliente)
-        if mesma_sessao and dados is not None and agora < _disponibilidade_cache["ate"]:
-            info = dados.get(ativo)
-            return info["open"] if isinstance(info, dict) and isinstance(info.get("open"), bool) else None
-        # Evita tempestade de consultas após timeout/resposta vazia.
-        if mesma_sessao and agora < _disponibilidade_cache.get("tentar_apos", 0):
-            return None
-        _disponibilidade_cache["sessao"] = id(cliente)
+        return list(ATIVOS)
+    try:
+        return sorted(cliente.get_active_symbols())
+    except Exception as erro:
+        log.warning("CATALOGO DERIV INDISPONIVEL | tipo=%s", type(erro).__name__)
+        return []
 
-    estado, resposta = chamada_api_limitada(
-        "digital_underlying", cliente.get_digital_underlying_list_data,
-        PRAZO_CONSULTA_API, cliente)
-    if estado != "ok" or not isinstance(resposta, dict) or not isinstance(resposta.get("underlying"), list):
-        tipo = type(resposta).__name__
-        with _disponibilidade_lock:
-            if _disponibilidade_cache.get("sessao") == id(cliente):
-                _disponibilidade_cache["tentar_apos"] = time.time() + 5
-        log.warning("DISPONIBILIDADE DIGITAL NAO CONFIRMADA | estado=%s | resposta_tipo=%s | prazo=%.1fs",
-                    estado, tipo, PRAZO_CONSULTA_API)
-        return None
 
-    dados = {}
-    agora_servidor = time.time()
-    for instrumento in resposta["underlying"]:
-        if not isinstance(instrumento, dict):
-            continue
-        nome = instrumento.get("underlying")
-        if not isinstance(nome, str) or not nome.upper().endswith("-OTC"):
-            continue
-        horarios = instrumento.get("schedule")
-        if not isinstance(horarios, list):
-            continue
-        intervalos_validos = [
-            (h.get("open"), h.get("close")) for h in horarios
-            if isinstance(h, dict)
-            and isinstance(h.get("open"), (int, float))
-            and isinstance(h.get("close"), (int, float))
-        ]
-        if not intervalos_validos:
-            continue
-        dados[nome] = {"open": any(inicio < agora_servidor < fim
-                                    for inicio, fim in intervalos_validos)}
-    if not dados:
-        with _disponibilidade_lock:
-            if _disponibilidade_cache.get("sessao") == id(cliente):
-                _disponibilidade_cache["tentar_apos"] = time.time() + 5
-        log.warning("DISPONIBILIDADE DIGITAL NAO CONFIRMADA | catalogo_otc_vazio_ou_invalido")
+def ativo_digital_disponivel(ativo):
+    """Confirma catálogo aberto para Options; contratos são revalidados antes da compra."""
+    cliente = api
+    if cliente is None or not isinstance(ativo, str):
         return None
-    with _disponibilidade_lock:
-        if api is not cliente:
-            return None
-        _disponibilidade_cache.update(
-            dados=dados, ate=time.time() + 15,
-            sessao=id(cliente), consultando=False, tentar_apos=0)
-    log.info("DISPONIBILIDADE DIGITAL | instrumentos_otc=%s", len(dados))
-    info = dados.get(ativo)
-    return info["open"] if info else None
+    try:
+        return bool(cliente.is_symbol_tradeable(ativo))
+    except Exception:
+        return None
 
 
 _payout_cache = {}
@@ -1382,66 +1231,28 @@ _envios_digitais_lock = threading.Lock()
 
 def obter_payout_digital(ativo, expiracao):
     cliente = api
+    if cliente is None:
+        return None
     chave = (id(cliente), ativo, expiracao)
     registro = _payout_cache.get(chave)
     if registro and time.monotonic() < registro["ate"]:
         return registro["payout"]
-    baixo = getattr(cliente, "api", None)
-    dados = getattr(baixo, "instrument_quites_generated_data", None)
-    tempos = getattr(baixo, "instrument_quites_generated_timestamp", None)
-    if isinstance(dados, dict) and isinstance(tempos, dict):
-        # O handler instrument-quotes-generated do SDK publica payout percentual
-        # por ativo/período. get_digital_payout depende de outro buffer que certas
-        # versões não atualizam. CALL e PUT podem diferir: usar o menor é conservador.
-        estado, _ = chamada_api_limitada("subscribe_payout:" + ativo + ":" + str(expiracao),
-            lambda: cliente.subscribe_strike_list(ativo, expiracao), PRAZO_CONSULTA_API, cliente)
-        if estado != "ok":
-            return None
-        try:
-            limite = time.monotonic() + min(2.0, PRAZO_CONSULTA_API)
-            while time.monotonic() < limite:
-                precos = dict(dados.get(ativo, {}).get(expiracao * 60, {}))
-                vencimento = tempos.get(ativo, {}).get(expiracao * 60)
-                if (isinstance(vencimento, (int, float)) and not isinstance(vencimento, bool)
-                        and math.isfinite(vencimento) and vencimento > time.time() + 30):
-                    lados = {}
-                    for instrumento, percentual in precos.items():
-                        if not isinstance(instrumento, str) or not instrumento.endswith(("CSPT", "PSPT")):
-                            continue
-                        if isinstance(percentual, (int, float)) and not isinstance(percentual, bool):
-                            if math.isfinite(percentual) and 0 < percentual <= 100:
-                                lados["call" if instrumento.endswith("CSPT") else "put"] = percentual / 100.0
-                    if "call" in lados and "put" in lados:
-                        payout = min(lados.values())
-                        validade = min(30.0, vencimento - time.time() - 30)
-                        _payout_cache[chave] = {"payout": payout, "ate": time.monotonic() + validade}
-                        log.info("PAYOUT DIGITAL CONFIRMADO | ativo=%s | expiracao=%s | payout=%.4f | fonte=quotes_spt",
-                                 ativo, expiracao, payout)
-                        return payout
-                time.sleep(.1)
-            return None
-        finally:
-            # O wrapper unsubscribe_strike_list apaga TODOS os períodos do ativo.
-            # O canal direto cancela só esta assinatura, preservando M1/M5/M15.
-            chamada_api_limitada("unsubscribe_payout:" + ativo + ":" + str(expiracao),
-                lambda: baixo.unsubscribe_instrument_quites_generated(ativo, expiracao),
-                PRAZO_CONSULTA_API, cliente)
-    metodo = getattr(cliente, "get_digital_payout", None)
-    if not callable(metodo):
-        return None
-    estado, valor = chamada_api_limitada("payout:" + ativo,
-        lambda: metodo(ativo, seconds=2), PRAZO_CONSULTA_API, cliente)
-    if estado != "ok" or isinstance(valor, bool):
+    estado, payout = chamada_api_limitada(
+        "payout:" + ativo + ":" + str(expiracao),
+        lambda: cliente.get_digital_payout(ativo, expiracao),
+        PRAZO_CONSULTA_API, cliente
+    )
+    if estado != "ok" or isinstance(payout, bool):
         return None
     try:
-        payout = float(valor) / 100.0
-    except (TypeError, ValueError):
+        payout = float(payout)
+    except (TypeError, ValueError, OverflowError):
         return None
-    if not math.isfinite(payout) or not 0 <= payout <= 1:
+    # Deriv adapter returns net profit per stake as a ratio (e.g. 0.82), not percent.
+    if not math.isfinite(payout) or payout <= 0:
         return None
-    _payout_cache[chave] = {"payout": payout, "ate": time.monotonic() + 30}
+    _payout_cache[chave] = {"payout": payout, "ate": time.monotonic() + 15}
     return payout
-
 
 def _motivo_recusa_seguro(resposta):
     # Não registrar payload arbitrário, que pode incluir dados da conta/sessão.
@@ -1451,7 +1262,7 @@ def _motivo_recusa_seguro(resposta):
     if isinstance(resposta, dict):
         codigo = resposta.get("code")
         mensagem = resposta.get("message")
-        return ((codigo if isinstance(codigo, str) and codigo in codigos else "recusa_iq_option") +
+        return ((codigo if isinstance(codigo, str) and codigo in codigos else "recusa_deriv") +
                 (":" + mensagem if isinstance(mensagem, str) and mensagem in mensagens else ""))
     return "recusa_iq_option"
 
@@ -1533,7 +1344,7 @@ def consultar_confirmacao_envio(banca):
             with estado_lock:
                 stats["ordens_aceitas"] += 1
                 estado_frentes[banca]["ordens_aceitas"] += 1
-            log.info("ORDEM ACEITA | banca=%s | ativo=%s | order_id=%s | conta=PRACTICE",
+            log.info("ORDEM ACEITA | banca=%s | ativo=%s | order_id=%s | conta=DEMO",
                      banca, envio["ativo"], resultado)
         else:
             with estado_lock:
@@ -1612,7 +1423,7 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao):
         saldo = float("nan")
     if not math.isfinite(saldo) or saldo < 0:
         return recusar("saldo_indisponivel")
-    if valor > saldo or valor < ENTRADA_MINIMA:
+    if valor > saldo or valor < max(ENTRADA_MINIMA, float(getattr(cliente, "base_stake", ENTRADA_MINIMA))):
         return recusar("saldo_insuficiente")
     try:
         disponibilidade = ativo_digital_disponivel(ativo)
@@ -1620,7 +1431,7 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao):
         log.warning("DISPONIBILIDADE DIGITAL INDISPONIVEL | tipo=%s", type(erro).__name__)
         return recusar("disponibilidade_digital_nao_confirmada")
     if disponibilidade is False:
-        bloquear(ativo, expiracao, "instrumento digital fechado na IQ Option")
+        bloquear(ativo, expiracao, "instrumento Options fechado na Deriv")
         return recusar("instrumento_digital_fechado")
     if disponibilidade is not True:
         return recusar("disponibilidade_digital_nao_confirmada")
@@ -1642,7 +1453,7 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao):
         return recusar(motivo)
     funcao_envio = envio["funcao"]
     def invocar_envio():
-        log.info("ORDEM ENVIADA | banca=%s | ativo=%s | direcao=%s | expiracao=%s | valor=%.2f | payout=%.2f | conta=PRACTICE",
+        log.info("ORDEM ENVIADA | banca=%s | ativo=%s | direcao=%s | expiracao=%s | valor=%.2f | payout=%.2f | conta=DEMO",
                  banca, ativo, direcao, expiracao, valor, payout)
         return funcao_envio()
     envio.update(cliente=cliente, ativo=ativo, expiracao=expiracao, chave="envio_v2:" + banca,
@@ -1728,7 +1539,7 @@ def aguardar_resultado(order_id):
                 if not math.isfinite(lucro):
                     raise ValueError("resultado nao finito")
                 resultado = "win" if lucro > 0 else "loss" if lucro < 0 else "draw"
-                log.info("RESULTADO %s | order_id=%s | lucro=%.2f | fonte=IQ_OPTION",
+                log.info("RESULTADO %s | order_id=%s | lucro=%.2f | fonte=DERIV",
                          resultado.upper(), order_id, lucro)
                 _clientes_por_ordem.pop(order_id, None)
                 return resultado, lucro
@@ -1958,7 +1769,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             if not math.isfinite(saldo) or saldo < 0:
                 raise ValueError("saldo inválido")
         except Exception:
-            log.warning("SALDO PRACTICE INDISPONÍVEL | %s", banca)
+            log.warning("SALDO DEMO INDISPONÍVEL | %s", banca)
             return False, "saldo_indisponivel", contexto
 
         # A consulta pode bloquear até seu prazo; nunca segurar estado_lock
@@ -1990,9 +1801,9 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                     alvo = 0.0
                 contexto = {"posicao": posicao, "numero": entradas_globais_aceitas + 1,
                             "gales": posicao, "assertividade_global": assertividade_atual,
-                            "base": ENTRADAS_POR_GALE[posicao],
+                            "base": obter_entrada_base(saldo),
                             "entrada": calcular_entrada_recuperacao(alvo, saldo, payout_efetivo)
-                            if alvo > 0 else ENTRADAS_POR_GALE[posicao],
+                            if alvo > 0 else obter_entrada_base(saldo),
                             "prejuizo_alocado": alvo, "resultado_centavos": 0,
                             "payout_recuperacao": payout_efetivo if alvo > 0 else None,
                             "payout_real": payout_real,
@@ -2016,9 +1827,9 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 return False, "saldo_insuficiente", operacoes_ativas.get(banca)
             if nivel == 0 and contexto["prejuizo_alocado"] > 0:
                 recuperacao_em_curso = banca
-                log.info("RECUPERACAO DIMENSIONADA | banca=%s | ativo=%s | prejuizo=%.2f | entrada=%.2f | payout_real=%.4f | payout_recuperacao=%.4f | alvo=100%% | conta=PRACTICE", banca, ativo, contexto["prejuizo_alocado"], valor, contexto["payout_real"], contexto["payout_recuperacao"])
+                log.info("RECUPERACAO DIMENSIONADA | banca=%s | ativo=%s | prejuizo=%.2f | entrada=%.2f | payout_real=%.4f | payout_recuperacao=%.4f | alvo=100%% | conta=DEMO", banca, ativo, contexto["prejuizo_alocado"], valor, contexto["payout_real"], contexto["payout_recuperacao"])
             reservas_pendentes[banca] = valor
-            log.info("SALDO RESERVADO | banca=%s | ativo=%s | nivel=%s | valor=%.2f | saldo=%.2f | disponivel=%.2f | recuperacao=%.2f | conta=PRACTICE", banca, ativo, nivel, valor, saldo, disponivel, contexto["prejuizo_alocado"])
+            log.info("SALDO RESERVADO | banca=%s | ativo=%s | nivel=%s | valor=%.2f | saldo=%.2f | disponivel=%.2f | recuperacao=%.2f | conta=DEMO", banca, ativo, nivel, valor, saldo, disponivel, contexto["prejuizo_alocado"])
 
         try:
             ok, order_id = executar_ordem(banca, ativo, valor, direcao, expiracao)
@@ -2091,13 +1902,13 @@ def reconciliar_envio_gerido(banca):
                                                     pendente["valor"], resposta, contexto)
                 if confirmado[0] is not True:
                     return confirmado
-                log.info("ORDEM ACEITA TARDIA | banca=%s | ativo=%s | order_id=%s | conta=PRACTICE", banca, pendente["ativo"], resposta)
+                log.info("ORDEM ACEITA TARDIA | banca=%s | ativo=%s | order_id=%s | conta=DEMO", banca, pendente["ativo"], resposta)
             else:
                 reservas_pendentes.pop(banca, None)
                 if pendente["nivel"] == 0 and recuperacao_em_curso == banca:
                     recuperacao_em_curso = None
                 confirmado = (False, resposta, operacoes_ativas.get(banca))
-                log.warning("ORDEM RECUSADA TARDIA | banca=%s | ativo=%s | reserva_liberada=true | conta=PRACTICE", banca, pendente["ativo"])
+                log.warning("ORDEM RECUSADA TARDIA | banca=%s | ativo=%s | reserva_liberada=true | conta=DEMO", banca, pendente["ativo"])
             envio_indeterminado = None
             estado_frentes[banca]["envio_indeterminado"] = False
             return confirmado
@@ -2209,14 +2020,14 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                 "recuperacao": contexto["prejuizo_alocado"] > 0,
                 "prejuizo_antes": contexto["prejuizo_alocado"],
                 "data": datetime.now(timezone.utc).isoformat()}
-        sequencia = " → ".join(f"{'Entrada' if i == 0 else f'G{i}'} R${v:.2f}"
+        sequencia = " → ".join(f"{'Entrada' if i == 0 else f'G{i}'} {getattr(api, 'currency', 'USD')} {v:.2f}"
                                for i, v in enumerate(valores))
-        telegram("📊 NOVO SINAL DIGITAL\n"
+        telegram("📊 NOVO SINAL | Baskaraido Trader PRO\n"
                  f"🏦 {banca}\n💱 {ativo}\n🎯 {direcao.upper()}\n"
                  f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n🔥 Score: {score}/100\n"
                  f"🔢 Operação global: {contexto['numero']} / posição {contexto['posicao']}\n"
                  f"🛡 Gales: {gales} | X2\n💰 {sequencia}\n"
-                 f"♻️ Recuperação global reservada: R${contexto['prejuizo_alocado']:.2f}\n🧪 PRACTICE")
+                 f"♻️ Recuperação global reservada: {getattr(api, 'currency', 'USD')} {contexto['prejuizo_alocado']:.2f}\n🧪 Deriv DEMO")
 
         for nivel in range(gales + 1):
             if nivel > 0:
@@ -2229,7 +2040,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             resultado, lucro = aguardar_resultado_confirmado(order_id)
             if not registrar_resultado_ordem(order_id, resultado, lucro):
                 return
-            log.info("RESULTADO %s | banca=%s | ativo=%s | order_id=%s | M%s | nivel=%s | lucro=%.2f | conta=PRACTICE",
+            log.info("RESULTADO %s | banca=%s | ativo=%s | order_id=%s | M%s | nivel=%s | lucro=%.2f | conta=DEMO",
                      resultado.upper(), banca, ativo, order_id, timeframe_analise, nivel, lucro)
             if resultado == "loss" and nivel < gales:
                 time.sleep(1)
@@ -2247,12 +2058,12 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             gestao = finalizar_operacao_global(banca)
             telegram(f"{'✅ WIN' if resultado == 'win' else '❌ LOSS COMPLETO' if resultado == 'loss' else '➖ EMPATE'}\n"
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
-                     f"💵 Resultado líquido do sinal: R${liquido:.2f}\n"
-                     f"📉 Prejuízo líquido global: R${gestao['prejuizo_global']:.2f}\n"
+                     f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
+                     f"📉 Prejuízo líquido global: {getattr(api, 'currency', 'USD')} {gestao['prejuizo_global']:.2f}\n"
                      f"🛡 Próxima posição global: {gestao['gales_proximos']} gales\n"
                      f"📊 Global: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                      f"🎯 Assertividade: {taxa_ponderada(stats['wins'], stats['losses'])}%\n"
-                     f"💰 Saldo PRACTICE: {texto_saldo()}")
+                     f"💰 Saldo Deriv DEMO: {texto_saldo()} {getattr(api, 'currency', '')}")
             return
     finally:
         # Se existe ordem incerta, não libera posições nem a recuperação.
@@ -2513,7 +2324,7 @@ def supervisor():
             instante = time.monotonic()
             if ultima_telemetria is None or instante - ultima_telemetria >= 60:
                 with estado_lock:
-                    log.info("ESTADO EXECUCAO | conta=PRACTICE | habilitada=%s | aceitas=%s | recusadas=%s | wins=%s | losses=%s | pendentes=%s | envio_indeterminado=%s | prejuizo_global=%.2f | recuperacao_banca=%s",
+                    log.info("ESTADO EXECUCAO | conta=DEMO | habilitada=%s | aceitas=%s | recusadas=%s | wins=%s | losses=%s | pendentes=%s | envio_indeterminado=%s | prejuizo_global=%.2f | recuperacao_banca=%s",
                              EXECUTAR_ORDENS, stats["ordens_aceitas"], stats["ordens_recusadas"],
                              stats["wins"], stats["losses"], len(ordens_pendentes),
                              envio_indeterminado is not None, max(0, -resultado_global_centavos) / 100,
@@ -2678,11 +2489,11 @@ def home():
         "status":
             "online",
 
-        "iq_conectada":
+        "deriv_conectada":
             conectado(),
 
         "conta":
-            "PRACTICE",
+            "DEMO",
 
         "saldo":
             saldo,
@@ -2746,8 +2557,8 @@ def home():
 
 
 # ============================================================
-# API DE MONITORAMENTO - SOMENTE LEITURA / PRACTICE
-# Não habilita ordens e não expõe credenciais da IQ/Telegram.
+# API DE MONITORAMENTO - SOMENTE LEITURA / DEMO
+# Não habilita ordens e não expõe credenciais da Deriv/Telegram.
 # Token deve ser configurado em MONITOR_API_TOKEN no servidor.
 # ============================================================
 
@@ -2778,7 +2589,7 @@ def monitor_practice():
 
     return jsonify({
         "schema_version": 1,
-        "conta": "PRACTICE",
+        "conta": "DEMO",
         "modo": "somente_leitura",
         "origem": "robo_practice_memoria_volatil",
         "persistencia": "nao_persistido_reinicia_com_processo",
@@ -2811,7 +2622,7 @@ def health():
             VERSAO,
 
         "conta":
-            "PRACTICE",
+            "DEMO",
 
         "mercado":
             "DIGITAL",
@@ -2862,7 +2673,7 @@ log.info(
 )
 
 log.info(
-    "CONTA = PRACTICE"
+    "CONTA = DEMO"
 )
 
 log.info(
@@ -2884,7 +2695,7 @@ log.info(
 )
 
 log.info(
-    "ENTRADA BASE FIXA PELA ASSERTIVIDADE = R$%.2f",
+    "ENTRADA BASE FIXA = R$%.2f (convertida para moeda DEMO)",
     entrada_inicial
 )
 

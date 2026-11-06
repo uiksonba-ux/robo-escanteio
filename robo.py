@@ -465,7 +465,7 @@ def _saldo_practice_sincrono(cliente, exigir_atual=True):
 
 
 def conectar():
-    global api, ultimo_saldo_practice, _cliente_conectando, ATIVOS
+    global api, ultimo_saldo_demo, _cliente_conectando, ATIVOS
     if not DERIV_APP_ID or not DERIV_TOKEN or not DERIV_DEMO_ACCOUNT_ID:
         log.error("DERIV_APP_ID, DERIV_TOKEN ou DERIV_DEMO_ACCOUNT_ID ausente.")
         return False
@@ -519,7 +519,7 @@ def conectar():
         finally:
             _sessao_lock.release()
         with estado_lock:
-            ultimo_saldo_practice = saldo
+            ultimo_saldo_demo = saldo
 
         entrada = obter_entrada_base(saldo)
         moeda = nova.currency
@@ -553,7 +553,7 @@ def garantir_practice():
 
 
 def obter_saldo_atual():
-    global ultimo_saldo_practice
+    global ultimo_saldo_demo
     try:
         if not garantir_practice():
             return None
@@ -567,7 +567,7 @@ def obter_saldo_atual():
         if not math.isfinite(saldo) or saldo < 0:
             return None
         with estado_lock:
-            ultimo_saldo_practice = saldo
+            ultimo_saldo_demo = saldo
         return round(saldo, 2)
     except Exception as erro:
         log.warning("SALDO DEMO INDISPONIVEL | tipo=%s", type(erro).__name__)
@@ -1710,7 +1710,7 @@ def snapshot_gestao_global():
             "entrada_base": obter_entrada_base(),
             "entrada_percentual": None,
             "entrada_minima": ENTRADA_MINIMA,
-            "saldo_practice_referencia": ultimo_saldo_practice,
+            "saldo_practice_referencia": ultimo_saldo_demo,
             "resultado_liquido_global": resultado_global_centavos / 100,
             "prejuizo_global": max(0, -resultado_global_centavos) / 100,
             "recuperacao_em_curso": recuperacao_em_curso,
@@ -1744,7 +1744,7 @@ def marcar_envio_indeterminado(banca, ativo, nivel, valor, motivo):
 
 def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
     """Escolha, envio e confirmação serializados; a recusa não consome posição."""
-    global entradas_globais_aceitas, recuperacao_em_curso, ultimo_saldo_practice
+    global entradas_globais_aceitas, recuperacao_em_curso, ultimo_saldo_demo
     with contador_entrada_lock:
         with estado_lock:
             contexto = operacoes_ativas.get(banca)
@@ -1791,7 +1791,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 payout_real = None
 
         with estado_lock:
-            ultimo_saldo_practice = saldo
+            ultimo_saldo_demo = saldo
             if nivel == 0:
                 assertividade_atual = taxa_ponderada(stats["wins"], stats["losses"])
                 posicao = gales_por_assertividade(assertividade_atual)

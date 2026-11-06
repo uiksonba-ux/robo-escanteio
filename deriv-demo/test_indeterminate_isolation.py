@@ -1,5 +1,6 @@
 import threading
 import unittest
+from unittest import mock
 
 # robo.py starts its worker when imported. Keep this test isolated from all
 # network activity and trading threads.

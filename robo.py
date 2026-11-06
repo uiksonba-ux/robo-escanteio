@@ -1858,6 +1858,7 @@ def confirmar_ordem_gerida(banca, ativo, nivel, valor, order_id, contexto):
     with estado_lock:
         if not isinstance(order_id, (int, str)) or isinstance(order_id, bool) or not order_id or order_id in ordens_pendentes or order_id in ordens_liquidadas:
             marcar_envio_indeterminado(banca, ativo, nivel, valor, "identificador de ordem inválido ou repetido")
+            envios_indeterminados[banca]["contexto"] = dict(contexto)
             return None, "order_id_invalido_ou_repetido", contexto
         reservas_pendentes.pop(banca, None)
         if nivel == 0:

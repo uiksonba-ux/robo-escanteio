@@ -33,15 +33,26 @@ class DerivAPIError(RuntimeError):
 class DerivOptionsClient:
     """One serialized WebSocket owner bound to exactly one active DEMO account."""
 
-    def __init__(self, app_id, token, account_id, base_stake_brl=2.0):
+    def __init__(self, app_id, token, account_id, base_stake_brl=2.0,
+                 *, base_stake_amount=None, base_stake_currency=None):
         self.app_id = str(app_id or "").strip()
         self.token = str(token or "").strip()
         self.account_id = str(account_id or "").strip()
-        self.base_stake_brl = Decimal(str(base_stake_brl))
+        if base_stake_amount is None:
+            self.base_stake_amount = Decimal(str(base_stake_brl))
+            self.base_stake_currency = "BRL"
+        else:
+            self.base_stake_amount = Decimal(str(base_stake_amount))
+            self.base_stake_currency = str(base_stake_currency or "").strip().upper()
+        # Keep the original attribute for callers that configure BRL.
+        self.base_stake_brl = (
+            self.base_stake_amount if self.base_stake_currency == "BRL" else None
+        )
         if not self.app_id or not self.token or not self.account_id:
             raise ValueError("Configure DERIV_APP_ID, DERIV_TOKEN e DERIV_DEMO_ACCOUNT_ID")
-        if not self.base_stake_brl.is_finite() or self.base_stake_brl <= 0:
-            raise ValueError("Entrada-base BRL inválida")
+        if (not self.base_stake_amount.is_finite() or self.base_stake_amount <= 0
+                or self.base_stake_currency not in {"BRL", "USD"}):
+            raise ValueError("Entrada-base ou moeda inválida")
         self.currency = None
         self.base_stake = None
         self._exchange_rate = None
@@ -105,13 +116,16 @@ class DerivOptionsClient:
         self.currency = currency
 
     def _refresh_exchange_rate(self):
-        if self.currency == "BRL":
+        if self.currency == self.base_stake_currency:
             rate = Decimal("1")
         else:
             payload = self._rest_json(
                 "GET",
                 "/wallet/v1/exchange-rate",
-                params={"source_currency": "BRL", "destination_currency": self.currency},
+                params={
+                    "source_currency": self.base_stake_currency,
+                    "destination_currency": self.currency,
+                },
             )
             raw = payload.get("data", {}).get("exchange_rate")
             try:
@@ -122,7 +136,7 @@ class DerivOptionsClient:
             raise DerivAPIError("ValidationError")
         self._exchange_rate = rate
         self._exchange_rate_at = time.monotonic()
-        self.base_stake = float((self.base_stake_brl * rate).quantize(
+        self.base_stake = float((self.base_stake_amount * rate).quantize(
             Decimal("0.01"), rounding=ROUND_UP
         ))
         if not math.isfinite(self.base_stake) or self.base_stake <= 0:

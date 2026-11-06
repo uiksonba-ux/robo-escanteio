@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-REC150"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-USD035-GALE3-REC100"
 
 app = Flask(__name__)
 
@@ -153,19 +153,19 @@ TEMPO_BLOQUEIO = env_int(
 
 ENTRADA_MINIMA = 0.01
 
-MULTIPLICADOR_GALE = 2.0  # multiplicador fixo da progressão
+MULTIPLICADOR_GALE = 3.0  # multiplicador fixo da progressão
 
 # Faixas de assertividade global (WINs / operações concluídas), compartilhadas pelas 10 bancas.
 GALES_POR_CICLO = 4
 MAX_GALES = 4
 
-RECUPERACAO_PERCENTUAL = 1.5
+RECUPERACAO_PERCENTUAL = 1.0
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 
 QTD_BANCAS = 10
 
-# A assertividade define apenas a quantidade de gales; entrada-base fixa em BRL.
-ENTRADA_BASE_BRL = 2.00
+# A assertividade define a quantidade de gales; entrada-base fixa em USD.
+ENTRADA_BASE_USD = 0.35
 
 
 
@@ -190,7 +190,7 @@ def obter_entrada_base(saldo=None):
     valor = getattr(cliente, "base_stake", None) if cliente is not None else None
     if isinstance(valor, (int, float)) and not isinstance(valor, bool) and math.isfinite(valor) and valor > 0:
         return float(valor)
-    return float(ENTRADA_BASE_BRL)
+    return float(ENTRADA_BASE_USD)
 
 
 # ============================================================
@@ -478,7 +478,8 @@ def conectar():
         if _cliente_conectando is None:
             _cliente_conectando = DerivOptionsClient(
                 DERIV_APP_ID, DERIV_TOKEN, DERIV_DEMO_ACCOUNT_ID,
-                base_stake_brl=ENTRADA_BASE_BRL,
+                base_stake_amount=ENTRADA_BASE_USD,
+                base_stake_currency="USD",
             )
         nova = _cliente_conectando
         estado, resposta = chamada_api_limitada(
@@ -528,7 +529,7 @@ def conectar():
             "🤖 Baskaraido Trader PRO ONLINE\n"
             "🧪 Corretora: Deriv | Conta: DEMO confirmada\n"
             f"💰 Saldo DEMO: {saldo:.2f} {moeda}\n"
-            f"💵 Entrada-base: R$ {ENTRADA_BASE_BRL:.2f} (≈ {entrada:.2f} {moeda})\n"
+            f"💵 Entrada-base: USD {entrada:.2f}\n"
             f"🏦 {QTD_BANCAS} bancas compartilhadas\n"
             "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
@@ -1645,7 +1646,7 @@ def registrar_loss(
 
 
 # ============================================================
-# GALE FIXO X2
+# GALE FIXO CONFIGURÁVEL
 # ============================================================
 
 def valores_do_ciclo(
@@ -2708,8 +2709,8 @@ log.info(
 )
 
 log.info(
-    "ENTRADA BASE FIXA = R$%.2f (convertida para moeda DEMO)",
-    entrada_inicial
+    "ENTRADA BASE FIXA = USD %.2f",
+    ENTRADA_BASE_USD
 )
 
 log.info(

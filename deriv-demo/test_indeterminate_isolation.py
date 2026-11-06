@@ -1,5 +1,6 @@
 import threading
 import unittest
+from unittest import mock
 
 # robo.py starts its worker when imported. Keep this test isolated from all
 # network activity and trading threads.
@@ -74,6 +75,15 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertIsNone(ok)
         self.assertEqual(motivo, "order_id_invalido_ou_repetido")
         self.assertEqual(robo.envios_indeterminados[banca]["contexto"], contexto)
+
+    def test_150_percent_global_recovery_target(self):
+        with mock.patch.object(robo, "obter_entrada_base", return_value=1.0):
+            alvo = robo.calcular_alvo_recuperacao(1.0)
+            self.assertEqual(alvo, 1.5)
+            self.assertEqual(
+                robo.calcular_entrada_recuperacao(alvo, payout=0.80),
+                2.88,
+            )
 
 
 if __name__ == "__main__":

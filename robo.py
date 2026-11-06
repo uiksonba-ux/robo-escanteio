@@ -159,7 +159,7 @@ MULTIPLICADOR_GALE = 2.0  # multiplicador fixo da progressão
 GALES_POR_CICLO = 4
 MAX_GALES = 4
 
-RECUPERACAO_PERCENTUAL = 1.0
+RECUPERACAO_PERCENTUAL = 1.5
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 
 QTD_BANCAS = 10
@@ -534,7 +534,7 @@ def conectar():
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
             "🛡 Gales por assertividade: <50%=4; 50–59%=3; 60–69%=2; 70–79%=1; ≥80%=0\n"
-            "♻️ Recuperação de 100% do prejuízo global\n"
+            f"♻️ Recuperação global de {RECUPERACAO_PERCENTUAL:.0%} do prejuízo acumulado\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
         return True
@@ -1693,8 +1693,17 @@ def prejuizo_global_atual():
         return max(0, -resultado_global_centavos) / 100
 
 
+def calcular_alvo_recuperacao(prejuizo):
+    """Aplica o percentual configurado ao prejuízo global confirmado."""
+    valor = Decimal(str(prejuizo))
+    percentual = Decimal(str(RECUPERACAO_PERCENTUAL))
+    if not valor.is_finite() or not percentual.is_finite():
+        raise ValueError("Alvo de recuperação inválido")
+    return float(max(Decimal("0"), valor) * percentual)
+
+
 def calcular_entrada_recuperacao(prejuizo, saldo=None, payout=None):
-    """Entrada fixa da faixa + alvo de 100% da dívida ao payout informado."""
+    """Calcula a entrada fixa mais o alvo de recuperação pelo payout informado."""
     alvo = max(Decimal("0"), Decimal(str(prejuizo)))
     taxa_payout = Decimal(str(PAYOUT_RECUPERACAO if payout is None else payout))
     if not taxa_payout.is_finite() or taxa_payout <= 0:
@@ -1728,7 +1737,7 @@ def snapshot_gestao_global():
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
             "regra_gales": "Faixas de assertividade global: <50%=4, <60%=3, <70%=2, <80%=1, >=80%=0 gales",
-            "regra_recuperacao": "100% do prejuízo líquido global; reserva exclusiva por operação",
+            "regra_recuperacao": f"{RECUPERACAO_PERCENTUAL:.0%} do prejuízo líquido global; uma recuperação por vez",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }
@@ -1796,7 +1805,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             if nivel == 0:
                 assertividade_atual = taxa_ponderada(stats["wins"], stats["losses"])
                 posicao = gales_por_assertividade(assertividade_atual)
-                alvo = max(0, -resultado_global_centavos) / 100 if recuperacao_em_curso is None else 0.0
+                alvo = calcular_alvo_recuperacao(max(0, -resultado_global_centavos) / 100) if recuperacao_em_curso is None else 0.0
                 if alvo > 0 and payout_efetivo is None:
                     log.warning("RECUPERACAO ADIADA | banca=%s | ativo=%s | motivo=payout_nao_confirmado | prejuizo=%.2f | divida_preservada=true", banca, ativo, alvo)
                     alvo = 0.0
@@ -1814,7 +1823,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             comprometido = sum(o["valor"] for o in ordens_pendentes.values())
             disponivel = saldo - comprometido - sum(reservas_pendentes.values())
             if nivel == 0 and contexto["prejuizo_alocado"] > 0 and valor > disponivel:
-                # O alvo continua sendo 100% da dívida. Não alocar uma recuperação
+                # O alvo continua integralmente reservado. Não alocar uma recuperação
                 # que não cabe permite aos sinais normais continuarem pela base;
                 # somente resultados confirmados podem reduzir o ledger.
                 log.warning("RECUPERACAO ADIADA | banca=%s | ativo=%s | motivo=saldo_insuficiente_para_recuperacao_integral | prejuizo=%.2f | entrada_recuperacao=%.2f | disponivel=%.2f | entrada_normal=%.2f | divida_preservada=true",
@@ -1828,7 +1837,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 return False, "saldo_insuficiente", operacoes_ativas.get(banca)
             if nivel == 0 and contexto["prejuizo_alocado"] > 0:
                 recuperacao_em_curso = banca
-                log.info("RECUPERACAO DIMENSIONADA | banca=%s | ativo=%s | prejuizo=%.2f | entrada=%.2f | payout_real=%.4f | payout_recuperacao=%.4f | alvo=100%% | conta=DEMO", banca, ativo, contexto["prejuizo_alocado"], valor, contexto["payout_real"], contexto["payout_recuperacao"])
+                log.info("RECUPERACAO DIMENSIONADA | banca=%s | ativo=%s | prejuizo_alvo=%.2f | entrada=%.2f | payout_real=%.4f | payout_recuperacao=%.4f | alvo=%.0f%% | conta=DEMO", banca, ativo, contexto["prejuizo_alocado"], valor, contexto["payout_real"], contexto["payout_recuperacao"], RECUPERACAO_PERCENTUAL * 100)
             reservas_pendentes[banca] = valor
             log.info("SALDO RESERVADO | banca=%s | ativo=%s | nivel=%s | valor=%.2f | saldo=%.2f | disponivel=%.2f | recuperacao=%.2f | conta=DEMO", banca, ativo, nivel, valor, saldo, disponivel, contexto["prejuizo_alocado"])
 

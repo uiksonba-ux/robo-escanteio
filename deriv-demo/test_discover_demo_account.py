@@ -15,8 +15,8 @@ import requests
 import discover_demo_account as discovery
 
 
-def account(account_id="DOT200", account_type="demo", status="active"):
-    return {"account_id": account_id, "account_type": account_type, "status": status}
+def account(account_id="DOT200", account_type="demo", status="active", currency="USD"):
+    return {"account_id": account_id, "account_type": account_type, "status": status, "currency": currency}
 
 
 def payload(*accounts):
@@ -52,6 +52,16 @@ class TestSelectDemoAccount(unittest.TestCase):
                      payload(account(status="ACTIVE"))):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 discovery.select_demo_account(data)
+
+    def test_missing_or_invalid_demo_currency_is_rejected(self):
+        for currency in (None, "", "usd", "US", "USDX", 1, True):
+            item = account(currency=currency)
+            with self.subTest(currency=currency), self.assertRaises(ValueError):
+                discovery.select_demo_account(payload(item))
+        item = account()
+        del item["currency"]
+        with self.assertRaises(ValueError):
+            discovery.select_demo_account(payload(item))
 
     def test_missing_demo_status_is_rejected(self):
         demo = account()

@@ -1,8 +1,15 @@
 import unittest
-from trading_policy import (TradeCandidate, validate_candidate, validate_demo_websocket_url, safe_proposal_payload, gales_for_accuracy, stake_for_gale, stake_for_full_recovery)
+from trading_policy import (TradeCandidate, validate_candidate, validate_demo_websocket_url, safe_proposal_payload, gales_for_accuracy, stake_for_gale, stake_for_full_recovery, brl_to_account_currency)
 
 
 class TestTradingPolicy(unittest.TestCase):
+
+
+    def test_brl_entry_converts_to_demo_account_currency(self):
+        self.assertEqual(brl_to_account_currency(2, 0.18), 0.36)
+        for args in ((0, 0.18), (2, 0), (2, float("nan"))):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                brl_to_account_currency(*args)
 
     def test_accuracy_bands_choose_zero_to_four_gales(self):
         cases = ((0, 4), (49.99, 4), (50, 3), (59.99, 3), (60, 2),

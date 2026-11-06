@@ -39,7 +39,7 @@ def safe_call(ws, request_id, payload):
 def is_r25(row):
     text = " ".join(str(row.get(key) or "") for key in ("shortcode", "longcode"))
     return bool(
-        re.search(r"\\bR_?25\\b", text, re.I)
+        re.search(r"(?:^|_)R_?25(?:_|$)", text, re.I)
         or re.search(r"Volatility\\s+25\\s+Index", text, re.I)
     )
 
@@ -76,12 +76,14 @@ def main():
         # Match the exact order logged by Render: R_25 CALL, sent at
         # 02:02:08 UTC for 0.37 USD. Statement descriptions can use a display
         # name rather than the internal symbol, so correlate by time and stake.
+        # Match only the asset and stake from Render's uncertain R_25 CALL.
         target = [
             row for row in transactions
             if isinstance(row, dict)
             and row.get("action_type") == "buy"
             and type(row.get("transaction_time")) is int
-            and abs(row["transaction_time"] - TARGET_ORDER_TIME) <= 30
+            and abs(row["transaction_time"] - TARGET_ORDER_TIME) <= 120
+            and is_r25(row)
             and isinstance(row.get("amount"), (int, float))
             and abs(abs(float(row["amount"])) - TARGET_STAKE) < 0.005
         ]
@@ -103,17 +105,14 @@ def main():
                     else:
                         contract_summary = {"status": status if isinstance(status, str) else "unknown", "profit": None}
             reviewed.append({
-                "transaction_time_utc": datetime.fromtimestamp(row["transaction_time"], timezone.utc).isoformat(),
-                "contract_id": contract_id if type(contract_id) is int else None,
-                "stake": row.get("amount") if isinstance(row.get("amount"), (int, float)) else None,
-                "contract": row.get("shortcode") if isinstance(row.get("shortcode"), str) else (row.get("longcode") if isinstance(row.get("longcode"), str) else None),
-                **contract_summary,
+                "status": contract_summary["status"],
+                "settled": contract_summary["status"] in ("won", "lost", "sold", "cancelled"),
             })
 
         result = {
             "read_only": True,
             "target": "R_25 CALL, 0.37 USD",
-            "correlation_window_seconds": 30,
+            "correlation_window_seconds": 120,
             "window_utc": [
                 datetime.fromtimestamp(TARGET_FROM, timezone.utc).isoformat(),
                 datetime.fromtimestamp(TARGET_TO, timezone.utc).isoformat(),

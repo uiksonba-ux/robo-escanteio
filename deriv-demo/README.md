@@ -1,6 +1,6 @@
 # Baskaraido Trader PRO — Deriv DEMO (protótipo isolado)
 
-Este diretório é uma migração experimental para a API oficial da Deriv, mantida na branch `feature/baskaraido-deriv-demo`. Não altera o `robo.py` nem o serviço Render existente.
+Este diretório contém descoberta somente leitura, preflight e testes da API Deriv. O robô principal em `robo.py` conecta a conta Options DEMO e pode enviar ordens DEMO quando `EXECUTAR_ORDENS=true`. O serviço Render acompanha `main`; esta branch ainda não foi implantada.
 
 ## Estado
 - [x] Documentação e configuração inicial, exclusivamente DEMO
@@ -37,7 +37,7 @@ A descoberta é isolada e somente leitura: executa um único
    Não cole credenciais no código, em logs ou no chat. Secrets do Render não são
    disponibilizados automaticamente no GitHub Actions.
 2. O workflow **Identificar conta Deriv DEMO (sem ordens)** roda por push somente
-   na branch `feature/baskaraido-deriv-demo`, quando este diretório ou o workflow
+   na branch `feature/baskaraido-deriv-demo-main-sync`, quando este diretório ou o workflow
    muda. Os testes offline precisam passar antes da validação dos Secrets e da
    consulta. Não é necessário Shell no Render.
 3. Se uma execução falhar por Secrets ausentes, cadastre-os e abra **Actions >

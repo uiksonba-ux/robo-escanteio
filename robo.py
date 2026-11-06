@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-USD035-GALE3-REC100"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-2B-USD035-GALE3-REC100"
 
 app = Flask(__name__)
 
@@ -155,14 +155,14 @@ ENTRADA_MINIMA = 0.01
 
 MULTIPLICADOR_GALE = 3.0  # multiplicador fixo da progressão
 
-# Faixas de assertividade global (WINs / operações concluídas), compartilhadas pelas 10 bancas.
+# Faixas de assertividade global (WINs / operações concluídas), compartilhadas pelas 2 bancas.
 GALES_POR_CICLO = 4
 MAX_GALES = 4
 
 RECUPERACAO_PERCENTUAL = 1.0
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 
-QTD_BANCAS = 10
+QTD_BANCAS = 2
 
 # A assertividade define a quantidade de gales; entrada-base fixa em USD.
 ENTRADA_BASE_USD = 0.35
@@ -2549,7 +2549,7 @@ def home():
 
         "distribuicao":
             (
-                "10 bancas paralelas; sequência de gales e recuperação globais"
+                f"{QTD_BANCAS} bancas paralelas; sequência de gales e recuperação globais"
             ),
 
         "estatisticas":

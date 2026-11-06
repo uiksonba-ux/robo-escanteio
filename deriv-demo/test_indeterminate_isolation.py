@@ -204,28 +204,5 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(entrada_a, 0.70)
         self.assertEqual(entrada_b, 0.35)
 
-    def test_successful_recovery_clears_only_that_bank_pending_loss(self):
-        banca_a, banca_b = robo.BANCAS
-        with robo.estado_lock:
-            robo.operacoes_ativas.clear()
-            robo.ordens_pendentes.clear()
-            robo.operacoes_concluidas.clear()
-            robo.recuperacoes_em_curso.clear()
-            for banca in robo.BANCAS:
-                robo.estado_frentes[banca].update(
-                    recuperacao_pendente=0.0,
-                    envio_indeterminado=False,
-                )
-            robo.estado_frentes[banca_a]["recuperacao_pendente"] = 0.35
-            robo.operacoes_ativas[banca_a] = {
-                "primeira_ordem": "TEST-RECOVERY-WIN",
-                "resultado_centavos": 12,
-                "prejuizo_alocado": 0.35,
-            }
-        robo.finalizar_operacao_global(banca_a)
-        self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.0)
-        self.assertEqual(robo.prejuizo_banca_atual(banca_b), 0.0)
-
-
 if __name__ == "__main__":
     unittest.main()

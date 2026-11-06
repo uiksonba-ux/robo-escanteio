@@ -265,7 +265,7 @@ operacoes_ativas = {}
 ordens_pendentes = {}
 ordens_liquidadas = set()
 operacoes_concluidas = set()
-envio_indeterminado = None
+envios_indeterminados = {}
 
 
 # ============================================================
@@ -1722,7 +1722,9 @@ def snapshot_gestao_global():
             "multiplicador_gale": MULTIPLICADOR_GALE,
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "payout_recuperacao": PAYOUT_RECUPERACAO,
-            "envio_indeterminado": dict(envio_indeterminado) if envio_indeterminado else None,
+            "envio_indeterminado": dict(next(iter(envios_indeterminados.values()))) if envios_indeterminados else None,
+            "envios_indeterminados": [dict(item) for item in envios_indeterminados.values()],
+            "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
             "regra_gales": "Faixas de assertividade global: <50%=4, <60%=3, <70%=2, <80%=1, >=80%=0 gales",
@@ -1733,13 +1735,12 @@ def snapshot_gestao_global():
 
 
 def marcar_envio_indeterminado(banca, ativo, nivel, valor, motivo):
-    """Sem confirmação de recusa, impede reutilização da posição e da dívida."""
-    global envio_indeterminado
+    """Isola a banca e o ativo até confirmar se a ordem foi aceita."""
     with estado_lock:
-        envio_indeterminado = {"banca": banca, "ativo": ativo, "nivel": nivel,
-                               "valor": valor, "motivo": str(motivo)}
+        envios_indeterminados[banca] = {"banca": banca, "ativo": ativo, "nivel": nivel,
+                                        "valor": valor, "motivo": str(motivo)}
         estado_frentes[banca]["envio_indeterminado"] = True
-    log.error("ENVIO INDETERMINADO | %s | novas ordens pausadas; reconciliar com a corretora", banca)
+    log.error("ENVIO INDETERMINADO | %s | esta banca e este ativo isolados; demais bancas continuam", banca)
 
 
 def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
@@ -1748,9 +1749,9 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
     with contador_entrada_lock:
         with estado_lock:
             contexto = operacoes_ativas.get(banca)
-            if envio_indeterminado:
-                log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=envio_indeterminado | reconciliar com a corretora", banca, ativo)
-                return False, "gestao_pausada_envio_indeterminado", contexto
+            if banca in envios_indeterminados:
+                log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=envio_indeterminado | reconciliação em andamento", banca, ativo)
+                return False, "banca_com_envio_indeterminado", contexto
             if any(o["banca"] == banca for o in ordens_pendentes.values()):
                 log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=ordem_ja_pendente", banca, ativo)
                 return False, "ordem_ja_pendente", contexto
@@ -1799,7 +1800,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 if alvo > 0 and payout_efetivo is None:
                     log.warning("RECUPERACAO ADIADA | banca=%s | ativo=%s | motivo=payout_nao_confirmado | prejuizo=%.2f | divida_preservada=true", banca, ativo, alvo)
                     alvo = 0.0
-                contexto = {"posicao": posicao, "numero": entradas_globais_aceitas + 1,
+                contexto = {"posicao": posicao, "numero": entradas_globais_aceitas + len(reservas_pendentes) + 1,
                             "gales": posicao, "assertividade_global": assertividade_atual,
                             "base": obter_entrada_base(saldo),
                             "entrada": calcular_entrada_recuperacao(alvo, saldo, payout_efetivo)
@@ -1840,7 +1841,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             if ok is None:
                 # Reserva financeira e lease permanecem enquanto o envio é incerto.
                 marcar_envio_indeterminado(banca, ativo, nivel, valor, order_id)
-                envio_indeterminado["contexto"] = dict(contexto)
+                envios_indeterminados[banca]["contexto"] = dict(contexto)
                 return None, order_id, contexto
             if not ok:
                 reservas_pendentes.pop(banca, None)
@@ -1880,11 +1881,11 @@ def confirmar_ordem_gerida(banca, ativo, nivel, valor, order_id, contexto):
 
 def reconciliar_envio_gerido(banca):
     """Consulta a requisição original; timeout nunca libera uma ordem incerta."""
-    global envio_indeterminado, recuperacao_em_curso
+    global recuperacao_em_curso
     with contador_entrada_lock:
         with estado_lock:
-            pendente = envio_indeterminado
-            if not pendente or pendente["banca"] != banca:
+            pendente = envios_indeterminados.get(banca)
+            if not pendente:
                 return False, "sem_envio_indeterminado", operacoes_ativas.get(banca)
             contexto = operacoes_ativas.get(banca) if pendente["nivel"] > 0 else pendente.get("contexto")
             if contexto is None:
@@ -1909,7 +1910,7 @@ def reconciliar_envio_gerido(banca):
                     recuperacao_em_curso = None
                 confirmado = (False, resposta, operacoes_ativas.get(banca))
                 log.warning("ORDEM RECUSADA TARDIA | banca=%s | ativo=%s | reserva_liberada=true | conta=DEMO", banca, pendente["ativo"])
-            envio_indeterminado = None
+            envios_indeterminados.pop(banca, None)
             estado_frentes[banca]["envio_indeterminado"] = False
             return confirmado
 
@@ -2078,8 +2079,8 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
 def reservar_banca(ativo, direcao, score, timeframe, expiracao):
     ativo = str(ativo).strip().upper()
     with estado_lock:
-        if envio_indeterminado or ativo in ativos_em_uso:
-            motivo = "envio_indeterminado" if envio_indeterminado else "ativo_em_uso"
+        if ativo in ativos_em_uso:
+            motivo = "ativo_em_uso"
             log.warning("SINAL SEM RESERVA | ativo=%s | M%s | motivo=%s", ativo, timeframe, motivo)
             return None
         for banca in BANCAS:
@@ -2324,10 +2325,10 @@ def supervisor():
             instante = time.monotonic()
             if ultima_telemetria is None or instante - ultima_telemetria >= 60:
                 with estado_lock:
-                    log.info("ESTADO EXECUCAO | conta=DEMO | habilitada=%s | aceitas=%s | recusadas=%s | wins=%s | losses=%s | pendentes=%s | envio_indeterminado=%s | prejuizo_global=%.2f | recuperacao_banca=%s",
+                    log.info("ESTADO EXECUCAO | conta=DEMO | habilitada=%s | aceitas=%s | recusadas=%s | wins=%s | losses=%s | pendentes=%s | envios_indeterminados=%s | prejuizo_global=%.2f | recuperacao_banca=%s",
                              EXECUTAR_ORDENS, stats["ordens_aceitas"], stats["ordens_recusadas"],
                              stats["wins"], stats["losses"], len(ordens_pendentes),
-                             envio_indeterminado is not None, max(0, -resultado_global_centavos) / 100,
+                             bool(envios_indeterminados), max(0, -resultado_global_centavos) / 100,
                              recuperacao_em_curso)
                 ultima_telemetria = instante
 

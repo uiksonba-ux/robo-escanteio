@@ -1,0 +1,28 @@
+name: Validate isolated DEMO order recovery
+
+on:
+  push:
+    branches:
+      - feature/isolated-indeterminate-orders
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install project dependencies
+        run: pip install -r requirements.txt
+      - name: Compile trading code
+        run: python -m py_compile robo.py deriv_client.py
+      - name: Run DEMO policy and isolation checks
+        run: python -m unittest discover -s deriv-demo -p 'test_*.py' -v

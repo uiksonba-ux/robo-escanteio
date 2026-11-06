@@ -17,6 +17,7 @@ DEMO_ONLY = True
 # Stake amounts are denominated in the authenticated DEMO account currency.
 MAX_GALES = 4
 GALE_MULTIPLIER = 2
+BASE_STAKE_BRL = 2.00
 RECOVERY_PERCENT = 1.0
 ACCURACY_GALE_BANDS = ((50.0, 4), (60.0, 3), (70.0, 2), (80.0, 1), (100.0, 0))
 
@@ -29,6 +30,18 @@ def gales_for_accuracy(accuracy: float) -> int:
         if value < upper_bound:
             return gales
     return 0
+
+
+def brl_to_account_currency(amount_brl: float, exchange_rate: float) -> float:
+    """Convert the BRL stake with a fresh Deriv quote; result is in account currency."""
+    amount = Decimal(str(amount_brl))
+    rate = Decimal(str(exchange_rate))
+    if not amount.is_finite() or amount <= 0 or not rate.is_finite() or rate <= 0:
+        raise ValueError("Conversão de entrada inválida")
+    converted = (amount * rate).quantize(Decimal("0.01"), rounding=ROUND_UP)
+    if converted <= 0:
+        raise ValueError("Entrada convertida inválida")
+    return float(converted)
 
 
 def stake_for_gale(base_stake: float, gale_level: int, max_gales: int) -> float:
@@ -55,7 +68,7 @@ def stake_for_full_recovery(base_stake: float, accumulated_loss: float,
         return float(base.quantize(Decimal("0.01")))
     if not ratio.is_finite() or ratio <= 0:
         raise ValueError("Payout efetivo inválido")
-    required = base + loss / ratio
+    required = base + (loss * Decimal(str(RECOVERY_PERCENT))) / ratio
     return float(required.quantize(Decimal("0.01"), rounding=ROUND_UP))
 
 

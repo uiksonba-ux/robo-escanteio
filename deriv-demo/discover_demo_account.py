@@ -48,6 +48,9 @@ def select_demo_account(payload, configured_id=""):
     if len(demos) != 1:
         raise DiscoveryError("Esperada exatamente uma conta Options DEMO; nenhuma conta selecionada")
     account = demos[0]
+    currency = account.get("currency")
+    if not isinstance(currency, str) or not re.fullmatch(r"[A-Z]{3}", currency):
+        raise DiscoveryError("Moeda da conta DEMO ausente ou inválida")
     if account.get("status") != "active":
         raise DiscoveryError("A única conta DEMO não está explicitamente ativa")
     if configured_id and account["account_id"] != configured_id:
@@ -94,6 +97,7 @@ def main():
             "account_id": account["account_id"],
             "account_type": "demo",
             "account_status": "active",
+            "account_currency": account["currency"],
             "read_only": True,
         }
         summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -102,7 +106,7 @@ def main():
                 summary.write(
                     "Conta Options DEMO confirmada (somente leitura).\n\n"
                     f"`DERIV_DEMO_ACCOUNT_ID={account['account_id']}`\n\n"
-                    "account_type=demo; status=active. Nenhuma ordem enviada.\n"
+                    f"account_type=demo; status=active; currency={account['currency']}. Nenhuma ordem enviada.\n"
                 )
         print(json.dumps(result))
         return 0

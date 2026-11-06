@@ -15,8 +15,8 @@ import requests
 import discover_demo_account as discovery
 
 
-def account(account_id="DOT200", account_type="demo", status="active"):
-    return {"account_id": account_id, "account_type": account_type, "status": status}
+def account(account_id="DOT200", account_type="demo", status="active", currency="USD"):
+    return {"account_id": account_id, "account_type": account_type, "status": status, "currency": currency}
 
 
 def payload(*accounts):
@@ -52,6 +52,16 @@ class TestSelectDemoAccount(unittest.TestCase):
                      payload(account(status="ACTIVE"))):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 discovery.select_demo_account(data)
+
+    def test_missing_or_invalid_demo_currency_is_rejected(self):
+        for currency in (None, "", "usd", "US", "USDX", 1, True):
+            item = account(currency=currency)
+            with self.subTest(currency=currency), self.assertRaises(ValueError):
+                discovery.select_demo_account(payload(item))
+        item = account()
+        del item["currency"]
+        with self.assertRaises(ValueError):
+            discovery.select_demo_account(payload(item))
 
     def test_missing_demo_status_is_rejected(self):
         demo = account()
@@ -218,10 +228,11 @@ class TestCommandLine(unittest.TestCase):
             result, stdout, stderr = self.invoke(get, summary_path)
             self.assertEqual(result, 0)
             confirmation = json.loads(stdout)
-            self.assertEqual(set(confirmation), {"account_id", "account_type", "status", "account_status", "read_only"})
+            self.assertEqual(set(confirmation), {"account_id", "account_type", "status", "account_status", "account_currency", "read_only"})
             self.assertEqual(confirmation["account_id"], "DOT200")
             self.assertEqual(confirmation["account_type"], "demo")
             self.assertEqual(confirmation["account_status"], "active")
+            self.assertEqual(confirmation["account_currency"], "USD")
             self.assertEqual(confirmation["status"], "DEMO_ACCOUNT_CONFIRMED")
             self.assertIs(confirmation["read_only"], True)
             self.assertEqual(stderr, "")

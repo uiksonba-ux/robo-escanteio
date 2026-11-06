@@ -2019,9 +2019,10 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             return
         gales = contexto["gales"]
         valores = valores_do_ciclo(contexto["entrada"], gales)
-        log.info("GESTÃO GLOBAL | %s | operação=%s | posição=%s | gales=%s | base=%.2f | entrada=%.2f | X2 | recuperação=%.2f",
+        log.info("GESTÃO GLOBAL | %s | operação=%s | posição=%s | gales=%s | base=%.2f | entrada=%.2f | X%s | recuperação=%.2f",
                  banca, contexto["numero"], contexto["posicao"], gales,
-                 contexto["base"], contexto["entrada"], contexto["prejuizo_alocado"])
+                 contexto["base"], contexto["entrada"], f"{MULTIPLICADOR_GALE:g}",
+                 contexto["prejuizo_alocado"])
         with estado_lock:
             estado_frentes[banca]["ultimo_sinal"] = {
                 "ativo": ativo, "direcao": direcao, "score": score,
@@ -2038,7 +2039,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                  f"🏦 {banca}\n💱 {ativo}\n🎯 {direcao.upper()}\n"
                  f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n🔥 Score: {score}/100\n"
                  f"🔢 Operação global: {contexto['numero']} / posição {contexto['posicao']}\n"
-                 f"🛡 Gales: {gales} | X2\n💰 {sequencia}\n"
+                 f"🛡 Gales: {gales} | X{MULTIPLICADOR_GALE:g}\n💰 {sequencia}\n"
                  f"♻️ Recuperação global reservada: {getattr(api, 'currency', 'USD')} {contexto['prejuizo_alocado']:.2f}\n🧪 Deriv DEMO")
 
         for nivel in range(gales + 1):

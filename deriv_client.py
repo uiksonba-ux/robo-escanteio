@@ -216,9 +216,10 @@ class DerivOptionsClient:
                     return response
             except DerivAPIError:
                 raise
-            except Exception:
+            except Exception as exc:
+                timed_out = isinstance(exc, (TimeoutError, websocket.WebSocketTimeoutException))
                 self._invalidate_socket()
-                raise DerivAPIError("Timeout" if self._ws is None else "ConnectionError") from None
+                raise DerivAPIError("Timeout" if timed_out else "ConnectionError") from None
 
     def get_balance(self):
         response = self._request({"balance": 1})
@@ -262,7 +263,41 @@ class DerivOptionsClient:
         return dict(symbols)
 
     def is_symbol_tradeable(self, symbol):
-        return str(symbol).upper() in self.get_active_symbols()
+        symbols = self.get_active_symbols()
+        return isinstance(symbol, str) and symbol in symbols
+
+    def get_candles(self, symbol, granularity, count, end):
+        allowed = {60: 60, 300: 300, 900: 900}
+        if granularity not in allowed or isinstance(count, bool) or not isinstance(count, int) or not 60 <= count <= 500:
+            raise DerivAPIError("ValidationError")
+        if not self.is_symbol_tradeable(symbol):
+            raise DerivAPIError("ContractNotFound")
+        response = self._request({
+            "ticks_history": symbol,
+            "end": str(int(end)),
+            "count": count,
+            "granularity": granularity,
+            "style": "candles",
+        })
+        rows = response.get("candles")
+        if not isinstance(rows, list):
+            raise DerivAPIError("ValidationError")
+        candles = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                epoch = int(row["epoch"])
+                candles.append({
+                    "from": epoch,
+                    "open": float(row["open"]),
+                    "close": float(row["close"]),
+                    "max": float(row["high"]),
+                    "min": float(row["low"]),
+                })
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+        return candles
 
     @staticmethod
     def _duration_minutes(value):

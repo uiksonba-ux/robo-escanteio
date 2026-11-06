@@ -6,10 +6,12 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import websocket
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from deriv_client import DerivOptionsClient, DEMO_WS_PATH
 from discover_demo_account import discover_demo_account
 

@@ -201,26 +201,41 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.70)
         self.assertEqual(robo.prejuizo_banca_atual(banca_b), 0.0)
 
-    def test_accuracy_prior_is_70_percent_over_20_games(self):
+    def test_accuracy_prior_is_80_percent_over_20_games(self):
         banca = robo.BANCAS[0]
         with robo.estado_lock:
             dados = robo.estado_frentes[banca]
             dados.update(
                 wins=0,
                 losses=0,
-                wins_base_janela=0,
-                losses_base_janela=0,
             )
 
-        self.assertEqual(robo.taxa_banca_ponderada(banca), 70.0)
+        self.assertEqual(robo.taxa_banca_ponderada(banca), 80.0)
 
         with robo.estado_lock:
             robo.estado_frentes[banca]["wins"] = 1
-        self.assertEqual(robo.taxa_banca_ponderada(banca), 71.43)
+        self.assertEqual(robo.taxa_banca_ponderada(banca), 80.95)
 
         with robo.estado_lock:
             robo.estado_frentes[banca].update(wins=0, losses=1)
-        self.assertEqual(robo.taxa_banca_ponderada(banca), 66.67)
+        self.assertEqual(robo.taxa_banca_ponderada(banca), 76.19)
+
+    def test_new_gale_threshold_edges(self):
+        expected = [
+            (71.99, 5),
+            (72.0, 4),
+            (73.99, 4),
+            (74.0, 3),
+            (75.99, 3),
+            (76.0, 2),
+            (77.99, 2),
+            (78.0, 1),
+            (79.99, 1),
+            (80.0, 0),
+        ]
+        for accuracy, gales in expected:
+            with self.subTest(accuracy=accuracy):
+                self.assertEqual(robo.gales_por_assertividade(accuracy), gales)
 
     def test_assertiveness_and_recovery_ledgers_are_independent_per_bank(self):
         banca_a, banca_b = robo.BANCAS
@@ -238,9 +253,6 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
                 dados.update(
                     wins=0,
                     losses=0,
-                    wins_base_janela=0,
-                    losses_base_janela=0,
-                    entradas_janela=0,
                     resultado_liquido=0.0,
                     prejuizo_acumulado=0.0,
                     recuperacao_pendente=0.0,
@@ -252,15 +264,15 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             robo.estado_frentes[banca_b]["wins"] = 4
             robo.estado_frentes[banca_b]["resultado_liquido"] = 5.0
 
-        self.assertEqual(robo.taxa_banca_ponderada(banca_a), 68.18)
-        self.assertEqual(robo.taxa_banca_ponderada(banca_b), 75.0)
+        self.assertEqual(robo.taxa_banca_ponderada(banca_a), 77.27)
+        self.assertEqual(robo.taxa_banca_ponderada(banca_b), 83.33)
         self.assertEqual(
             robo.gales_por_assertividade(robo.taxa_banca_ponderada(banca_a)),
             2,
         )
         self.assertEqual(
             robo.gales_por_assertividade(robo.taxa_banca_ponderada(banca_b)),
-            1,
+            0,
         )
 
         with robo.estado_lock:

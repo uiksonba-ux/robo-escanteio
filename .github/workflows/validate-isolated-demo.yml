@@ -15,6 +15,8 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    env:
+      BASKARAIDO_ACCURACY_DATABASE_URL: sqlite:///./accuracy-test.sqlite3
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

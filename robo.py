@@ -12,6 +12,11 @@ from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, request
 from deriv_client import DerivOptionsClient
+from accuracy_store import (
+    AccuracyStore,
+    gales_for_accuracy,
+    weighted_accuracy,
+)
 
 
 # ============================================================
@@ -156,18 +161,18 @@ ENTRADA_MINIMA = 0.01
 MULTIPLICADOR_GALE = 3.0  # multiplicador fixo da progressão
 
 # Faixas de assertividade e recuperação calculadas separadamente para cada banca.
-GALES_POR_CICLO = 4
-MAX_GALES = 4
+GALES_POR_CICLO = 0
+MAX_GALES = 5
 
 RECUPERACAO_PERCENTUAL = 1.0
 
 QTD_BANCAS = 2
 
-# Prior suavizador: começa como 20 operações com assertividade de 70%.
+# Peso de referência exclusivamente estatístico: 16 WINs e 4 LOSSes presumidos.
 PESO_ASSERTIVIDADE_OPERACOES = 20
-ASSERTIVIDADE_REFERENCIA_PERCENTUAL = 70.0
-VITORIAS_BASE_PONDERADA = PESO_ASSERTIVIDADE_OPERACOES * ASSERTIVIDADE_REFERENCIA_PERCENTUAL / 100
-DERROTAS_BASE_PONDERADA = PESO_ASSERTIVIDADE_OPERACOES - VITORIAS_BASE_PONDERADA
+ASSERTIVIDADE_REFERENCIA_PERCENTUAL = 80.0
+VITORIAS_BASE_PONDERADA = 16
+DERROTAS_BASE_PONDERADA = 4
 
 # A assertividade define a quantidade de gales; entrada-base fixa em USD.
 ENTRADA_BASE_USD = 0.35
@@ -262,6 +267,8 @@ entradas_globais_aceitas = 0
 entradas_normais_desde_reset = 0
 wins_base_ponderada = 0
 losses_base_ponderada = 0
+accuracy_store = None
+PERSISTENCIA_ASSERTIVIDADE_OK = False
 contador_entrada_lock = threading.Lock()
 resultado_global_centavos = 0
 ultimo_saldo_demo = None
@@ -315,10 +322,6 @@ estado_frentes = {
 
         "wins": 0,
         "losses": 0,
-        "wins_base_janela": 0,
-        "losses_base_janela": 0,
-        "entradas_janela": 0,
-
         "win_direto": 0,
         "win_g1": 0,
         "win_g2": 0,
@@ -334,7 +337,7 @@ estado_frentes = {
         "ciclo_gestao": 0,
 
         "entrada_atual": ENTRADA_MINIMA,
-        "gales_reativos": GALES_POR_CICLO,
+        "gales_reativos": 0,
 
         "prejuizo_acumulado": 0.0,
         "recuperacao_pendente": 0.0,
@@ -542,7 +545,7 @@ def conectar():
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
             "🛡 Gales pela assertividade individual de cada banca\n"
-            f"📊 Assertividade inicial: {ASSERTIVIDADE_REFERENCIA_PERCENTUAL:g}% ponderada em {PESO_ASSERTIVIDADE_OPERACOES} operações (14V/6D)\n"
+            f"📊 Assertividade inicial: {ASSERTIVIDADE_REFERENCIA_PERCENTUAL:g}% ponderada em {PESO_ASSERTIVIDADE_OPERACOES} operações (16V/4D)\n"
             f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} da perda da operação anterior\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
@@ -1678,13 +1681,8 @@ def taxa(
 
 
 def gales_por_assertividade(percentual):
-    """Faixas globais: 0-49:4, 50-59:3, 60-69:2, 70-79:1, 80-100:0."""
-    valor = max(0.0, min(100.0, float(percentual)))
-    if valor < 50: return 4
-    if valor < 60: return 3
-    if valor < 70: return 2
-    if valor < 80: return 1
-    return 0
+    """Faixas individuais: >=80:0, >=78:1, >=76:2, >=74:3, >=72:4, abaixo:5."""
+    return gales_for_accuracy(percentual)
 
 
 def taxa_ponderada(wins, losses):
@@ -1694,74 +1692,12 @@ def taxa_ponderada(wins, losses):
 
 
 def taxa_banca_ponderada(banca):
-    """Assertividade da banca com prior de 70% equivalente a 20 operações.
-
-    A janela real reinicia a cada 100 entradas; o prior é reaplicado no início
-    de cada janela para evitar mudanças bruscas com poucas operações.
-    """
+    """Assertividade ponderada com 16 WINs e 4 LOSSes de referência."""
     with estado_lock:
         dados = estado_frentes[banca]
-        wins_reais = max(0, dados["wins"] - dados["wins_base_janela"])
-        losses_reais = max(0, dados["losses"] - dados["losses_base_janela"])
-        return taxa(
-            VITORIAS_BASE_PONDERADA + wins_reais,
-            DERROTAS_BASE_PONDERADA + losses_reais,
-        )
+        return weighted_accuracy(dados["wins"], dados["losses"])
 
 
-def registrar_win(
-    banca,
-    nivel
-):
-
-    with estado_lock:
-
-        stats[
-            "wins"
-        ] += 1
-
-        estado_frentes[
-            banca
-        ][
-            "wins"
-        ] += 1
-
-        chave = (
-            "win_direto"
-            if nivel == 0
-            else f"win_g{nivel}"
-        )
-
-        if chave in stats:
-
-            stats[
-                chave
-            ] += 1
-
-        if chave in estado_frentes[banca]:
-
-            estado_frentes[
-                banca
-            ][
-                chave
-            ] += 1
-
-
-def registrar_loss(
-    banca
-):
-
-    with estado_lock:
-
-        stats[
-            "losses"
-        ] += 1
-
-        estado_frentes[
-            banca
-        ][
-            "losses"
-        ] += 1
 
 
 # ============================================================
@@ -1878,7 +1814,7 @@ def snapshot_gestao_global():
                 for banca, assertividade in assertividade_por_banca.items()
             },
             "prejuizo_por_banca": prejuizo_por_banca,
-            "sequencia_gales": [4, 3, 2, 1, 0],
+            "sequencia_gales": [5, 4, 3, 2, 1, 0],
             "entradas_por_gale": {nivel: obter_entrada_base() for nivel in range(MAX_GALES + 1)},
             "multiplicador_gale": MULTIPLICADOR_GALE,
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
@@ -1887,7 +1823,7 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Faixas de assertividade calculadas por banca: <50%=4, <60%=3, <70%=2, <80%=1, >=80%=0 gales",
+            "regra_gales": "Faixas individuais: >=80%=0, >=78%=1, >=76%=2, >=74%=3, >=72%=4, <72%=5 gales",
             "regra_recuperacao": f"{RECUPERACAO_PERCENTUAL:.0%} da perda líquida da última operação concluída por banca; vitórias antigas não compensam; recuperação independente",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
@@ -1906,6 +1842,9 @@ def marcar_envio_indeterminado(banca, ativo, nivel, valor, motivo):
 def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
     """Escolha, envio e confirmação serializados; a recusa não consome posição."""
     global entradas_globais_aceitas, ultimo_saldo_demo
+    if nivel == 0 and not PERSISTENCIA_ASSERTIVIDADE_OK:
+        log.warning("ORDEM BLOQUEADA | banca=%s | motivo=historico_de_assertividade_nao_persistido", banca)
+        return False, "persistencia_assertividade_indisponivel", None
     with contador_entrada_lock:
         with estado_lock:
             contexto = operacoes_ativas.get(banca)
@@ -2016,11 +1955,6 @@ def confirmar_ordem_gerida(banca, ativo, nivel, valor, order_id, contexto):
             contexto["primeira_ordem"] = order_id
             operacoes_ativas[banca] = contexto
             dados = estado_frentes[banca]
-            dados["entradas_janela"] += 1
-            if dados["entradas_janela"] >= 100:
-                dados["wins_base_janela"] = dados["wins"]
-                dados["losses_base_janela"] = dados["losses"]
-                dados["entradas_janela"] = 0
         contexto["ultimo_nivel"] = nivel
         ordens_pendentes[order_id] = {"banca": banca, "valor": valor, "nivel": nivel}
         estado_frentes[banca].update(order_id=order_id, entrada_atual=contexto["entrada"],
@@ -2075,19 +2009,74 @@ def aguardar_confirmacao_envio_gerido(banca):
 
 
 def registrar_resultado_ordem(order_id, resultado, lucro):
-    """Cada ordem é conciliada uma vez; só o sinal encerrado entra no ledger."""
+    """Persiste cada liquidação e registra o desfecho do sinal exatamente uma vez."""
+    global PERSISTENCIA_ASSERTIVIDADE_OK
     valor = em_centavos(lucro)
     if resultado not in ("win", "loss", "draw") or (resultado == "win" and valor <= 0) or (resultado == "loss" and valor >= 0) or (resultado == "draw" and valor != 0):
         raise ValueError("Resultado de ordem inconsistente")
+
     with estado_lock:
         if order_id in ordens_liquidadas:
             return False
-        ordem = ordens_pendentes[order_id]
-        contexto = operacoes_ativas[ordem["banca"]]
+        ordem = ordens_pendentes.get(order_id)
+        if ordem is None:
+            return False
+        banca = ordem["banca"]
+        nivel = int(ordem["nivel"])
+        contexto = operacoes_ativas.get(banca)
+        if contexto is None:
+            return False
+        operacao_id = contexto["primeira_ordem"]
+        terminal = (
+            "win" if resultado == "win"
+            else "loss" if resultado == "loss" and nivel >= contexto["gales"]
+            else None
+        )
+
+    # Do not accept another signal while a settled result is not durable.
+    while True:
+        try:
+            if accuracy_store is None:
+                raise RuntimeError("assertividade_persistida_nao_configurada")
+            inserida, nova_operacao = accuracy_store.record_settlement(
+                banca, order_id, operacao_id, resultado, nivel, terminal
+            )
+            PERSISTENCIA_ASSERTIVIDADE_OK = True
+            break
+        except Exception as erro:
+            PERSISTENCIA_ASSERTIVIDADE_OK = False
+            log.error("PERSISTENCIA DE ASSERTIVIDADE INDISPONIVEL | banca=%s | order_id=%s | tipo=%s | retentando=true",
+                      banca, order_id, type(erro).__name__)
+            time.sleep(5)
+
+    if not inserida:
+        return False
+
+    with estado_lock:
+        # The unique database key is the cross-restart deduplication guard.
+        if order_id in ordens_liquidadas:
+            return False
+        contexto = operacoes_ativas.get(banca)
+        if contexto is None or order_id not in ordens_pendentes:
+            return False
         contexto["resultado_centavos"] += valor
         ordens_liquidadas.add(order_id)
         ordens_pendentes.pop(order_id)
-        estado_frentes[ordem["banca"]]["order_id"] = None
+        estado_frentes[banca]["order_id"] = None
+
+        if nova_operacao:
+            dados = estado_frentes[banca]
+            if terminal == "win":
+                stats["wins"] += 1
+                dados["wins"] += 1
+                win_key = "win_direto" if nivel == 0 else f"win_g{nivel}"
+                if win_key in stats:
+                    stats[win_key] += 1
+                if win_key in dados:
+                    dados[win_key] += 1
+            elif terminal == "loss":
+                stats["losses"] += 1
+                dados["losses"] += 1
         return True
 
 
@@ -2212,11 +2201,9 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                 time.sleep(1)
                 continue
             if resultado == "win":
-                registrar_win(banca, nivel)
                 with estado_lock:
                     vitorias_progressao += 1
             elif resultado == "loss":
-                registrar_loss(banca)
                 with estado_lock:
                     perdas_progressao += 1
             with estado_lock:
@@ -2243,6 +2230,9 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
 
 def reservar_banca(ativo, direcao, score, timeframe, expiracao):
     ativo = str(ativo).strip().upper()
+    if not PERSISTENCIA_ASSERTIVIDADE_OK:
+        log.warning("SINAL SEM RESERVA | ativo=%s | motivo=historico_de_assertividade_nao_persistido", ativo)
+        return None
     with estado_lock:
         if envios_indeterminados:
             log.warning("SINAL SEM RESERVA | ativo=%s | motivo=conciliacao_de_ordem_pendente", ativo)
@@ -2908,8 +2898,8 @@ log.info(
 log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
     "GALE X%s | "
-    "FAIXAS DE ASSERTIVIDADE POR BANCA <50=4, 50-59=3, 60-69=2, 70-79=1, >=80=0; "
-    "PESO INICIAL=%s operacoes a %s%% (14V/6D); reset real a cada 100 entradas | "
+    "FAIXAS POR BANCA >=80=0, >=78=1, >=76=2, >=74=3, >=72=4, <72=5 gales; "
+    "PESO INICIAL=%s operacoes a %s%% (16V/4D); sem reset | "
     "CICLOS ILIMITADOS | "
     "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%%",
 
@@ -2933,6 +2923,56 @@ log.info(
 log.info(
     "==============================================="
 )
+
+
+def inicializar_persistencia_assertividade():
+    """Carrega o histórico real antes de permitir novas entradas."""
+    global accuracy_store, PERSISTENCIA_ASSERTIVIDADE_OK
+
+    database_url = os.getenv("BASKARAIDO_ACCURACY_DATABASE_URL", "").strip()
+    if not database_url:
+        log.error("PERSISTENCIA ASSERTIVIDADE AUSENTE | configure BASKARAIDO_ACCURACY_DATABASE_URL")
+        return False
+
+    try:
+        store = AccuracyStore(database_url)
+        store.initialize()
+        contagens = store.load_counts(BANCAS)
+    except Exception as erro:
+        log.error("PERSISTENCIA ASSERTIVIDADE INDISPONIVEL | tipo=%s", type(erro).__name__)
+        return False
+
+    with estado_lock:
+        total_wins = 0
+        total_losses = 0
+        for banca, dados_salvos in contagens.items():
+            dados = estado_frentes[banca]
+            dados["wins"] = int(dados_salvos["wins"])
+            dados["losses"] = int(dados_salvos["losses"])
+            total_wins += dados["wins"]
+            total_losses += dados["losses"]
+            for nivel, quantidade in dados_salvos["wins_by_level"].items():
+                chave = "win_direto" if nivel == 0 else f"win_g{nivel}"
+                if chave in dados:
+                    dados[chave] = int(quantidade)
+        stats["wins"] = total_wins
+        stats["losses"] = total_losses
+        for nivel in range(MAX_GALES + 1):
+            chave = "win_direto" if nivel == 0 else f"win_g{nivel}"
+            if chave in stats:
+                stats[chave] = sum(
+                    int(contagens[banca]["wins_by_level"].get(nivel, 0))
+                    for banca in BANCAS
+                )
+
+    accuracy_store = store
+    PERSISTENCIA_ASSERTIVIDADE_OK = True
+    log.info("ASSERTIVIDADE PERSISTIDA | bancas=%s | WIN=%s | LOSS=%s | peso=20/80%%",
+             len(BANCAS), total_wins, total_losses)
+    return True
+
+
+PERSISTENCIA_ASSERTIVIDADE_OK = inicializar_persistencia_assertividade()
 
 
 # ============================================================

@@ -2,6 +2,7 @@
 
 import math
 import sqlite3
+from contextlib import contextmanager
 
 
 WEIGHTED_PRIOR_OPERATIONS = 20
@@ -66,8 +67,17 @@ class AccuracyStore:
         import psycopg
         return psycopg.connect(self.database, connect_timeout=10)
 
+    @contextmanager
+    def _connection(self):
+        conn = self._connect()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def initialize(self):
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS baskaraido_order_results (
@@ -116,7 +126,7 @@ class AccuracyStore:
         else:
             marker = "%s"
         values = (str(bank), str(order_id), str(operation_id), outcome, level)
-        with self._connect() as conn:
+        with self._connection() as conn:
             cursor = conn.execute(
                 f"""
                 INSERT INTO baskaraido_order_results
@@ -155,7 +165,7 @@ class AccuracyStore:
             return counts
         marker = "?" if self.backend == "sqlite" else "%s"
         placeholders = ", ".join([marker] * len(names))
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 f"""
                 SELECT bank, outcome, gale_level, COUNT(*)

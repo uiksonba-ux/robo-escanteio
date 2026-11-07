@@ -38,19 +38,19 @@ class AccuracyPersistenceTests(unittest.TestCase):
                 store.record_settlement(
                     "BANCA 1", "order-1", "operation-1", "loss", 0, None
                 ),
-                (True, False),
+                (True, False, False),
             )
             self.assertEqual(
                 store.record_settlement(
                     "BANCA 1", "order-2", "operation-1", "win", 1, "win"
                 ),
-                (True, True),
+                (True, True, False),
             )
             self.assertEqual(
                 store.record_settlement(
                     "BANCA 1", "order-2", "operation-1", "win", 1, "win"
                 ),
-                (False, False),
+                (False, False, False),
             )
             self.assertEqual(
                 store.record_settlement(
@@ -76,10 +76,56 @@ class AccuracyPersistenceTests(unittest.TestCase):
             self.assertEqual(counts["BANCA 2"]["losses"], 1)
             self.assertEqual(counts["BANCA 3"]["wins"], 0)
             self.assertEqual(counts["BANCA 3"]["losses"], 0)
-            self.assertEqual(weighted_accuracy(counts["BANCA 1"]["wins"],
-                                               counts["BANCA 1"]["losses"]), 80.95)
-            self.assertEqual(weighted_accuracy(counts["BANCA 2"]["wins"],
-                                               counts["BANCA 2"]["losses"]), 76.19)
+            self.assertEqual(weighted_accuracy(counts["BANCA 1"]["wins_janela"],
+                                               counts["BANCA 1"]["losses_janela"]), 80.95)
+            self.assertEqual(weighted_accuracy(counts["BANCA 2"]["wins_janela"],
+                                               counts["BANCA 2"]["losses_janela"]), 76.19)
+
+
+    def test_each_bank_resets_its_ponderation_after_100_terminal_operations(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            database_url = "sqlite:///" + os.path.join(tempdir, "accuracy.sqlite3")
+            store = AccuracyStore(database_url)
+            store.initialize()
+
+            for index in range(99):
+                self.assertEqual(
+                    store.record_settlement(
+                        "BANCA 1", f"order-{index}", f"operation-{index}",
+                        "win", 0, "win"
+                    ),
+                    (True, True, False),
+                )
+
+            before = store.load_counts(["BANCA 1", "BANCA 2"])
+            self.assertEqual(before["BANCA 1"]["wins"], 99)
+            self.assertEqual(before["BANCA 1"]["wins_janela"], 99)
+            self.assertEqual(before["BANCA 1"]["operacoes_janela"], 99)
+            self.assertGreater(weighted_accuracy(99, 0), 80.0)
+
+            # The 100th completed signal closes the bank's window and resets
+            # the live weighted rate for the next signal to the 80% prior.
+            self.assertEqual(
+                store.record_settlement(
+                    "BANCA 1", "order-99", "operation-99", "loss", 0, "loss"
+                ),
+                (True, True, True),
+            )
+
+            reloaded = AccuracyStore(database_url)
+            reloaded.initialize()
+            after = reloaded.load_counts(["BANCA 1", "BANCA 2"])
+            self.assertEqual(after["BANCA 1"]["wins"], 99)
+            self.assertEqual(after["BANCA 1"]["losses"], 1)
+            self.assertEqual(after["BANCA 1"]["wins_janela"], 0)
+            self.assertEqual(after["BANCA 1"]["losses_janela"], 0)
+            self.assertEqual(after["BANCA 1"]["operacoes_janela"], 0)
+            self.assertEqual(weighted_accuracy(
+                after["BANCA 1"]["wins_janela"],
+                after["BANCA 1"]["losses_janela"],
+            ), 80.0)
+            self.assertEqual(gales_for_accuracy(80.0), 0)
+            self.assertEqual(after["BANCA 2"]["operacoes_janela"], 0)
 
 
 if __name__ == "__main__":

@@ -40,18 +40,10 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             }
             robo.estado_frentes[banca]["envio_indeterminado"] = True
 
-    def test_other_available_bank_can_take_distinct_signal(self):
-        reserved = []
-        for index in range(len(robo.BANCAS) - 1):
-            banca = robo.reservar_banca(
-                f"TEST{index}", "call", 80, 1, 1
-            )
-            self.assertIsNotNone(banca)
-            reserved.append(banca)
-
-        self.assertEqual(reserved, robo.BANCAS[1:])
-        self.assertEqual(len(set(reserved)), len(robo.BANCAS) - 1)
+    def test_new_signals_pause_while_any_order_is_ambiguous(self):
+        self.assertIsNone(robo.reservar_banca("TEST0", "call", 80, 1, 1))
         self.assertEqual(robo.estado_frentes[robo.BANCAS[0]]["ativo"], "WLDAUD")
+        self.assertFalse(robo.estado_frentes[robo.BANCAS[1]]["ocupada"])
         self.assertIn("WLDAUD", robo.ativos_em_uso)
 
     def test_unknown_order_asset_cannot_be_reused(self):
@@ -75,6 +67,77 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertIsNone(ok)
         self.assertEqual(motivo, "order_id_invalido_ou_repetido")
         self.assertEqual(robo.envios_indeterminados[banca]["contexto"], contexto)
+
+    def test_raw_v2_missing_request_id_never_reinvokes_buy(self):
+        banca = robo.BANCAS[0]
+        send = mock.Mock(return_value=(True, 98765))
+        client = mock.Mock()
+        with robo._envios_digitais_lock:
+            robo._envios_digitais.clear()
+            robo._envios_digitais[banca] = {
+                "falha_envio": False,
+                "modo": "raw_v2",
+                "request_id": None,
+                "request_ids_anteriores": frozenset(),
+                "chave": "envio_v2:" + banca,
+                "funcao": send,
+                "cliente": client,
+                "ativo": "R_50",
+                "expiracao": 1,
+            }
+
+        ok, reason = robo.consultar_confirmacao_envio(banca)
+
+        self.assertIsNone(ok)
+        self.assertEqual(reason, "request_id_ausente_conciliacao_no_extrato")
+        send.assert_not_called()
+        self.assertTrue(robo._envios_digitais[banca]["falha_envio"])
+        with robo._envios_digitais_lock:
+            robo._envios_digitais.clear()
+
+    def test_statement_match_requires_demo_app_symbol_direction_and_stake(self):
+        envio = {
+            "cliente": mock.Mock(app_id="12345"),
+            "submitted_at": 1_800_000_000,
+            "ativo": "R_50",
+            "direcao": "call",
+            "valor": 0.35,
+        }
+        rows = [
+            {"action_type":"buy", "app_id":"12345", "amount":0.35,
+             "transaction_time":1_800_000_001, "shortcode":"CALL_R_50_1HZ",
+             "contract_id":9876},
+            {"action_type":"buy", "app_id":"99999", "amount":0.35,
+             "transaction_time":1_800_000_001, "shortcode":"CALL_R_50_1HZ",
+             "contract_id":9877},
+            {"action_type":"buy", "app_id":"12345", "amount":0.35,
+             "transaction_time":1_800_000_001, "shortcode":"PUT_R_50_1HZ",
+             "contract_id":9878},
+            {"action_type":"buy", "app_id":"12345", "amount":1.05,
+             "transaction_time":1_800_000_001, "shortcode":"CALL_R_50_1HZ",
+             "contract_id":9879},
+        ]
+
+        self.assertEqual(robo._extrato_corresponde_ao_envio(rows, envio), [9876])
+
+    def test_multiple_statement_matches_remain_ambiguous(self):
+        envio = {
+            "cliente": mock.Mock(app_id="12345"),
+            "submitted_at": 1_800_000_000,
+            "ativo": "R_50",
+            "direcao": "put",
+            "valor": 0.35,
+        }
+        rows = [
+            {"action_type":"buy", "app_id":"12345", "amount":0.35,
+             "transaction_time":1_800_000_001, "shortcode":"PUT_R_50_1HZ",
+             "contract_id":9876},
+            {"action_type":"buy", "app_id":"12345", "amount":0.35,
+             "transaction_time":1_800_000_002, "shortcode":"PUT_R_50_1HZ",
+             "contract_id":9877},
+        ]
+
+        self.assertEqual(len(robo._extrato_corresponde_ao_envio(rows, envio)), 2)
 
     def test_100_percent_recovery_adds_previous_loss_to_base(self):
         with mock.patch.object(robo, "obter_entrada_base", return_value=1.0):

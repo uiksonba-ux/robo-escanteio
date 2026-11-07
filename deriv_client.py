@@ -235,6 +235,34 @@ class DerivOptionsClient:
                 self._invalidate_socket()
                 raise DerivAPIError("Timeout" if timed_out else "ConnectionError") from None
 
+    def get_portfolio(self):
+        response = self._request({"portfolio": 1})
+        result = response.get("portfolio")
+        contracts = result.get("contracts") if isinstance(result, dict) else None
+        if not isinstance(contracts, list) or any(not isinstance(item, dict) for item in contracts):
+            raise DerivAPIError("ValidationError")
+        return contracts
+
+    def get_statement(self, date_from):
+        try:
+            date_from = int(date_from)
+        except (TypeError, ValueError, OverflowError):
+            raise DerivAPIError("ValidationError") from None
+        if date_from <= 0:
+            raise DerivAPIError("ValidationError")
+        response = self._request({
+            "statement": 1,
+            "action_type": "buy",
+            "date_from": date_from,
+            "description": 1,
+            "limit": 999,
+        })
+        result = response.get("statement")
+        transactions = result.get("transactions") if isinstance(result, dict) else None
+        if not isinstance(transactions, list) or any(not isinstance(item, dict) for item in transactions):
+            raise DerivAPIError("ValidationError")
+        return transactions
+
     def get_balance(self):
         response = self._request({"balance": 1})
         result = response.get("balance")

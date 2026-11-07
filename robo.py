@@ -406,8 +406,9 @@ def chamada_api_limitada(chave, funcao, timeout=5.0, cliente=None):
                     chamada["valor"] = funcao()
                     chamada["estado"] = "ok"
                 except Exception as erro:
-                    # Mensagens de erro da corretora podem conter dados de sessão.
-                    chamada["valor"] = type(erro).__name__
+                    # DerivAPIError.code é sanitizado pelo adapter; não registrar mensagens upstream.
+                    codigo = getattr(erro, "code", None)
+                    chamada["valor"] = codigo if isinstance(codigo, str) else type(erro).__name__
                     chamada["estado"] = "erro"
                 finally:
                     chamada["evento"].set()
@@ -1291,27 +1292,118 @@ def _normalizar_confirmacao(resposta):
     return (True, identificador) if valido else (None, "identificador_de_ordem_nao_confirmado")
 
 
+def _extrato_corresponde_ao_envio(transacoes, envio):
+    """Retorna contratos que correspondem unicamente ao buy DEMO incerto."""
+    if not isinstance(transacoes, list):
+        return None
+    app_id = str(getattr(envio.get("cliente"), "app_id", ""))
+    inicio = float(envio.get("submitted_at", 0)) - 3
+    simbolo = str(envio.get("ativo", "")).upper()
+    direcao = str(envio.get("direcao", "")).upper()
+    stake = round(float(envio.get("valor", 0)), 2)
+    shortcode_prefix = f"{direcao}_{simbolo}_"
+    encontrados = []
+    for item in transacoes:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("action_type", "")).lower() != "buy":
+            continue
+        if str(item.get("app_id", "")) != app_id:
+            continue
+        try:
+            instante = float(item.get("transaction_time"))
+            valor = abs(float(item.get("amount")))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(instante) or not math.isfinite(valor):
+            continue
+        if instante < inicio or abs(round(valor, 2) - stake) > 0.01:
+            continue
+        shortcode = str(item.get("shortcode", "")).upper()
+        if not shortcode.startswith(shortcode_prefix):
+            continue
+        contract_id = item.get("contract_id")
+        if isinstance(contract_id, bool):
+            continue
+        try:
+            contract_id = int(contract_id)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if contract_id > 0:
+            encontrados.append(contract_id)
+    return encontrados
+
+
+def _consultar_compra_no_extrato(banca, envio):
+    """Concilia um buy de resultado incerto sem nunca o reenviar."""
+    agora = time.monotonic()
+    proxima = float(envio.get("statement_next_at", 0))
+    if agora < proxima:
+        return None, "aguardando_conciliacao_no_extrato"
+
+    tentativa = int(envio.get("statement_attempt", 0))
+    chave = envio.get("statement_key")
+    if chave is None:
+        chave = f"statement:{banca}:{int(envio.get('submitted_at', 0))}:{tentativa}"
+        envio["statement_key"] = chave
+    cliente = envio["cliente"]
+    desde = max(1, int(float(envio.get("submitted_at", time.time())) - 5))
+    estado, transacoes = chamada_api_limitada(
+        chave, lambda: cliente.get_statement(desde),
+        PRAZO_CONSULTA_API, cliente
+    )
+    if estado == "timeout":
+        return None, "extrato_demora_conciliacao_pendente"
+    envio.pop("statement_key", None)
+    envio["statement_attempt"] = tentativa + 1
+    if estado != "ok":
+        envio["statement_next_at"] = agora + min(15, (3, 5, 8, 10, 15)[min(tentativa, 4)])
+        log.warning("CONCILIACAO DEMO INDISPONIVEL | banca=%s | codigo=%s | proxima_tentativa_segundos=%.0f",
+                    banca, str(transacoes)[:40], envio["statement_next_at"] - agora)
+        return None, "extrato_demora_conciliacao_pendente"
+
+    encontrados = _extrato_corresponde_ao_envio(transacoes, envio)
+    if encontrados is None:
+        envio["statement_next_at"] = agora + 5
+        return None, "extrato_demora_conciliacao_pendente"
+    if len(encontrados) == 1:
+        log.info("CONCILIACAO DEMO CONFIRMADA | banca=%s | contrato=%s | conta=DEMO",
+                 banca, encontrados[0])
+        return True, encontrados[0]
+    if len(encontrados) > 1:
+        log.error("CONCILIACAO DEMO AMBIGUA | banca=%s | candidatos=%s | nao_reenviar=sim",
+                  banca, len(encontrados))
+        envio["statement_next_at"] = agora + 15
+        return None, "mais_de_uma_compra_correspondente"
+
+    envio["statement_no_match_count"] = int(envio.get("statement_no_match_count", 0)) + 1
+    idade = time.time() - float(envio.get("submitted_at", time.time()))
+    if idade >= 60 and envio["statement_no_match_count"] >= 2:
+        log.warning("COMPRA DEMO AUSENTE NO EXTRATO | banca=%s | idade_segundos=%.0f | nova_entrada_liberada=true",
+                    banca, idade)
+        return False, "compra_nao_encontrada_no_extrato"
+    espera = min(15, (3, 5, 8, 10, 15)[min(tentativa, 4)])
+    envio["statement_next_at"] = agora + espera
+    return None, "extrato_demora_conciliacao_pendente"
+
+
 def consultar_confirmacao_envio(banca):
     with _envios_digitais_lock:
         envio = _envios_digitais.get(banca)
     if envio is None:
         return None, "envio_sem_registro"
     if envio.get("falha_envio"):
-        return None, "excecao_no_envio_sem_confirmacao"
-    if "resposta_terminal" in envio:
+        ok, resultado = _consultar_compra_no_extrato(banca, envio)
+        if ok is None:
+            return None, resultado
+    elif "resposta_terminal" in envio:
         ok, resultado = _normalizar_confirmacao(envio["resposta_terminal"])
     elif envio["modo"] == "raw_v2":
         if envio.get("request_id") is None:
-            estado, request_id = chamada_api_limitada(envio["chave"], envio["funcao"],
-                                                       timeout=0, cliente=envio["cliente"])
-            if estado != "ok":
-                if estado == "erro" and request_id == "_EnvioNaoRealizado":
-                    with _envios_digitais_lock:
-                        _envios_digitais.pop(banca, None)
-                    return False, "practice_ou_sessao_alterada_antes_do_envio"
-                if estado == "erro":
-                    envio["falha_envio"] = True
-                return None, "envio_v2_sem_confirmacao"
+            # O envio pode ter sido aceito mesmo sem o request_id retornar.
+            # Nunca invoque buy novamente; reconcilie pelo extrato DEMO.
+            envio["falha_envio"] = True
+            return None, "request_id_ausente_conciliacao_no_extrato"
             if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
                 envio["falha_envio"] = True
                 return None, "request_id_nao_confirmado"
@@ -1458,7 +1550,9 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao):
                  banca, ativo, direcao, expiracao, valor, payout)
         return funcao_envio()
     envio.update(cliente=cliente, ativo=ativo, expiracao=expiracao, chave="envio_v2:" + banca,
-                 funcao=lambda: _enviar_na_sessao_practice(cliente, invocar_envio))
+                 funcao=lambda: _enviar_na_sessao_practice(cliente, invocar_envio),
+                 submitted_at=time.time(), valor=valor, direcao=direcao,
+                 statement_attempt=0, statement_no_match_count=0)
     # Reconfirmar o modo após consultas e imediatamente antes da única chamada.
     if not garantir_practice():
         return recusar("practice_nao_confirmada_antes_do_envio")
@@ -1489,8 +1583,10 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao):
             if ok is not None:
                 return ok, resultado
             time.sleep(0.1)
-    if estado == "erro":
+    if estado in ("erro", "timeout"):
+        # Timeout do wrapper também é ambíguo: a thread pode concluir o buy depois.
         envio["falha_envio"] = True
+        envio["erro_envio"] = resposta if estado == "erro" else "Timeout"
     log.error("ORDEM INDETERMINADA | banca=%s | ativo=%s | estado=%s | nao_reenviar=sim",
               banca, ativo, estado)
     return None, "envio_v2_sem_confirmacao"
@@ -1803,6 +1899,9 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             if banca in envios_indeterminados:
                 log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=envio_indeterminado | reconciliação em andamento", banca, ativo)
                 return False, "banca_com_envio_indeterminado", contexto
+            if nivel == 0 and envios_indeterminados:
+                log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=conciliacao_de_ordem_global_pendente", banca, ativo)
+                return False, "outra_ordem_em_conciliacao", contexto
             if any(o["banca"] == banca for o in ordens_pendentes.values()):
                 log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=ordem_ja_pendente", banca, ativo)
                 return False, "ordem_ja_pendente", contexto
@@ -2132,6 +2231,9 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
 def reservar_banca(ativo, direcao, score, timeframe, expiracao):
     ativo = str(ativo).strip().upper()
     with estado_lock:
+        if envios_indeterminados:
+            log.warning("SINAL SEM RESERVA | ativo=%s | motivo=conciliacao_de_ordem_pendente", ativo)
+            return None
         if ativo in ativos_em_uso:
             motivo = "ativo_em_uso"
             log.warning("SINAL SEM RESERVA | ativo=%s | M%s | motivo=%s", ativo, timeframe, motivo)
@@ -2440,6 +2542,34 @@ def supervisor():
 # WORKER
 # ============================================================
 
+def aguardar_portfolio_demo_sem_posicoes():
+    """Após restart, não inicia scanners até a carteira DEMO estar sem contratos abertos."""
+    ultimo_aviso = 0.0
+    while True:
+        if not garantir_practice():
+            time.sleep(10)
+            continue
+        cliente = api
+        estado, contratos = chamada_api_limitada(
+            "startup_portfolio", cliente.get_portfolio, PRAZO_CONSULTA_API, cliente
+        )
+        if estado == "ok" and isinstance(contratos, list):
+            if not contratos:
+                log.info("CARTEIRA DEMO SINCRONIZADA | contratos_abertos=0 | scanners_liberados=true")
+                return True
+            if time.monotonic() - ultimo_aviso >= 60:
+                log.warning("AGUARDANDO CONTRATOS DEMO ABERTOS | quantidade=%s | scanners_liberados=false",
+                            len(contratos))
+                telegram("🧪 Baskaraido Trader PRO DEMO: aguardando a liquidação de "
+                         f"{len(contratos)} contrato(s) aberto(s) antes de retomar os sinais.")
+                ultimo_aviso = time.monotonic()
+        else:
+            if time.monotonic() - ultimo_aviso >= 60:
+                log.error("CARTEIRA DEMO NAO SINCRONIZADA | estado=%s | scanners_liberados=false", estado)
+                ultimo_aviso = time.monotonic()
+        time.sleep(10)
+
+
 def worker():
 
     log.info(
@@ -2449,6 +2579,8 @@ def worker():
     while not conectar():
 
         time.sleep(10)
+
+    aguardar_portfolio_demo_sem_posicoes()
 
     iniciar_scanner(
         1,

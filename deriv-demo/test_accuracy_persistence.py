@@ -56,7 +56,7 @@ class AccuracyPersistenceTests(unittest.TestCase):
                 store.record_settlement(
                     "BANCA 2", "order-3", "operation-3", "loss", 0, "loss"
                 ),
-                (True, True),
+                (True, True, False),
             )
 
             reloaded = AccuracyStore(database_url)
@@ -65,7 +65,7 @@ class AccuracyPersistenceTests(unittest.TestCase):
                 reloaded.record_settlement(
                     "BANCA 1", "order-2", "operation-1", "win", 1, "win"
                 ),
-                (False, False),
+                (False, False, False),
             )
             counts = reloaded.load_counts(["BANCA 1", "BANCA 2", "BANCA 3"])
 

@@ -18,6 +18,41 @@ class TestDerivOptionsClientReadOnly(unittest.TestCase):
                 with self.assertRaises(DerivAPIError):
                     client._new_otp_url()
 
+    def test_portfolio_uses_authenticated_read_request_and_validates_contracts(self):
+        client = DerivOptionsClient.__new__(DerivOptionsClient)
+        client._request = Mock(return_value={"portfolio":{"contracts":[{"contract_id":123}]}})
+
+        self.assertEqual(client.get_portfolio(), [{"contract_id":123}])
+        client._request.assert_called_once_with({"portfolio":1})
+
+    def test_portfolio_rejects_malformed_response(self):
+        client = DerivOptionsClient.__new__(DerivOptionsClient)
+        client._request = Mock(return_value={"portfolio":{"contracts":[None]}})
+
+        with self.assertRaises(DerivAPIError):
+            client.get_portfolio()
+
+    def test_statement_requests_recent_buy_history_and_validates_rows(self):
+        client = DerivOptionsClient.__new__(DerivOptionsClient)
+        client._request = Mock(return_value={"statement":{"transactions":[{"contract_id":123}]}})
+
+        self.assertEqual(client.get_statement(1_800_000_000), [{"contract_id":123}])
+        client._request.assert_called_once_with({
+            "statement":1,
+            "action_type":"buy",
+            "date_from":1_800_000_000,
+            "description":1,
+            "limit":999,
+        })
+
+    def test_statement_rejects_malformed_response_and_date(self):
+        client = DerivOptionsClient.__new__(DerivOptionsClient)
+        client._request = Mock(return_value={"statement":{"transactions":[None]}})
+        with self.assertRaises(DerivAPIError):
+            client.get_statement(1_800_000_000)
+        with self.assertRaises(DerivAPIError):
+            client.get_statement("not-an-epoch")
+
     def test_candles_are_normalized_for_existing_strategy(self):
         client = DerivOptionsClient.__new__(DerivOptionsClient)
         client.is_symbol_tradeable = Mock(return_value=True)

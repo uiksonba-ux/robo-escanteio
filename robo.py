@@ -322,6 +322,9 @@ estado_frentes = {
 
         "wins": 0,
         "losses": 0,
+        "wins_janela": 0,
+        "losses_janela": 0,
+        "operacoes_janela": 0,
         "win_direto": 0,
         "win_g1": 0,
         "win_g2": 0,
@@ -1695,7 +1698,7 @@ def taxa_banca_ponderada(banca):
     """Assertividade ponderada com 16 WINs e 4 LOSSes de referência."""
     with estado_lock:
         dados = estado_frentes[banca]
-        return weighted_accuracy(dados["wins"], dados["losses"])
+        return weighted_accuracy(dados["wins_janela"], dados["losses_janela"])
 
 
 
@@ -2038,7 +2041,7 @@ def registrar_resultado_ordem(order_id, resultado, lucro):
         try:
             if accuracy_store is None:
                 raise RuntimeError("assertividade_persistida_nao_configurada")
-            inserida, nova_operacao = accuracy_store.record_settlement(
+            inserida, nova_operacao, reset_window = accuracy_store.record_settlement(
                 banca, order_id, operacao_id, resultado, nivel, terminal
             )
             PERSISTENCIA_ASSERTIVIDADE_OK = True
@@ -2074,9 +2077,23 @@ def registrar_resultado_ordem(order_id, resultado, lucro):
                     stats[win_key] += 1
                 if win_key in dados:
                     dados[win_key] += 1
+                if reset_window:
+                    dados["wins_janela"] = 0
+                    dados["losses_janela"] = 0
+                    dados["operacoes_janela"] = 0
+                else:
+                    dados["wins_janela"] += 1
+                    dados["operacoes_janela"] += 1
             elif terminal == "loss":
                 stats["losses"] += 1
                 dados["losses"] += 1
+                if reset_window:
+                    dados["wins_janela"] = 0
+                    dados["losses_janela"] = 0
+                    dados["operacoes_janela"] = 0
+                else:
+                    dados["losses_janela"] += 1
+                    dados["operacoes_janela"] += 1
         return True
 
 
@@ -2949,6 +2966,9 @@ def inicializar_persistencia_assertividade():
             dados = estado_frentes[banca]
             dados["wins"] = int(dados_salvos["wins"])
             dados["losses"] = int(dados_salvos["losses"])
+            dados["wins_janela"] = int(dados_salvos["wins_janela"])
+            dados["losses_janela"] = int(dados_salvos["losses_janela"])
+            dados["operacoes_janela"] = int(dados_salvos["operacoes_janela"])
             total_wins += dados["wins"]
             total_losses += dados["losses"]
             for nivel, quantidade in dados_salvos["wins_by_level"].items():
@@ -2967,7 +2987,7 @@ def inicializar_persistencia_assertividade():
 
     accuracy_store = store
     PERSISTENCIA_ASSERTIVIDADE_OK = True
-    log.info("ASSERTIVIDADE PERSISTIDA | bancas=%s | WIN=%s | LOSS=%s | peso=20/80%%",
+    log.info("ASSERTIVIDADE PERSISTIDA | bancas=%s | WIN=%s | LOSS=%s | peso=20/80%% | janela=100 por banca",
              len(BANCAS), total_wins, total_losses)
     return True
 

@@ -163,6 +163,12 @@ RECUPERACAO_PERCENTUAL = 1.0
 
 QTD_BANCAS = 2
 
+# Prior suavizador: começa como 20 operações com assertividade de 70%.
+PESO_ASSERTIVIDADE_OPERACOES = 20
+ASSERTIVIDADE_REFERENCIA_PERCENTUAL = 70.0
+VITORIAS_BASE_PONDERADA = PESO_ASSERTIVIDADE_OPERACOES * ASSERTIVIDADE_REFERENCIA_PERCENTUAL / 100
+DERROTAS_BASE_PONDERADA = PESO_ASSERTIVIDADE_OPERACOES - VITORIAS_BASE_PONDERADA
+
 # A assertividade define a quantidade de gales; entrada-base fixa em USD.
 ENTRADA_BASE_USD = 0.35
 
@@ -536,6 +542,7 @@ def conectar():
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
             "🛡 Gales pela assertividade individual de cada banca\n"
+            f"📊 Assertividade inicial: {ASSERTIVIDADE_REFERENCIA_PERCENTUAL:g}% ponderada em {PESO_ASSERTIVIDADE_OPERACOES} operações (14V/6D)\n"
             f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} da perda da operação anterior\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
@@ -1687,12 +1694,18 @@ def taxa_ponderada(wins, losses):
 
 
 def taxa_banca_ponderada(banca):
-    """Assertividade individual da banca desde sua própria janela de 100 entradas."""
+    """Assertividade da banca com prior de 70% equivalente a 20 operações.
+
+    A janela real reinicia a cada 100 entradas; o prior é reaplicado no início
+    de cada janela para evitar mudanças bruscas com poucas operações.
+    """
     with estado_lock:
         dados = estado_frentes[banca]
+        wins_reais = max(0, dados["wins"] - dados["wins_base_janela"])
+        losses_reais = max(0, dados["losses"] - dados["losses_base_janela"])
         return taxa(
-            max(0, dados["wins"] - dados["wins_base_janela"]),
-            max(0, dados["losses"] - dados["losses_base_janela"]),
+            VITORIAS_BASE_PONDERADA + wins_reais,
+            DERROTAS_BASE_PONDERADA + losses_reais,
         )
 
 
@@ -2895,12 +2908,15 @@ log.info(
 log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
     "GALE X%s | "
-    "FAIXAS DE ASSERTIVIDADE POR BANCA <50=4, 50-59=3, 60-69=2, 70-79=1, >=80=0; INICIAL=%s | "
+    "FAIXAS DE ASSERTIVIDADE POR BANCA <50=4, 50-59=3, 60-69=2, 70-79=1, >=80=0; "
+    "PESO INICIAL=%s operacoes a %s%% (14V/6D); reset real a cada 100 entradas | "
     "CICLOS ILIMITADOS | "
     "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%%",
 
     f"{MULTIPLICADOR_GALE:g}",
     GALES_POR_CICLO,
+    PESO_ASSERTIVIDADE_OPERACOES,
+    f"{ASSERTIVIDADE_REFERENCIA_PERCENTUAL:g}",
     RECUPERACAO_PERCENTUAL * 100
 )
 

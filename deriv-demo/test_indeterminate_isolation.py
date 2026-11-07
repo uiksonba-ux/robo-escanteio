@@ -208,16 +208,19 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             dados.update(
                 wins=0,
                 losses=0,
+                wins_janela=0,
+                losses_janela=0,
+                operacoes_janela=0,
             )
 
         self.assertEqual(robo.taxa_banca_ponderada(banca), 80.0)
 
         with robo.estado_lock:
-            robo.estado_frentes[banca]["wins"] = 1
+            robo.estado_frentes[banca].update(wins=1, wins_janela=1, operacoes_janela=1)
         self.assertEqual(robo.taxa_banca_ponderada(banca), 80.95)
 
         with robo.estado_lock:
-            robo.estado_frentes[banca].update(wins=0, losses=1)
+            robo.estado_frentes[banca].update(wins=0, losses=1, wins_janela=0, losses_janela=1, operacoes_janela=1)
         self.assertEqual(robo.taxa_banca_ponderada(banca), 76.19)
 
     def test_new_gale_threshold_edges(self):
@@ -253,15 +256,17 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
                 dados.update(
                     wins=0,
                     losses=0,
+                    wins_janela=0,
+                    losses_janela=0,
+                    operacoes_janela=0,
                     resultado_liquido=0.0,
                     prejuizo_acumulado=0.0,
                     recuperacao_pendente=0.0,
                     envio_indeterminado=False,
                     em_recuperacao=False,
                 )
-            robo.estado_frentes[banca_a]["wins"] = 1
-            robo.estado_frentes[banca_a]["losses"] = 1
-            robo.estado_frentes[banca_b]["wins"] = 4
+            robo.estado_frentes[banca_a].update(wins=1, losses=1, wins_janela=1, losses_janela=1, operacoes_janela=2)
+            robo.estado_frentes[banca_b].update(wins=4, wins_janela=4, operacoes_janela=4)
             robo.estado_frentes[banca_b]["resultado_liquido"] = 5.0
 
         self.assertEqual(robo.taxa_banca_ponderada(banca_a), 77.27)

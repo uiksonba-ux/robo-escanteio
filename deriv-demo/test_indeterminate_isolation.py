@@ -40,18 +40,10 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             }
             robo.estado_frentes[banca]["envio_indeterminado"] = True
 
-    def test_other_available_bank_can_take_distinct_signal(self):
-        reserved = []
-        for index in range(len(robo.BANCAS) - 1):
-            banca = robo.reservar_banca(
-                f"TEST{index}", "call", 80, 1, 1
-            )
-            self.assertIsNotNone(banca)
-            reserved.append(banca)
-
-        self.assertEqual(reserved, robo.BANCAS[1:])
-        self.assertEqual(len(set(reserved)), len(robo.BANCAS) - 1)
+    def test_new_signals_pause_while_any_order_is_ambiguous(self):
+        self.assertIsNone(robo.reservar_banca("TEST0", "call", 80, 1, 1))
         self.assertEqual(robo.estado_frentes[robo.BANCAS[0]]["ativo"], "WLDAUD")
+        self.assertFalse(robo.estado_frentes[robo.BANCAS[1]]["ocupada"])
         self.assertIn("WLDAUD", robo.ativos_em_uso)
 
     def test_unknown_order_asset_cannot_be_reused(self):

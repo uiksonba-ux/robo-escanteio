@@ -8,6 +8,7 @@ from accuracy_store import AccuracyStore, gales_for_accuracy, weighted_accuracy
 class AccuracyPersistenceTests(unittest.TestCase):
     def test_prior_formula_and_band_boundaries(self):
         self.assertEqual(weighted_accuracy(0, 0), 80.0)
+        self.assertEqual(gales_for_accuracy(weighted_accuracy(0, 0)), 0)
         self.assertEqual(weighted_accuracy(1, 0), 80.95)
         self.assertEqual(weighted_accuracy(0, 1), 76.19)
 
@@ -60,6 +61,12 @@ class AccuracyPersistenceTests(unittest.TestCase):
 
             reloaded = AccuracyStore(database_url)
             reloaded.initialize()
+            self.assertEqual(
+                reloaded.record_settlement(
+                    "BANCA 1", "order-2", "operation-1", "win", 1, "win"
+                ),
+                (False, False),
+            )
             counts = reloaded.load_counts(["BANCA 1", "BANCA 2", "BANCA 3"])
 
             self.assertEqual(counts["BANCA 1"]["wins"], 1)

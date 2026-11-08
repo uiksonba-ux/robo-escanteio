@@ -145,8 +145,10 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             self.assertEqual(robo.calcular_entrada_recuperacao(alvo), 2.0)
 
     def test_requested_base_gale_and_recovery_settings(self):
-        self.assertEqual(robo.QTD_BANCAS, 2)
-        self.assertEqual(len(robo.BANCAS), 2)
+        self.assertEqual(robo.QTD_BANCAS, 10)
+        self.assertEqual(len(robo.BANCAS), 10)
+        self.assertEqual(robo.BANCAS, [f"BANCA {i}" for i in range(1, 11)])
+        self.assertEqual(set(robo.estado_frentes), set(robo.BANCAS))
         self.assertEqual(robo.ENTRADA_BASE_USD, 0.35)
         self.assertEqual(robo.MULTIPLICADOR_GALE, 3.0)
         self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
@@ -156,7 +158,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         )
 
     def test_successful_recovery_clears_only_that_bank_pending_loss(self):
-        banca_a, banca_b = robo.BANCAS
+        banca_a, banca_b = robo.BANCAS[:2]
         with robo.estado_lock:
             robo.operacoes_ativas.clear()
             robo.ordens_pendentes.clear()
@@ -178,7 +180,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.prejuizo_banca_atual(banca_b), 0.0)
 
     def test_deferred_recovery_keeps_previous_loss_and_adds_new_loss(self):
-        banca_a, banca_b = robo.BANCAS
+        banca_a, banca_b = robo.BANCAS[:2]
         with robo.estado_lock:
             robo.operacoes_ativas.clear()
             robo.ordens_pendentes.clear()
@@ -222,7 +224,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.taxa_banca_ponderada(banca), 66.67)
 
     def test_assertiveness_and_recovery_ledgers_are_independent_per_bank(self):
-        banca_a, banca_b = robo.BANCAS
+        banca_a, banca_b = robo.BANCAS[:2]
         with robo.estado_lock:
             robo.operacoes_ativas.clear()
             robo.envios_indeterminados.clear()

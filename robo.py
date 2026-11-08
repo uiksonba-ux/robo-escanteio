@@ -185,7 +185,7 @@ MAX_GALES = 4
 
 RECUPERACAO_PERCENTUAL = 1.0
 
-QTD_BANCAS = 2
+QTD_BANCAS = 10
 
 # Prior suavizador: começa como 20 operações com assertividade de 70%.
 PESO_ASSERTIVIDADE_OPERACOES = 20

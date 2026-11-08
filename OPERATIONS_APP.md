@@ -14,10 +14,12 @@ O endpoint responde apenas à autorização de leitura já implementada no robô
 
 ## Dados exibidos
 
-- Saldo DEMO informado pelo processo do robô, resultado líquido, assertividade global e WIN/LOSS.
+- Saldo inicial e saldo DEMO atual informados pelo processo do robô, resultado líquido, assertividade global e WIN/LOSS; os valores em USD são convertidos e exibidos em R$.
 - Estado, assertividade, recuperação, gales e P&L de cada banca.
 - Até 100 operações encerradas mais recentes, incluindo banca, ativo, direção, duração, resultado líquido e nível final.
 - Atualização automática a cada 10 segundos, somente enquanto o app estiver aberto.
+
+A conversão de USD para BRL usa a cotação de referência diária do Frankfurter, sem chave de API; o app mostra a data da cotação e identifica os valores como aproximados. Se a consulta falhar, usa a última cotação desta sessão, identificada como não atualizada; sem cotação disponível, oculta os valores convertidos.
 
 O histórico, o P&L e as estatísticas continuam voláteis no processo atual e são reiniciados quando o robô reinicia. O painel indica a hora da última atualização; ele não é um ledger financeiro persistente e não substitui o extrato da Deriv.
 

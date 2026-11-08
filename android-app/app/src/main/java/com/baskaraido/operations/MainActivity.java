@@ -70,8 +70,7 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
 
-        if (state != null) webView.restoreState(state);
-        if (state == null) webView.loadUrl(HOME);
+        if (state == null || webView.restoreState(state) == null) webView.loadUrl(HOME);
     }
 
     private int dp(int value) {

@@ -29,6 +29,30 @@ logging.basicConfig(
 
 log = logging.getLogger("baskaraido-deriv")
 
+# O worker DEMO precisa compartilhar o mesmo processo que atende o painel.
+# O Gunicorn pode pré-carregar este módulo no processo master antes do fork;
+# por isso a thread não deve ser iniciada durante a importação do módulo.
+_worker_start_lock = threading.Lock()
+_worker_thread = None
+
+
+def iniciar_worker_em_processo_web():
+    """Inicia o robô uma vez no processo Gunicorn que também serve a API."""
+    global _worker_thread
+    with _worker_start_lock:
+        if _worker_thread is not None and _worker_thread.is_alive():
+            return _worker_thread
+
+        thread = threading.Thread(
+            target=worker,
+            daemon=True,
+            name="worker-deriv-demo",
+        )
+        thread.start()
+        _worker_thread = thread
+        log.info("BACKGROUND_WORKER_STARTED | pid=%s | conta=DEMO", os.getpid())
+        return thread
+
 
 # ============================================================
 # HELPERS DE CONFIGURAÇÃO DO RENDER
@@ -3002,21 +3026,12 @@ log.info(
 
 
 # ============================================================
-# INICIA WORKER
-# ============================================================
-
-threading.Thread(
-    target=worker,
-    daemon=True,
-    name="worker-iq"
-).start()
-
-
-# ============================================================
 # FLASK
 # ============================================================
 
 if __name__ == "__main__":
+
+    iniciar_worker_em_processo_web()
 
     app.run(
         host="0.0.0.0",

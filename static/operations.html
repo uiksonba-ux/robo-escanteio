@@ -63,5 +63,5 @@ const d=await r.json();if(d.conta!=="DEMO")throw new Error("A conta reportada n�
 }catch(e){showError("Sem atualização: "+e.message)}
 }
 $("connect").addEventListener("click",()=>{const t=$("token").value.trim();if(!t){showError("Informe o token de leitura.");return}sessionStorage.setItem("monitorToken",t);$("token").value="";refresh();if(timer)clearInterval(timer);timer=setInterval(refresh,10000)});
-if("serviceWorker" in navigator){navigator.serviceWorker.register("/static/operations-sw.js").catch(()=>{})}
+if("serviceWorker" in navigator){navigator.serviceWorker.register("/operations-sw.js",{scope:"/"}).catch(()=>{})}
 </script></body></html>

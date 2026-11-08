@@ -2778,6 +2778,25 @@ def home():
 
 
 # ============================================================
+# PAINEL INSTALÁVEL - SOMENTE LEITURA / DEMO
+# ============================================================
+
+@app.route("/app")
+def app_operacoes():
+    resposta = app.send_static_file("operations.html")
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
+
+
+@app.route("/operations-sw.js")
+def app_service_worker():
+    resposta = app.send_static_file("operations-sw.js")
+    resposta.headers["Service-Worker-Allowed"] = "/"
+    resposta.headers["Cache-Control"] = "no-cache"
+    return resposta
+
+
+# ============================================================
 # API DE MONITORAMENTO - SOMENTE LEITURA / DEMO
 # Não habilita ordens e não expõe credenciais da Deriv/Telegram.
 # Token deve ser configurado em MONITOR_API_TOKEN no servidor.

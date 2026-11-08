@@ -1,0 +1,20 @@
+{
+  "name": "Baskaraido Trader PRO · Operações",
+  "short_name": "Baskaraido",
+  "id": "/app",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#111827",
+  "lang": "pt-BR",
+  "description": "Acompanhamento somente leitura das operações Deriv DEMO.",
+  "icons": [
+    {
+      "src": "/static/operations-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

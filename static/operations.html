@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827"><meta name="description" content="Acompanhamento somente leitura das operações Deriv DEMO.">
+<link rel="manifest" href="/static/operations.webmanifest">
+<title>Baskaraido • Operações</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#141c30;--line:#26324d;--txt:#f4f7ff;--muted:#9daac3;--green:#36d399;--red:#ff667d;--blue:#67a7ff;--gold:#ffc857}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 80% -15%,#263b64 0,transparent 42%),var(--bg);color:var(--txt);font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+main{width:min(100%,760px);margin:auto;padding:20px 16px 44px}.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px 0 22px}.brand{font-size:20px;font-weight:800;letter-spacing:.2px}.brand small{display:block;color:var(--muted);font-size:12px;font-weight:500}.pill{border:1px solid var(--line);border-radius:999px;padding:7px 11px;color:var(--gold);font-size:12px;font-weight:750}
+h1{font-size:26px;margin:0 0 5px}p.sub{margin:0 0 18px;color:var(--muted)}.notice{padding:12px 14px;border:1px solid #735c2b;background:#382e1a;border-radius:14px;color:#ffdfa0;margin:0 0 16px;font-size:13px}
+.login,.card,.bank,.trade{background:linear-gradient(145deg,rgba(23,34,57,.97),rgba(17,25,43,.97));border:1px solid var(--line);border-radius:18px}
+.login{padding:14px;display:flex;gap:8px;margin:14px 0}.login input{min-width:0;flex:1;border:1px solid var(--line);border-radius:11px;background:#0d1425;color:var(--txt);padding:12px;font-size:14px}.btn{border:0;border-radius:11px;background:var(--blue);color:#071326;padding:0 15px;font-weight:800;min-height:44px}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:12px}.card{padding:14px}.label{font-size:12px;color:var(--muted)}.value{font-size:23px;font-weight:800;margin-top:4px}.tone-green{color:var(--green)}.tone-red{color:var(--red)}
+.section{font-size:18px;font-weight:800;margin:24px 0 10px}.banks{display:grid;gap:10px}.bank{padding:15px}.bankhead{display:flex;justify-content:space-between;align-items:center;gap:8px}.bankname{font-weight:800;font-size:16px}.state{color:var(--muted);font-size:12px}.signal{margin-top:10px;color:var(--muted);font-size:13px}.signal strong{color:var(--txt)}.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}.chip{border:1px solid var(--line);border-radius:999px;padding:5px 9px;font-size:12px;color:#cbd5e8}
+.history{display:grid;gap:8px}.trade{padding:12px 14px;display:grid;grid-template-columns:1fr auto;gap:4px 8px}.trade-title{font-weight:800}.trade-meta{font-size:12px;color:var(--muted)}.trade-result{font-weight:850;text-align:right}.empty{border:1px dashed var(--line);border-radius:14px;padding:18px;color:var(--muted);text-align:center}
+.foot{color:var(--muted);font-size:11px;text-align:center;padding:22px 0}.hide{display:none!important}
+@media(min-width:600px){main{padding-top:30px}.grid{grid-template-columns:repeat(4,1fr)}.value{font-size:21px}}
+</style>
+</head>
+<body><main>
+<header class="top"><div class="brand">BASKARAIDO <span style="color:#67a7ff">TRADER PRO</span><small>Painel de operações</small></div><div class="pill">DERIV · DEMO</div></header>
+<h1>Acompanhamento</h1><p class="sub">Consulta somente leitura · atualiza a cada 10 segundos</p>
+<div class="notice">Este painel não envia ordens nem altera a estratégia. Os dados operacionais do robô são temporários e podem reiniciar junto com o serviço.</div>
+<div id="login" class="login"><input id="token" type="password" autocomplete="off" placeholder="Token MONITOR_API_TOKEN" aria-label="Token de leitura"><button id="connect" class="btn">Conectar</button></div>
+<div id="error" class="notice hide"></div><div id="updated" class="label">Aguardando conexão…</div>
+<section class="grid" aria-label="Resumo"><div class="card"><div class="label">Saldo demo</div><div id="balance" class="value">—</div></div><div class="card"><div class="label">Resultado líquido</div><div id="pnl" class="value">—</div></div><div class="card"><div class="label">Assertividade global</div><div id="accuracy" class="value">—</div></div><div class="card"><div class="label">WIN / LOSS</div><div id="wins" class="value">—</div></div></section>
+<h2 class="section">Bancas</h2><section id="banks" class="banks"><div class="empty">Conecte o token para carregar os dados.</div></section>
+<h2 class="section">Operações recentes</h2><section id="history" class="history"><div class="empty">O histórico aparece após as próximas operações encerradas.</div></section>
+<footer class="foot">Modo DEMO · Somente leitura · Histórico recente em memória do robô</footer>
+</main>
+<script>
+const $=id=>document.getElementById(id), fmt=(n,c="USD")=>Number.isFinite(Number(n))?new Intl.NumberFormat("pt-BR",{style:"currency",currency:c}).format(Number(n)):"—";
+const esc=s=>String(s==null?"—":s).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+let timer=null;
+function showError(msg){$("error").textContent=msg;$("error").classList.remove("hide")}
+function render(d){
+const cur=d.moeda||"USD",st=d.estatisticas||{},b=d.bancas||{};
+$("balance").textContent=fmt(d.saldo_demo,cur);$("pnl").textContent=fmt(d.resultado_liquido_global,cur);
+$("pnl").className="value "+(Number(d.resultado_liquido_global)>=0?"tone-green":"tone-red");
+$("accuracy").textContent=Number(st.assertividade||0).toFixed(2)+"%";$("wins").textContent=(st.wins||0)+" / "+(st.losses||0);
+const entries=Object.entries(b).sort((a,z)=>a[0].localeCompare(z[0],undefined,{numeric:true}));
+$("banks").innerHTML=entries.map(([name,x])=>{
+const sig=x.ultimo_sinal||{},busy=x.ocupada,profit=Number(x.resultado_liquido||0);
+return '<article class="bank"><div class="bankhead"><div><div class="bankname">'+esc(name)+'</div><div class="state">'+(busy?"Operação em andamento":"Livre para novo sinal")+'</div></div><div class="pill">'+Number(x.assertividade||0).toFixed(2)+'%</div></div>'+
+'<div class="chips"><span class="chip">'+(x.wins||0)+' WIN · '+(x.losses||0)+' LOSS</span><span class="chip">'+(x.gales_proximos||0)+' gales na próxima</span><span class="chip">Recuperação '+fmt(x.recuperacao_pendente,cur)+'</span><span class="chip">P&L '+fmt(profit,cur)+'</span></div>'+
+'<div class="signal">'+(sig.ativo?'<strong>'+esc(sig.ativo)+' · '+esc(String(sig.direcao||"").toUpperCase())+'</strong> · M'+esc(sig.timeframe)+' / Digital M'+esc(sig.expiracao)+' · operação '+esc(sig.ciclo):"Nenhum sinal recente")+'</div></article>'
+}).join("")||'<div class="empty">Nenhuma banca disponível.</div>';
+const hist=d.historico_operacoes||[];
+$("history").innerHTML=hist.length?hist.slice(0,30).map(x=>{
+const gain=Number(x.resultado_liquido||0),date=x.data?new Date(x.data).toLocaleString("pt-BR",{dateStyle:"short",timeStyle:"short"}):"";
+return '<article class="trade"><div><div class="trade-title">'+esc(x.banca)+' · '+esc(x.ativo)+' · '+esc(x.direcao&&x.direcao.toUpperCase())+'</div><div class="trade-meta">'+esc(date)+' · M'+esc(x.timeframe)+' / Digital M'+esc(x.expiracao)+' · operação '+esc(x.operacao)+' · '+esc(x.ultimo_nivel)+' gale(s) usados</div></div><div class="trade-result '+(gain>=0?"tone-green":"tone-red")+'">'+esc(x.resultado)+'<br>'+fmt(gain,cur)+'</div></article>'
+}).join(""):'<div class="empty">Ainda não há operações encerradas nesta sessão.</div>';
+$("updated").textContent="Atualizado: "+new Date(d.atualizado_em||Date.now()).toLocaleString("pt-BR")+" · DEMO";
+}
+async function refresh(){
+const token=sessionStorage.getItem("monitorToken");if(!token)return;
+try{
+const r=await fetch("/api/v1/monitor",{headers:{Authorization:"Bearer "+token,Accept:"application/json"},cache:"no-store"});
+if(!r.ok){if(r.status===401){sessionStorage.removeItem("monitorToken");if(timer)clearInterval(timer);timer=null;showError("Token recusado. Confira MONITOR_API_TOKEN no Render.");return}if(r.status===503){showError("Monitoramento ainda não está configurado no serviço.");return}throw new Error("HTTP "+r.status)}
+const d=await r.json();if(d.conta!=="DEMO")throw new Error("A conta reportada não é DEMO; dados ocultados.");render(d);$("error").classList.add("hide")
+}catch(e){showError("Sem atualização: "+e.message)}
+}
+$("connect").addEventListener("click",()=>{const t=$("token").value.trim();if(!t){showError("Informe o token de leitura.");return}sessionStorage.setItem("monitorToken",t);$("token").value="";refresh();if(timer)clearInterval(timer);timer=setInterval(refresh,10000)});
+if("serviceWorker" in navigator){navigator.serviceWorker.register("/static/operations-sw.js").catch(()=>{})}
+</script></body></html>

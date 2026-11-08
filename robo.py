@@ -270,6 +270,7 @@ operacoes_ativas = {}
 ordens_pendentes = {}
 ordens_liquidadas = set()
 operacoes_concluidas = set()
+historico_operacoes = []  # últimos 100 sinais encerrados; volátil junto ao processo DEMO
 envios_indeterminados = {}
 
 
@@ -2117,6 +2118,25 @@ def finalizar_operacao_global(banca):
                     dados["recuperacao_pendente"] = perda_atual
             elif contexto.get("prejuizo_alocado", 0) > 0 and resultado_operacao > 0:
                 dados["recuperacao_pendente"] = 0.0
+            historico_operacoes.append({
+                "data": agora_brasil().isoformat(),
+                "conta": "DEMO",
+                "banca": banca,
+                "operacao": int(contexto.get("numero", 0)),
+                "ativo": contexto.get("ativo"),
+                "direcao": dados.get("direcao"),
+                "score": dados.get("score"),
+                "timeframe": dados.get("timeframe"),
+                "expiracao": dados.get("expiracao"),
+                "resultado": "WIN" if resultado_operacao > 0 else "LOSS" if resultado_operacao < 0 else "EMPATE",
+                "resultado_liquido": resultado_operacao / 100,
+                "entrada": float(contexto.get("entrada", 0.0)),
+                "gales": int(contexto.get("gales", 0)),
+                "ultimo_nivel": int(contexto.get("ultimo_nivel", 0)),
+                "recuperacao": float(contexto.get("prejuizo_alocado", 0.0)),
+                "assertividade": float(contexto.get("assertividade_banca", 0.0)),
+            })
+            del historico_operacoes[:-100]
         operacoes_ativas.pop(banca)
         recuperacoes_em_curso.discard(banca)
         estado_frentes[banca]["em_recuperacao"] = False
@@ -2787,6 +2807,17 @@ def monitor_practice():
                 "prejuizo_acumulado": float(dados.get("prejuizo_acumulado", 0.0)),
                 "recuperacao_pendente": float(dados.get("recuperacao_pendente", 0.0)),
                 "em_recuperacao": bool(dados.get("em_recuperacao", False)),
+                "ocupada": bool(dados.get("ocupada", False)),
+                "ativo": dados.get("ativo"),
+                "direcao": dados.get("direcao"),
+                "score": dados.get("score"),
+                "timeframe": dados.get("timeframe"),
+                "expiracao": dados.get("expiracao"),
+                "operacao": int(dados.get("ciclo_gestao", 0)),
+                "entrada_atual": float(dados.get("entrada_atual", 0.0)),
+                "gales": int(dados.get("gales_reativos", 0)),
+                "resultado_liquido": float(dados.get("resultado_liquido", 0.0)),
+                "ultimo_sinal": dados.get("ultimo_sinal"),
                 # O robô não mantém saldo individual verificável por banca.
                 "saldo": None,
             }
@@ -2800,6 +2831,10 @@ def monitor_practice():
         "origem": "robo_practice_memoria_volatil",
         "persistencia": "nao_persistido_reinicia_com_processo",
         "atualizado_em": agora_brasil().isoformat(),
+        "saldo_demo": ultimo_saldo_demo,
+        "moeda": getattr(api, "currency", None) if api is not None else None,
+        "resultado_liquido_global": resultado_global_centavos / 100,
+        "historico_operacoes": [dict(item) for item in reversed(historico_operacoes)],
         "estatisticas": geral,
         "bancas": frentes,
     }), 200

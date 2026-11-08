@@ -265,11 +265,13 @@ losses_base_ponderada = 0
 contador_entrada_lock = threading.Lock()
 resultado_global_centavos = 0
 ultimo_saldo_demo = None
+saldo_inicial_demo = None
 recuperacoes_em_curso = set()
 operacoes_ativas = {}
 ordens_pendentes = {}
 ordens_liquidadas = set()
 operacoes_concluidas = set()
+historico_operacoes = []  # últimos 100 sinais encerrados; volátil junto ao processo DEMO
 envios_indeterminados = {}
 
 
@@ -472,7 +474,7 @@ def _saldo_practice_sincrono(cliente, exigir_atual=True):
 
 
 def conectar():
-    global api, ultimo_saldo_demo, _cliente_conectando, ATIVOS
+    global api, ultimo_saldo_demo, saldo_inicial_demo, _cliente_conectando, ATIVOS
     if not DERIV_APP_ID or not DERIV_TOKEN or not DERIV_DEMO_ACCOUNT_ID:
         log.error("DERIV_APP_ID, DERIV_TOKEN ou DERIV_DEMO_ACCOUNT_ID ausente.")
         return False
@@ -528,6 +530,8 @@ def conectar():
             _sessao_lock.release()
         with estado_lock:
             ultimo_saldo_demo = saldo
+            if saldo_inicial_demo is None:
+                saldo_inicial_demo = saldo
 
         entrada = obter_entrada_base(saldo)
         moeda = nova.currency
@@ -2117,6 +2121,27 @@ def finalizar_operacao_global(banca):
                     dados["recuperacao_pendente"] = perda_atual
             elif contexto.get("prejuizo_alocado", 0) > 0 and resultado_operacao > 0:
                 dados["recuperacao_pendente"] = 0.0
+            historico_operacoes.append({
+                "data": agora_brasil().isoformat(),
+                "data_sinal": (dados.get("ultimo_sinal") or {}).get("data"),
+                "conta": "DEMO",
+                "banca": banca,
+                "operacao": int(contexto.get("numero", 0)),
+                "ativo": contexto.get("ativo"),
+                "direcao": dados.get("direcao"),
+                "score": dados.get("score"),
+                "timeframe": dados.get("timeframe"),
+                "expiracao": dados.get("expiracao"),
+                "resultado": "WIN" if resultado_operacao > 0 else "LOSS" if resultado_operacao < 0 else "EMPATE",
+                "resultado_liquido": resultado_operacao / 100,
+                "entrada": float(contexto.get("entrada", 0.0)),
+                "gales": int(contexto.get("gales", 0)),
+                "multiplicador": float(MULTIPLICADOR_GALE),
+                "ultimo_nivel": int(contexto.get("ultimo_nivel", 0)),
+                "recuperacao": float(contexto.get("prejuizo_alocado", 0.0)),
+                "assertividade": float(contexto.get("assertividade_banca", 0.0)),
+            })
+            del historico_operacoes[:-100]
         operacoes_ativas.pop(banca)
         recuperacoes_em_curso.discard(banca)
         estado_frentes[banca]["em_recuperacao"] = False
@@ -2758,6 +2783,25 @@ def home():
 
 
 # ============================================================
+# PAINEL INSTALÁVEL - SOMENTE LEITURA / DEMO
+# ============================================================
+
+@app.route("/app")
+def app_operacoes():
+    resposta = app.send_static_file("operations.html")
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
+
+
+@app.route("/operations-sw.js")
+def app_service_worker():
+    resposta = app.send_static_file("operations-sw.js")
+    resposta.headers["Service-Worker-Allowed"] = "/"
+    resposta.headers["Cache-Control"] = "no-cache"
+    return resposta
+
+
+# ============================================================
 # API DE MONITORAMENTO - SOMENTE LEITURA / DEMO
 # Não habilita ordens e não expõe credenciais da Deriv/Telegram.
 # Token deve ser configurado em MONITOR_API_TOKEN no servidor.
@@ -2787,19 +2831,41 @@ def monitor_practice():
                 "prejuizo_acumulado": float(dados.get("prejuizo_acumulado", 0.0)),
                 "recuperacao_pendente": float(dados.get("recuperacao_pendente", 0.0)),
                 "em_recuperacao": bool(dados.get("em_recuperacao", False)),
+                "ocupada": bool(dados.get("ocupada", False)),
+                "ativo": dados.get("ativo"),
+                "direcao": dados.get("direcao"),
+                "score": dados.get("score"),
+                "timeframe": dados.get("timeframe"),
+                "expiracao": dados.get("expiracao"),
+                "operacao": int(dados.get("ciclo_gestao", 0)),
+                "entrada_atual": float(dados.get("entrada_atual", 0.0)),
+                "gales": int(dados.get("gales_reativos", 0)),
+                "resultado_liquido": float(dados.get("resultado_liquido", 0.0)),
+                "ultimo_sinal": dados.get("ultimo_sinal"),
                 # O robô não mantém saldo individual verificável por banca.
                 "saldo": None,
             }
             for nome, dados in estado_frentes.items()
         }
+        historico = [dict(item) for item in reversed(historico_operacoes)]
+        resultado_liquido = resultado_global_centavos / 100
+        saldo_demo = ultimo_saldo_demo
+        moeda_demo = getattr(api, "currency", None) if api is not None else None
+        saldo_inicial = saldo_inicial_demo
 
     return jsonify({
         "schema_version": 1,
         "conta": "DEMO",
         "modo": "somente_leitura",
+        "ordens_habilitadas": bool(EXECUTAR_ORDENS),
         "origem": "robo_practice_memoria_volatil",
         "persistencia": "nao_persistido_reinicia_com_processo",
         "atualizado_em": agora_brasil().isoformat(),
+        "saldo_demo": saldo_demo,
+        "saldo_inicial_demo": saldo_inicial,
+        "moeda": moeda_demo,
+        "resultado_liquido_global": resultado_liquido,
+        "historico_operacoes": historico,
         "estatisticas": geral,
         "bancas": frentes,
     }), 200

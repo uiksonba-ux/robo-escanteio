@@ -265,6 +265,7 @@ losses_base_ponderada = 0
 contador_entrada_lock = threading.Lock()
 resultado_global_centavos = 0
 ultimo_saldo_demo = None
+saldo_inicial_demo = None
 recuperacoes_em_curso = set()
 operacoes_ativas = {}
 ordens_pendentes = {}
@@ -473,7 +474,7 @@ def _saldo_practice_sincrono(cliente, exigir_atual=True):
 
 
 def conectar():
-    global api, ultimo_saldo_demo, _cliente_conectando, ATIVOS
+    global api, ultimo_saldo_demo, saldo_inicial_demo, _cliente_conectando, ATIVOS
     if not DERIV_APP_ID or not DERIV_TOKEN or not DERIV_DEMO_ACCOUNT_ID:
         log.error("DERIV_APP_ID, DERIV_TOKEN ou DERIV_DEMO_ACCOUNT_ID ausente.")
         return False
@@ -529,6 +530,8 @@ def conectar():
             _sessao_lock.release()
         with estado_lock:
             ultimo_saldo_demo = saldo
+            if saldo_inicial_demo is None:
+                saldo_inicial_demo = saldo
 
         entrada = obter_entrada_base(saldo)
         moeda = nova.currency
@@ -2848,6 +2851,7 @@ def monitor_practice():
         resultado_liquido = resultado_global_centavos / 100
         saldo_demo = ultimo_saldo_demo
         moeda_demo = getattr(api, "currency", None) if api is not None else None
+        saldo_inicial = saldo_inicial_demo
 
     return jsonify({
         "schema_version": 1,
@@ -2858,6 +2862,7 @@ def monitor_practice():
         "persistencia": "nao_persistido_reinicia_com_processo",
         "atualizado_em": agora_brasil().isoformat(),
         "saldo_demo": saldo_demo,
+        "saldo_inicial_demo": saldo_inicial,
         "moeda": moeda_demo,
         "resultado_liquido_global": resultado_liquido,
         "historico_operacoes": historico,

@@ -2120,6 +2120,7 @@ def finalizar_operacao_global(banca):
                 dados["recuperacao_pendente"] = 0.0
             historico_operacoes.append({
                 "data": agora_brasil().isoformat(),
+                "data_sinal": (dados.get("ultimo_sinal") or {}).get("data"),
                 "conta": "DEMO",
                 "banca": banca,
                 "operacao": int(contexto.get("numero", 0)),
@@ -2132,6 +2133,7 @@ def finalizar_operacao_global(banca):
                 "resultado_liquido": resultado_operacao / 100,
                 "entrada": float(contexto.get("entrada", 0.0)),
                 "gales": int(contexto.get("gales", 0)),
+                "multiplicador": float(MULTIPLICADOR_GALE),
                 "ultimo_nivel": int(contexto.get("ultimo_nivel", 0)),
                 "recuperacao": float(contexto.get("prejuizo_alocado", 0.0)),
                 "assertividade": float(contexto.get("assertividade_banca", 0.0)),
@@ -2851,6 +2853,7 @@ def monitor_practice():
         "schema_version": 1,
         "conta": "DEMO",
         "modo": "somente_leitura",
+        "ordens_habilitadas": bool(EXECUTAR_ORDENS),
         "origem": "robo_practice_memoria_volatil",
         "persistencia": "nao_persistido_reinicia_com_processo",
         "atualizado_em": agora_brasil().isoformat(),

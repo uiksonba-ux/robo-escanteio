@@ -2,8 +2,7 @@ import threading
 import unittest
 from unittest import mock
 
-# robo.py starts its worker when imported. Keep this test isolated from all
-# network activity and trading threads.
+# Keep this test isolated if import-time threads are ever added again.
 _original_start = threading.Thread.start
 threading.Thread.start = lambda self: None
 try:

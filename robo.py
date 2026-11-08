@@ -2842,6 +2842,10 @@ def monitor_practice():
             }
             for nome, dados in estado_frentes.items()
         }
+        historico = [dict(item) for item in reversed(historico_operacoes)]
+        resultado_liquido = resultado_global_centavos / 100
+        saldo_demo = ultimo_saldo_demo
+        moeda_demo = getattr(api, "currency", None) if api is not None else None
 
     return jsonify({
         "schema_version": 1,
@@ -2850,10 +2854,10 @@ def monitor_practice():
         "origem": "robo_practice_memoria_volatil",
         "persistencia": "nao_persistido_reinicia_com_processo",
         "atualizado_em": agora_brasil().isoformat(),
-        "saldo_demo": ultimo_saldo_demo,
-        "moeda": getattr(api, "currency", None) if api is not None else None,
-        "resultado_liquido_global": resultado_global_centavos / 100,
-        "historico_operacoes": [dict(item) for item in reversed(historico_operacoes)],
+        "saldo_demo": saldo_demo,
+        "moeda": moeda_demo,
+        "resultado_liquido_global": resultado_liquido,
+        "historico_operacoes": historico,
         "estatisticas": geral,
         "bancas": frentes,
     }), 200

@@ -2,66 +2,74 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#111827"><meta name="description" content="Acompanhamento somente leitura das operações Deriv DEMO.">
+<meta name="theme-color" content="#f5f7fb"><meta name="description" content="Acompanhe suas operações Deriv DEMO em reais.">
 <link rel="manifest" href="/static/operations.webmanifest">
-<title>Baskaraido • Operações</title>
+<title>Operações · Baskaraido Trader PRO</title>
 <style>
-:root{color-scheme:dark;--bg:#0b1020;--panel:#141c30;--line:#26324d;--txt:#f4f7ff;--muted:#9daac3;--green:#36d399;--red:#ff667d;--blue:#67a7ff;--gold:#ffc857}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 80% -15%,#263b64 0,transparent 42%),var(--bg);color:var(--txt);font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
-main{width:min(100%,760px);margin:auto;padding:20px 16px 44px}.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px 0 22px}.brand{font-size:20px;font-weight:800;letter-spacing:.2px}.brand small{display:block;color:var(--muted);font-size:12px;font-weight:500}.pill{border:1px solid var(--line);border-radius:999px;padding:7px 11px;color:var(--gold);font-size:12px;font-weight:750}
-h1{font-size:26px;margin:0 0 5px}p.sub{margin:0 0 18px;color:var(--muted)}.notice{padding:12px 14px;border:1px solid #735c2b;background:#382e1a;border-radius:14px;color:#ffdfa0;margin:0 0 16px;font-size:13px}
-.login,.card,.bank,.trade{background:linear-gradient(145deg,rgba(23,34,57,.97),rgba(17,25,43,.97));border:1px solid var(--line);border-radius:18px}
-.login{padding:14px;display:flex;gap:8px;margin:14px 0}.login input{min-width:0;flex:1;border:1px solid var(--line);border-radius:11px;background:#0d1425;color:var(--txt);padding:12px;font-size:14px}.btn{border:0;border-radius:11px;background:var(--blue);color:#071326;padding:0 15px;font-weight:800;min-height:44px}
-.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:12px}.card{padding:14px}.label{font-size:12px;color:var(--muted)}.value{font-size:23px;font-weight:800;margin-top:4px}.tone-green{color:var(--green)}.tone-red{color:var(--red)}
-.section{font-size:18px;font-weight:800;margin:24px 0 10px}.banks{display:grid;gap:10px}.bank{padding:15px}.bankhead{display:flex;justify-content:space-between;align-items:center;gap:8px}.bankname{font-weight:800;font-size:16px}.state{color:var(--muted);font-size:12px}.signal{margin-top:10px;color:var(--muted);font-size:13px}.signal strong{color:var(--txt)}.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}.chip{border:1px solid var(--line);border-radius:999px;padding:5px 9px;font-size:12px;color:#cbd5e8}
-.history{display:grid;gap:8px}.trade{padding:12px 14px;display:grid;grid-template-columns:1fr auto;gap:4px 8px}.trade-title{font-weight:800}.trade-meta{font-size:12px;color:var(--muted)}.trade-result{font-weight:850;text-align:right}.empty{border:1px dashed var(--line);border-radius:14px;padding:18px;color:var(--muted);text-align:center}
-.foot{color:var(--muted);font-size:11px;text-align:center;padding:22px 0}.hide{display:none!important}
-@media(min-width:600px){main{padding-top:30px}.grid{grid-template-columns:repeat(4,1fr)}.value{font-size:21px}}
+:root{color-scheme:light;--bg:#f4f6fa;--surface:#fff;--ink:#20283a;--muted:#748096;--line:#e7eaf0;--blue:#3f82e8;--green:#21ad69;--green-bg:#ddf5e8;--red:#ca3456;--red-bg:#fde6ec;--amber:#aa7818;--amber-bg:#fff5d9;--shadow:0 2px 9px rgba(24,43,75,.08)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.42 system-ui,-apple-system,Segoe UI,sans-serif}
+main{width:min(100%,600px);margin:auto;padding:18px 14px calc(30px + env(safe-area-inset-bottom))}
+header{display:flex;align-items:center;justify-content:space-between;margin:5px 4px 17px}.brand{font-size:21px;font-weight:800;letter-spacing:-.4px}.sub{margin:2px 0 0;color:var(--muted);font-size:13px}.demo{background:#eaf2ff;color:#2869c8;border-radius:999px;padding:7px 11px;font-size:11px;font-weight:800;white-space:nowrap}
+h1{font-size:24px;letter-spacing:-.5px;margin:0}h2{font-size:17px;margin:23px 3px 10px}
+.status,.summary,.bank,.operation,.token-panel{background:var(--surface);border:1px solid var(--line);border-radius:17px;box-shadow:var(--shadow)}
+.status{padding:13px 15px;display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px}.status strong{font-size:14px}.status small{display:block;color:var(--muted);margin-top:2px}.badge{font-size:11px;border-radius:999px;padding:6px 9px;background:#edf1f6;color:#657187;font-weight:800}.badge.on{background:var(--green-bg);color:#167c4a}.badge.off{background:var(--amber-bg);color:#8b6411}
+.token-panel{padding:12px;margin:10px 0}.token-row{display:flex;gap:8px}.token-row input{flex:1;min-width:0;border:1px solid var(--line);border-radius:11px;padding:11px;background:#fbfcfe;font:inherit}.btn{border:0;background:var(--blue);color:white;border-radius:11px;padding:0 14px;font-weight:800;min-height:42px}.hint{font-size:11px;color:var(--muted);margin:7px 2px 0}.notice{padding:11px 13px;border-radius:12px;background:#fff6df;color:#77570f;border:1px solid #f2dfa4;margin:10px 0;font-size:12px}.hide{display:none!important}
+.summary{padding:14px 15px;margin-bottom:10px}.label{font-size:12px;color:#536078}.money{color:var(--blue);font-size:25px;font-weight:850;letter-spacing:-.4px;margin-top:3px}.money.positive{color:var(--green)}.money.negative{color:var(--red)}.under{font-size:11px;color:var(--muted);margin-top:2px}.scoreline{font-size:23px;font-weight:850;color:var(--green);margin-top:2px}.rate{text-align:right;color:var(--muted);font-size:10px;margin:-4px 2px 0}
+.bank-list,.operation-list{display:grid;gap:9px}.bank{padding:13px 14px}.bank-top{display:flex;justify-content:space-between;align-items:center;gap:8px}.bank-name{font-weight:850;font-size:15px}.bank-sub{font-size:11px;color:var(--muted);margin-top:2px}.acc{font-size:12px;color:#2478d5;font-weight:800}.bank-grid{border-top:1px solid var(--line);margin-top:10px;padding-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:7px 10px}.kv{font-size:12px;color:var(--muted)}.kv b{display:block;color:var(--ink);font-weight:700;margin-top:1px}
+.filters{display:flex;gap:7px;overflow-x:auto;padding:0 1px 3px;margin-bottom:8px}.filter{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 12px;color:#57637a;font:inherit;font-size:12px;font-weight:750;white-space:nowrap}.filter.active{background:#eaf2ff;color:#2869c8;border-color:#c8dcfa}
+.operation{overflow:hidden}.operation.win{background:var(--green-bg);border-color:#bce7ce}.operation.loss{background:var(--red-bg);border-color:#f4c6d1}.operation.draw{background:var(--amber-bg);border-color:#efdfa9}
+.op-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:12px 13px;border-bottom:1px solid rgba(44,67,91,.09)}.asset{font-size:14px;font-weight:850}.op-time{font-size:11px;opacity:.72;margin-top:2px}.op-money{text-align:right;font-weight:800;white-space:nowrap}.op-money small{display:block;font-size:11px;font-weight:600;opacity:.8}.details{padding:10px 13px 12px;display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}.detail{font-size:11px;color:#54705f}.loss .detail{color:#895264}.draw .detail{color:#826820}.detail b{display:block;color:var(--ink);font-size:12px;font-weight:750;margin-top:1px}
+.empty{border:1px dashed #cbd3df;border-radius:14px;background:#fff;padding:19px 14px;text-align:center;color:var(--muted)}
+.foot{text-align:center;padding:20px 5px;color:var(--muted);font-size:10px}
+@media(min-width:500px){main{padding-top:26px}.money{font-size:28px}}
 </style>
 </head>
 <body><main>
-<header class="top"><div class="brand">BASKARAIDO <span style="color:#67a7ff">TRADER PRO</span><small>Painel de operações</small></div><div class="pill">DERIV · DEMO</div></header>
-<h1>Acompanhamento</h1><p class="sub">Consulta somente leitura · atualiza a cada 10 segundos</p>
-<div class="notice">Este painel não envia ordens nem altera a estratégia. Os dados operacionais do robô são temporários e podem reiniciar junto com o serviço.</div>
-<div id="login" class="login"><input id="token" type="password" autocomplete="off" placeholder="Token MONITOR_API_TOKEN" aria-label="Token de leitura"><button id="connect" class="btn">Conectar</button></div>
-<div id="error" class="notice hide"></div><div id="updated" class="label">Aguardando conexão…</div>
-<section class="grid" aria-label="Resumo"><div class="card"><div class="label">Saldo demo</div><div id="balance" class="value">—</div></div><div class="card"><div class="label">Resultado líquido</div><div id="pnl" class="value">—</div></div><div class="card"><div class="label">Assertividade global</div><div id="accuracy" class="value">—</div></div><div class="card"><div class="label">WIN / LOSS</div><div id="wins" class="value">—</div></div></section>
-<h2 class="section">Bancas</h2><section id="banks" class="banks"><div class="empty">Conecte o token para carregar os dados.</div></section>
-<h2 class="section">Operações recentes</h2><section id="history" class="history"><div class="empty">O histórico aparece após as próximas operações encerradas.</div></section>
-<footer class="foot">Modo DEMO · Somente leitura · Histórico recente em memória do robô</footer>
+<header><div><div class="brand">Operações</div><p class="sub">Acompanhe suas operações em tempo real.</p></div><span class="demo">DERIV · DEMO</span></header>
+<div id="status" class="status"><div><strong>Conectando ao robô</strong><small>Leitura somente de conta demo</small></div><span id="robotBadge" class="badge">AGUARDANDO</span></div>
+<div id="tokenPanel" class="token-panel"><div class="token-row"><input id="token" type="password" autocomplete="off" placeholder="Token MONITOR_API_TOKEN" aria-label="Token de monitoramento"><button id="connect" class="btn">Conectar</button></div><div class="hint">O token fica apenas na sessão deste navegador. Não use o token da Deriv.</div></div>
+<div id="error" class="notice hide"></div>
+<div class="summary"><div class="label">Saldo atual da conta demo</div><div id="balance" class="money">—</div><div id="balanceHint" class="under">Aguardando dados</div></div>
+<div class="summary"><div class="label">Resultado líquido do robô</div><div id="pnl" class="money">—</div><div class="under">Desde o início desta sessão do processo</div></div>
+<div class="summary"><div class="label">Placar geral</div><div id="score" class="scoreline">—</div><div id="scoreHint" class="under">Assertividade —</div></div>
+<div id="rate" class="rate">Buscando cotação de referência USD/BRL…</div>
+<h2>Bancas</h2><section id="banks" class="bank-list"><div class="empty">Conecte o painel para carregar as bancas.</div></section>
+<h2>Operações recentes</h2><nav class="filters" aria-label="Filtrar operações"><button class="filter active" data-filter="ALL">Todas</button><button class="filter" data-filter="WIN">WIN</button><button class="filter" data-filter="LOSS">LOSS</button><button class="filter" data-filter="EMPATE">Empate</button></nav>
+<section id="history" class="operation-list"><div class="empty">As operações encerradas aparecerão aqui.</div></section>
+<footer class="foot">Valores convertidos para reais pela cotação de referência diária. São aproximados e podem diferir da conversão da Deriv.<br>O histórico mostrado é temporário e reinicia quando o robô reinicia.</footer>
 </main>
 <script>
-const $=id=>document.getElementById(id), fmt=(n,c="USD")=>Number.isFinite(Number(n))?new Intl.NumberFormat("pt-BR",{style:"currency",currency:c}).format(Number(n)):"—";
+const $=id=>document.getElementById(id),fmtNum=n=>Number.isFinite(Number(n))?new Intl.NumberFormat("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(n)):"—";
 const esc=s=>String(s==null?"—":s).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
-let timer=null;
+let timer=null,fxRate=null,fxDate=null,currentData=null,currentFilter="ALL";
+function brl(n,currency){const value=Number(n);if(!Number.isFinite(value))return "—";if(currency==="BRL")return new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(value);if(currency!=="USD"||!fxRate)return "—";return new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(value*fxRate)}
 function showError(msg){$("error").textContent=msg;$("error").classList.remove("hide")}
+async function loadRate(){
+try{const r=await fetch("https://api.frankfurter.dev/v2/rates?base=USD&quotes=BRL",{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);const d=await r.json();const row=Array.isArray(d)?d.find(x=>x.base==="USD"&&x.quote==="BRL"):null;if(!row||!Number.isFinite(Number(row.rate))||Number(row.rate)<=0)throw new Error("cotação inválida");fxRate=Number(row.rate);fxDate=row.date;sessionStorage.setItem("usdBrlReference",JSON.stringify({rate:fxRate,date:fxDate,at:Date.now()}));$("rate").textContent="Referência: US$ 1 = R$ "+fmtNum(fxRate)+" · "+fxDate+" · atualização diária";if(currentData)render(currentData)
+}catch(e){const saved=sessionStorage.getItem("usdBrlReference");if(saved){try{const x=JSON.parse(saved);fxRate=Number(x.rate);fxDate=x.date;$("rate").textContent="Cotação salva: US$ 1 = R$ "+fmtNum(fxRate)+" · "+esc(fxDate)+" · sem atualização";if(currentData)render(currentData);return}catch{}}fxRate=null;$("rate").textContent="Cotação USD/BRL indisponível; valores em USD ocultos."}
+}
+function stakeTotal(x){const entry=Number(x.entrada),mult=Number(x.multiplicador);if(!Number.isFinite(entry)||!Number.isFinite(mult)||entry<=0||mult<=0)return null;let total=0;for(let i=0;i<=Number(x.ultimo_nivel||0);i++)total+=Math.round(entry*Math.pow(mult,i)*100)/100;return total}
+function renderBanks(d){
+const entries=Object.entries(d.bancas||{}).sort((a,b)=>a[0].localeCompare(b[0],undefined,{numeric:true}));
+$("banks").innerHTML=entries.map(([name,x])=>{const sig=x.ultimo_sinal||{},busy=Boolean(x.ocupada);return '<article class="bank"><div class="bank-top"><div><div class="bank-name">'+esc(name)+'</div><div class="bank-sub">'+(busy?"Operação em andamento":"Aguardando sinal")+(x.ativo?" · "+esc(x.ativo):"")+'</div></div><div class="acc">'+fmtNum(x.assertividade)+'%</div></div><div class="bank-grid"><div class="kv">Placar<b>'+esc(x.wins)+' WIN / '+esc(x.losses)+' LOSS</b></div><div class="kv">Próxima faixa<b>'+esc(x.gales_proximos)+' gales</b></div><div class="kv">Resultado líquido<b>'+brl(x.resultado_liquido,d.moeda)+'</b></div><div class="kv">Recuperação pendente<b>'+brl(x.recuperacao_pendente,d.moeda)+'</b></div><div class="kv">Entrada atual<b>'+brl(x.entrada_atual,d.moeda)+'</b></div><div class="kv">Último sinal<b>'+(sig.ativo?esc(sig.ativo+" · "+String(sig.direcao||"").toUpperCase()):"—")+'</b></div></div></article>'}).join("")||'<div class="empty">Nenhuma banca disponível.</div>'
+}
+function renderHistory(d){
+const hist=(d.historico_operacoes||[]).filter(x=>currentFilter==="ALL"||x.resultado===currentFilter);
+$("history").innerHTML=hist.length?hist.slice(0,100).map(x=>{const result=String(x.resultado||"").toUpperCase(),cls=result==="WIN"?"win":result==="LOSS"?"loss":"draw",at=x.data_sinal||x.data,time=at?new Date(at).toLocaleString("pt-BR",{dateStyle:"short",timeStyle:"short"}):"—",total=stakeTotal(x);return '<article class="operation '+cls+'"><div class="op-head"><div><div class="asset">'+esc(x.ativo)+' · '+esc(x.direcao&&x.direcao.toUpperCase())+'</div><div class="op-time">'+esc(x.banca)+' · '+esc(time)+' · operação '+esc(x.operacao)+'</div></div><div class="op-money">'+brl(total,d.moeda)+'<small>total investido · '+brl(x.resultado_liquido,d.moeda)+' líquido</small></div></div><div class="details"><div class="detail">Direção<b>'+esc(x.direcao&&x.direcao.toUpperCase())+'</b></div><div class="detail">Tempo<b>M'+esc(x.timeframe)+' / Digital M'+esc(x.expiracao)+'</b></div><div class="detail">Recuperação<b>'+(Number(x.recuperacao)>0?brl(x.recuperacao,d.moeda):"—")+'</b></div><div class="detail">Entrada inicial<b>'+brl(x.entrada,d.moeda)+'</b></div><div class="detail">Gales usados<b>'+esc(x.ultimo_nivel)+' de '+esc(x.gales)+'</b></div><div class="detail">Status<b>'+esc(result)+'</b></div></div></article>'}).join(""):'<div class="empty">Nenhuma operação nesta categoria nesta sessão.</div>'
+}
 function render(d){
-const cur=d.moeda||"USD",st=d.estatisticas||{},b=d.bancas||{};
-$("balance").textContent=fmt(d.saldo_demo,cur);$("pnl").textContent=fmt(d.resultado_liquido_global,cur);
-$("pnl").className="value "+(Number(d.resultado_liquido_global)>=0?"tone-green":"tone-red");
-$("accuracy").textContent=Number(st.assertividade||0).toFixed(2)+"%";$("wins").textContent=(st.wins||0)+" / "+(st.losses||0);
-const entries=Object.entries(b).sort((a,z)=>a[0].localeCompare(z[0],undefined,{numeric:true}));
-$("banks").innerHTML=entries.map(([name,x])=>{
-const sig=x.ultimo_sinal||{},busy=x.ocupada,profit=Number(x.resultado_liquido||0);
-return '<article class="bank"><div class="bankhead"><div><div class="bankname">'+esc(name)+'</div><div class="state">'+(busy?"Operação em andamento":"Livre para novo sinal")+'</div></div><div class="pill">'+Number(x.assertividade||0).toFixed(2)+'%</div></div>'+
-'<div class="chips"><span class="chip">'+(x.wins||0)+' WIN · '+(x.losses||0)+' LOSS</span><span class="chip">'+(x.gales_proximos||0)+' gales na próxima</span><span class="chip">Recuperação '+fmt(x.recuperacao_pendente,cur)+'</span><span class="chip">P&L '+fmt(profit,cur)+'</span></div>'+
-'<div class="signal">'+(sig.ativo?'<strong>'+esc(sig.ativo)+' · '+esc(String(sig.direcao||"").toUpperCase())+'</strong> · M'+esc(sig.timeframe)+' / Digital M'+esc(sig.expiracao)+' · operação '+esc(sig.ciclo):"Nenhum sinal recente")+'</div></article>'
-}).join("")||'<div class="empty">Nenhuma banca disponível.</div>';
-const hist=d.historico_operacoes||[];
-$("history").innerHTML=hist.length?hist.slice(0,30).map(x=>{
-const gain=Number(x.resultado_liquido||0),date=x.data?new Date(x.data).toLocaleString("pt-BR",{dateStyle:"short",timeStyle:"short"}):"";
-return '<article class="trade"><div><div class="trade-title">'+esc(x.banca)+' · '+esc(x.ativo)+' · '+esc(x.direcao&&x.direcao.toUpperCase())+'</div><div class="trade-meta">'+esc(date)+' · M'+esc(x.timeframe)+' / Digital M'+esc(x.expiracao)+' · operação '+esc(x.operacao)+' · '+esc(x.ultimo_nivel)+' gale(s) usados</div></div><div class="trade-result '+(gain>=0?"tone-green":"tone-red")+'">'+esc(x.resultado)+'<br>'+fmt(gain,cur)+'</div></article>'
-}).join(""):'<div class="empty">Ainda não há operações encerradas nesta sessão.</div>';
-$("updated").textContent="Atualizado: "+new Date(d.atualizado_em||Date.now()).toLocaleString("pt-BR")+" · DEMO";
+currentData=d;const cur=d.moeda||"USD";$("balance").textContent=brl(d.saldo_demo,cur);$("balanceHint").textContent=cur==="USD"&&fxDate?"Cotação de referência de "+fxDate:"Saldo informado pelo robô";
+$("pnl").textContent=brl(d.resultado_liquido_global,cur);$("pnl").className="money "+(Number(d.resultado_liquido_global)>=0?"positive":"negative");
+const s=d.estatisticas||{};$("score").textContent=(s.wins||0)+" WIN  ×  "+(s.losses||0)+" LOSS";$("scoreHint").textContent="Assertividade global: "+fmtNum(s.assertividade)+"%";
+const enabled=Boolean(d.ordens_habilitadas);$("robotBadge").textContent=enabled?"HABILITADO":"PAUSADO";$("robotBadge").className="badge "+(enabled?"on":"off");$("status").querySelector("strong").textContent=enabled?"Robô DEMO habilitado":"Robô DEMO pausado";$("status").querySelector("small").textContent=d.atualizado_em?"Atualizado "+new Date(d.atualizado_em).toLocaleTimeString("pt-BR"):"Somente leitura";
+renderBanks(d);renderHistory(d)
 }
 async function refresh(){
 const token=sessionStorage.getItem("monitorToken");if(!token)return;
-try{
-const r=await fetch("/api/v1/monitor",{headers:{Authorization:"Bearer "+token,Accept:"application/json"},cache:"no-store"});
-if(!r.ok){if(r.status===401){sessionStorage.removeItem("monitorToken");if(timer)clearInterval(timer);timer=null;showError("Token recusado. Confira MONITOR_API_TOKEN no Render.");return}if(r.status===503){showError("Monitoramento ainda não está configurado no serviço.");return}throw new Error("HTTP "+r.status)}
-const d=await r.json();if(d.conta!=="DEMO")throw new Error("A conta reportada não é DEMO; dados ocultados.");render(d);$("error").classList.add("hide")
-}catch(e){showError("Sem atualização: "+e.message)}
+try{const r=await fetch("/api/v1/monitor",{headers:{Authorization:"Bearer "+token,Accept:"application/json"},cache:"no-store"});if(!r.ok){if(r.status===401){sessionStorage.removeItem("monitorToken");if(timer)clearInterval(timer);timer=null;showError("Token recusado. Confira MONITOR_API_TOKEN no Render.");return}if(r.status===503){showError("Monitoramento não configurado no serviço.");return}throw new Error("HTTP "+r.status)}const d=await r.json();if(d.conta!=="DEMO")throw new Error("A conta reportada não é DEMO; dados ocultados.");$("tokenPanel").classList.add("hide");$("error").classList.add("hide");render(d)}catch(e){showError("Sem atualização: "+e.message)}
 }
 $("connect").addEventListener("click",()=>{const t=$("token").value.trim();if(!t){showError("Informe o token de leitura.");return}sessionStorage.setItem("monitorToken",t);$("token").value="";refresh();if(timer)clearInterval(timer);timer=setInterval(refresh,10000)});
-if("serviceWorker" in navigator){navigator.serviceWorker.register("/operations-sw.js",{scope:"/"}).catch(()=>{})}
+document.querySelectorAll(".filter").forEach(b=>b.addEventListener("click",()=>{currentFilter=b.dataset.filter;document.querySelectorAll(".filter").forEach(x=>x.classList.toggle("active",x===b));if(currentData)renderHistory(currentData)}));
+loadRate();if(sessionStorage.getItem("monitorToken")){refresh();timer=setInterval(refresh,10000)}
+if("serviceWorker" in navigator)navigator.serviceWorker.register("/operations-sw.js",{scope:"/"}).catch(()=>{});
 </script></body></html>

@@ -7,6 +7,10 @@ on:
     paths:
       - "android-app/**"
       - ".github/workflows/build-operations-apk.yml"
+  pull_request:
+    paths:
+      - "android-app/**"
+      - ".github/workflows/build-operations-apk.yml"
   workflow_dispatch:
 
 permissions:

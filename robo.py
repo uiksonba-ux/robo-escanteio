@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-2B-USD035-GALE3-REC100-LAST-OP-LOSS"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-2B-USD035-ASSERT-2PCT-GALE-MULTI-REC100"
 
 app = Flask(__name__)
 
@@ -177,11 +177,18 @@ TEMPO_BLOQUEIO = env_int(
 
 ENTRADA_MINIMA = 0.01
 
-MULTIPLICADOR_GALE = 3.0  # multiplicador fixo da progressão
+MULTIPLICADOR_GALE = 3.0  # compatibilidade: multiplicador da faixa de 1 gale
+MULTIPLICADORES_POR_GALES = {
+    1: 3.0,
+    2: 2.0,
+    3: 1.8,
+    4: 1.6,
+    5: 1.5,
+}
 
-# Faixas de assertividade e recuperação calculadas separadamente para cada banca.
-GALES_POR_CICLO = 4
-MAX_GALES = 4
+# Assertividade e gales são calculados separadamente para cada banca.
+GALES_POR_CICLO = 5
+MAX_GALES = 5
 
 RECUPERACAO_PERCENTUAL = 1.0
 
@@ -568,7 +575,7 @@ def conectar():
             f"🏦 {QTD_BANCAS} bancas | gestão individual\n"
             "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
+            "📈 Multiplicadores por faixa: 1 gale ×3 | 2 ×2 | 3 ×1,8 | 4 ×1,6 | 5 ×1,5\n"
             "🛡 Gales pela assertividade individual de cada banca\n"
             f"📊 Assertividade inicial: {ASSERTIVIDADE_REFERENCIA_PERCENTUAL:g}% ponderada em {PESO_ASSERTIVIDADE_OPERACOES} operações (14V/6D)\n"
             f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} da perda da operação anterior\n"
@@ -1706,11 +1713,12 @@ def taxa(
 
 
 def gales_por_assertividade(percentual):
-    """Faixas globais: 0-49:4, 50-59:3, 60-69:2, 70-79:1, 80-100:0."""
+    """Faixas individuais de 2 pontos: 80%+:0, depois 1 a 5 gales."""
     valor = max(0.0, min(100.0, float(percentual)))
-    if valor < 50: return 4
-    if valor < 60: return 3
-    if valor < 70: return 2
+    if valor < 72: return 5
+    if valor < 74: return 4
+    if valor < 76: return 3
+    if valor < 78: return 2
     if valor < 80: return 1
     return 0
 
@@ -1796,17 +1804,22 @@ def registrar_loss(
 # GALE FIXO CONFIGURÁVEL
 # ============================================================
 
+def multiplicador_por_gales(quantidade_gales):
+    quantidade = max(0, min(MAX_GALES, int(quantidade_gales)))
+    return MULTIPLICADORES_POR_GALES.get(quantidade, 1.0)
+
+
 def valores_do_ciclo(
     entrada,
     quantidade_gales=None,
     multiplicador=None
 ):
 
-    if multiplicador is None:
-        multiplicador = MULTIPLICADOR_GALE
-
     if quantidade_gales is None:
         quantidade_gales = GALES_POR_CICLO
+
+    if multiplicador is None:
+        multiplicador = MULTIPLICADOR_GALE
 
     return [
 
@@ -1906,16 +1919,17 @@ def snapshot_gestao_global():
                 for banca, assertividade in assertividade_por_banca.items()
             },
             "prejuizo_por_banca": prejuizo_por_banca,
-            "sequencia_gales": [4, 3, 2, 1, 0],
+            "sequencia_gales": [5, 4, 3, 2, 1, 0],
             "entradas_por_gale": {nivel: obter_entrada_base() for nivel in range(MAX_GALES + 1)},
             "multiplicador_gale": MULTIPLICADOR_GALE,
+            "multiplicadores_por_gales": {str(nivel): valor for nivel, valor in MULTIPLICADORES_POR_GALES.items()},
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "envio_indeterminado": dict(next(iter(envios_indeterminados.values()))) if envios_indeterminados else None,
             "envios_indeterminados": [dict(item) for item in envios_indeterminados.values()],
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Faixas de assertividade calculadas por banca: <50%=4, <60%=3, <70%=2, <80%=1, >=80%=0 gales",
+            "regra_gales": "Por banca: <72%=5, 72-<74%=4, 74-<76%=3, 76-<78%=2, 78-<80%=1, >=80%=0; multiplicadores 1:3x, 2:2x, 3:1.8x, 4:1.6x, 5:1.5x",
             "regra_recuperacao": f"{RECUPERACAO_PERCENTUAL:.0%} da perda líquida da última operação concluída por banca; vitórias antigas não compensam; recuperação independente",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
@@ -1987,7 +2001,10 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                             "primeira_ordem": None,
                             "ultimo_nivel": -1,
                             "ativo": ativo}
-            valor = valores_do_ciclo(contexto["entrada"], nivel)[nivel]
+            valor = valores_do_ciclo(
+                contexto["entrada"], contexto["gales"],
+                multiplicador_por_gales(contexto["gales"])
+            )[nivel]
             # Conservador enquanto a atualização de saldo da corretora pode estar atrasada.
             comprometido = sum(o["valor"] for o in ordens_pendentes.values())
             disponivel = saldo - comprometido - sum(reservas_pendentes.values())
@@ -2160,7 +2177,7 @@ def finalizar_operacao_global(banca):
                 "resultado_liquido": resultado_operacao / 100,
                 "entrada": float(contexto.get("entrada", 0.0)),
                 "gales": int(contexto.get("gales", 0)),
-                "multiplicador": float(MULTIPLICADOR_GALE),
+                "multiplicador": float(multiplicador_por_gales(contexto.get("gales", 0))),
                 "ultimo_nivel": int(contexto.get("ultimo_nivel", 0)),
                 "recuperacao": float(contexto.get("prejuizo_alocado", 0.0)),
                 "assertividade": float(contexto.get("assertividade_banca", 0.0)),
@@ -2220,10 +2237,12 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         if not ok:
             return
         gales = contexto["gales"]
-        valores = valores_do_ciclo(contexto["entrada"], gales)
+        valores = valores_do_ciclo(
+            contexto["entrada"], gales, multiplicador_por_gales(gales)
+        )
         log.info("GESTÃO DA BANCA | %s | operação=%s | assertividade=%.2f%% | gales=%s | base=%.2f | entrada=%.2f | X%s | recuperação_da_banca=%.2f",
                  banca, contexto["numero"], contexto["assertividade_banca"], gales,
-                 contexto["base"], contexto["entrada"], f"{MULTIPLICADOR_GALE:g}",
+                 contexto["base"], contexto["entrada"], f"{multiplicador_por_gales(gales):g}",
                  contexto["prejuizo_alocado"])
         with estado_lock:
             estado_frentes[banca]["ultimo_sinal"] = {
@@ -2231,7 +2250,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                 "timeframe": timeframe_analise, "expiracao": expiracao,
                 "ciclo": contexto["numero"], "posicao": contexto["posicao"], "assertividade_banca": contexto["assertividade_banca"],
                 "entrada": contexto["entrada"], "gales": gales,
-                "multiplicador": MULTIPLICADOR_GALE,
+                "multiplicador": multiplicador_por_gales(gales),
                 "recuperacao": contexto["prejuizo_alocado"] > 0,
                 "prejuizo_antes": contexto["prejuizo_alocado"],
                 "data": datetime.now(timezone.utc).isoformat()}
@@ -2241,7 +2260,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                  f"🏦 {banca}\n💱 {ativo}\n🎯 {direcao.upper()}\n"
                  f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n🔥 Score: {score}/100\n"
                  f"🔢 Operação da {banca}: {contexto['numero']} / assertividade {contexto['assertividade_banca']:.2f}%\n"
-                 f"🛡 Gales desta banca: {gales} | X{MULTIPLICADOR_GALE:g}\n💰 {sequencia}\n"
+                 f"🛡 Gales desta banca: {gales} | X{multiplicador_por_gales(gales):g}\n💰 {sequencia}\n"
                  f"♻️ Perda da operação anterior reservada: {getattr(api, 'currency', 'USD')} {contexto['prejuizo_alocado']:.2f}\n🧪 Deriv DEMO")
 
         for nivel in range(gales + 1):
@@ -2997,13 +3016,12 @@ log.info(
 
 log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
-    "GALE X%s | "
-    "FAIXAS DE ASSERTIVIDADE POR BANCA <50=4, 50-59=3, 60-69=2, 70-79=1, >=80=0; "
+    "FAIXAS <72=5, 72-<74=4, 74-<76=3, 76-<78=2, 78-<80=1, >=80=0; "
+    "MULTIPLICADORES 1:3x, 2:2x, 3:1.8x, 4:1.6x, 5:1.5x | "
     "PESO INICIAL=%s operacoes a %s%% (14V/6D); reset real a cada 100 entradas | "
     "CICLOS ILIMITADOS | "
     "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%%",
 
-    f"{MULTIPLICADOR_GALE:g}",
     PESO_ASSERTIVIDADE_OPERACOES,
     f"{ASSERTIVIDADE_REFERENCIA_PERCENTUAL:g}",
     RECUPERACAO_PERCENTUAL * 100

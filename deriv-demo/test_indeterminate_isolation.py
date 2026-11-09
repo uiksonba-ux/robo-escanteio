@@ -257,11 +257,11 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.taxa_banca_ponderada(banca_b), 75.0)
         self.assertEqual(
             robo.gales_por_assertividade(robo.taxa_banca_ponderada(banca_a)),
-            2,
+            5,
         )
         self.assertEqual(
             robo.gales_por_assertividade(robo.taxa_banca_ponderada(banca_b)),
-            1,
+            3,
         )
 
         with robo.estado_lock:

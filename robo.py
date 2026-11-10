@@ -582,6 +582,7 @@ def conectar():
             "🛡 Gales pela assertividade individual de cada banca\n"
             f"📊 Assertividade inicial: {ASSERTIVIDADE_REFERENCIA_PERCENTUAL:g}% ponderada em {PESO_ASSERTIVIDADE_OPERACOES} operações (14V/6D)\n"
             f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} da perda da operação anterior\n"
+            f"🛑 Pré stop-loss: USD {PRE_STOP_LOSS_USD:.2f} por banca/operação; se atingir, reinicia a gestão da banca\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
         return True
@@ -3088,13 +3089,14 @@ log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
     "FAIXAS <72=5, 72-<74=4, 74-<76=3, 76-<78=2, 78-<80=1, >=80=0; "
     "MULTIPLICADORES 1:3x, 2:2x, 3:1.8x, 4:1.6x, 5:1.5x | "
-    "PESO INICIAL=%s operacoes a %s%% (16V/4D); reset real a cada 100 entradas | "
+    "PESO INICIAL=%s operacoes a %s%% (14V/6D); reset real a cada 100 entradas | "
     "CICLOS ILIMITADOS | "
-    "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%%",
+    "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%% | PRE_STOP_LOSS USD %.2f POR BANCA/OPERACAO",
 
     PESO_ASSERTIVIDADE_OPERACOES,
     f"{ASSERTIVIDADE_REFERENCIA_PERCENTUAL:g}",
-    RECUPERACAO_PERCENTUAL * 100
+    RECUPERACAO_PERCENTUAL * 100,
+    PRE_STOP_LOSS_USD
 )
 
 log.info(

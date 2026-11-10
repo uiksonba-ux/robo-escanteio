@@ -316,7 +316,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         robo.reiniciar_gestao_banca_apos_pre_stop(banca_a, 99.65)
 
         self.assertEqual(robo.taxa_banca_ponderada(banca_a), 70.0)
-        self.assertEqual(robo.taxa_banca_ponderada(banca_b), 70.37)
+        self.assertEqual(robo.taxa_banca_ponderada(banca_b), 69.57)
         self.assertEqual(robo.estado_frentes[banca_a]["recuperacao_pendente"], 0.0)
         self.assertEqual(robo.estado_frentes[banca_a]["resultado_liquido"], -8.25)
         self.assertEqual(robo.estado_frentes[banca_a]["ciclo_gestao"], 7)

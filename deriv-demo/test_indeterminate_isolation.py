@@ -341,5 +341,45 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.estado_frentes[banca_b]["recuperacao_pendente"], 3.5)
         self.assertEqual(robo.estado_frentes[banca_b]["resultado_liquido"], 1.25)
 
+
+class FinalizedSignalScoreboardTests(unittest.TestCase):
+    def test_loss_is_counted_when_cycle_closes_after_gale_send_failure(self):
+        banca = robo.BANCAS[0]
+        with robo.estado_lock:
+            robo.operacoes_ativas.clear()
+            robo.ordens_pendentes.clear()
+            robo.ordens_liquidadas.clear()
+            robo.operacoes_concluidas.clear()
+            robo.historico_operacoes.clear()
+            robo.resultado_global_centavos = 0
+            robo.stats["wins"] = 0
+            robo.stats["losses"] = 0
+            for nome in robo.BANCAS:
+                robo.estado_frentes[nome].update(
+                    wins=0, losses=0, resultado_liquido=0.0,
+                    prejuizo_acumulado=0.0, recuperacao_pendente=0.0,
+                    envio_indeterminado=False, ultimo_sinal=None,
+                )
+            robo.operacoes_ativas[banca] = {
+                "primeira_ordem": "LOSS-BASE-SEM-GALE",
+                "resultado_centavos": -35,
+                "prejuizo_alocado": 0.0,
+                "ultimo_nivel": 0,
+                "numero": 1,
+                "ativo": "R_50",
+                "entrada": 0.35,
+                "gales": 1,
+            }
+
+        robo.finalizar_operacao_global(banca)
+
+        self.assertEqual(robo.stats["wins"], 0)
+        self.assertEqual(robo.stats["losses"], 1)
+        self.assertEqual(robo.estado_frentes[banca]["wins"], 0)
+        self.assertEqual(robo.estado_frentes[banca]["losses"], 1)
+        self.assertEqual(robo.historico_operacoes[-1]["resultado"], "LOSS")
+        self.assertEqual(robo.operacoes_ativas, {})
+
+
 if __name__ == "__main__":
     unittest.main()

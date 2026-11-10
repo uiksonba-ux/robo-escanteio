@@ -151,6 +151,8 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(set(robo.estado_frentes), set(robo.BANCAS))
         self.assertEqual(robo.ENTRADA_BASE_USD, 0.35)
         self.assertEqual(robo.MULTIPLICADOR_GALE, 3.0)
+        self.assertEqual(robo.GALES_POR_CICLO, 4)
+        self.assertEqual(robo.MAX_GALES, 4)
         self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
         self.assertEqual(robo.PRE_STOP_LOSS_USD, 100.0)
         self.assertEqual(
@@ -215,14 +217,27 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             )
 
         self.assertEqual(robo.taxa_banca_ponderada(banca), 70.0)
+        self.assertEqual(robo.gales_por_assertividade(70.0), 1)
 
         with robo.estado_lock:
             robo.estado_frentes[banca]["wins"] = 1
         self.assertEqual(robo.taxa_banca_ponderada(banca), 71.43)
+        self.assertEqual(robo.gales_por_assertividade(71.43), 1)
 
         with robo.estado_lock:
             robo.estado_frentes[banca].update(wins=0, losses=1)
         self.assertEqual(robo.taxa_banca_ponderada(banca), 66.67)
+        self.assertEqual(robo.gales_por_assertividade(66.67), 2)
+
+    def test_legacy_assertiveness_band_boundaries(self):
+        cases = (
+            (49.99, 4), (50.0, 3), (59.99, 3),
+            (60.0, 2), (69.99, 2), (70.0, 1),
+            (79.99, 1), (80.0, 0), (100.0, 0),
+        )
+        for accuracy, expected_gales in cases:
+            with self.subTest(accuracy=accuracy):
+                self.assertEqual(robo.gales_por_assertividade(accuracy), expected_gales)
 
     def test_assertiveness_and_recovery_ledgers_are_independent_per_bank(self):
         banca_a, banca_b = robo.BANCAS[:2]
@@ -258,11 +273,11 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.taxa_banca_ponderada(banca_b), 75.0)
         self.assertEqual(
             robo.gales_por_assertividade(robo.taxa_banca_ponderada(banca_a)),
-            5,
+            2,
         )
         self.assertEqual(
             robo.gales_por_assertividade(robo.taxa_banca_ponderada(banca_b)),
-            3,
+            1,
         )
 
         with robo.estado_lock:
@@ -316,6 +331,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         robo.reiniciar_gestao_banca_apos_pre_stop(banca_a, 99.65)
 
         self.assertEqual(robo.taxa_banca_ponderada(banca_a), 70.0)
+        self.assertEqual(robo.gales_por_assertividade(robo.taxa_banca_ponderada(banca_a)), 1)
         self.assertEqual(robo.taxa_banca_ponderada(banca_b), 69.57)
         self.assertEqual(robo.estado_frentes[banca_a]["recuperacao_pendente"], 0.0)
         self.assertEqual(robo.estado_frentes[banca_a]["resultado_liquido"], -8.25)

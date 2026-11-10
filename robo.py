@@ -1929,8 +1929,7 @@ def processar_pre_stop_loss(banca, ativo):
             return False
         perda = max(0, -contexto["resultado_centavos"]) / 100 if contexto else 0.0
     if contexto is not None:
-        if perda > 0:
-            registrar_loss(banca)
+        # O finalizador registra P&L, histórico e placar de forma idempotente.
         finalizar_operacao_global(banca)
     reiniciar_gestao_banca_apos_pre_stop(banca, perda)
     return True
@@ -2195,7 +2194,7 @@ def registrar_resultado_ordem(order_id, resultado, lucro):
 
 def finalizar_operacao_global(banca):
     """Atualiza o P&L e a perda da última operação, de forma independente por banca."""
-    global resultado_global_centavos
+    global resultado_global_centavos, vitorias_progressao, perdas_progressao
     with estado_lock:
         contexto = operacoes_ativas.get(banca)
         if contexto is None or estado_frentes[banca]["envio_indeterminado"] or any(o["banca"] == banca for o in ordens_pendentes.values()):
@@ -2205,6 +2204,14 @@ def finalizar_operacao_global(banca):
             operacoes_concluidas.add(contexto["primeira_ordem"])
             dados = estado_frentes[banca]
             resultado_operacao = contexto["resultado_centavos"]
+            # Atualiza o placar no único ponto que fecha o sinal. Isso também
+            # conta perdas quando o próximo gale é recusado e o ciclo retorna cedo.
+            if resultado_operacao > 0:
+                registrar_win(banca, int(contexto.get("ultimo_nivel", 0)))
+                vitorias_progressao += 1
+            elif resultado_operacao < 0:
+                registrar_loss(banca)
+                perdas_progressao += 1
             local = em_centavos(dados["resultado_liquido"]) + resultado_operacao
             dados["resultado_liquido"] = local / 100
             dados["prejuizo_acumulado"] = max(0, -local) / 100
@@ -2349,20 +2356,12 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             with estado_lock:
                 resultado_sinal_centavos = operacoes_ativas[banca]["resultado_centavos"]
                 liquido = resultado_sinal_centavos / 100
-            # O placar acompanha o P&L líquido do sinal completo (entrada + gales),
-            # igual à classificação exibida no histórico, não o último contrato isolado.
-            if resultado_sinal_centavos > 0:
-                resultado_sinal = "win"
-                registrar_win(banca, nivel)
-                with estado_lock:
-                    vitorias_progressao += 1
-            elif resultado_sinal_centavos < 0:
-                resultado_sinal = "loss"
-                registrar_loss(banca)
-                with estado_lock:
-                    perdas_progressao += 1
-            else:
-                resultado_sinal = "draw"
+            # A classificação enviada acompanha o resultado líquido da sequência.
+            resultado_sinal = (
+                "win" if resultado_sinal_centavos > 0 else
+                "loss" if resultado_sinal_centavos < 0 else
+                "draw"
+            )
             gestao = finalizar_operacao_global(banca)
             telegram(f"🤖 Deriv DEMO | {'✅ WIN' if resultado_sinal == 'win' else '❌ LOSS COMPLETO' if resultado_sinal == 'loss' else '➖ EMPATE'}\n"
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"

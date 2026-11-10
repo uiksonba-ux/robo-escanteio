@@ -194,9 +194,9 @@ RECUPERACAO_PERCENTUAL = 1.0
 
 QTD_BANCAS = 10
 
-# Prior suavizador: começa como 20 operações com assertividade de 70%.
+# Prior suavizador: começa como 20 operações com assertividade de 80%.
 PESO_ASSERTIVIDADE_OPERACOES = 20
-ASSERTIVIDADE_REFERENCIA_PERCENTUAL = 70.0
+ASSERTIVIDADE_REFERENCIA_PERCENTUAL = 80.0
 VITORIAS_BASE_PONDERADA = PESO_ASSERTIVIDADE_OPERACOES * ASSERTIVIDADE_REFERENCIA_PERCENTUAL / 100
 DERROTAS_BASE_PONDERADA = PESO_ASSERTIVIDADE_OPERACOES - VITORIAS_BASE_PONDERADA
 
@@ -577,7 +577,7 @@ def conectar():
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             "📈 Multiplicadores por faixa: 1 gale ×3 | 2 ×2 | 3 ×1,8 | 4 ×1,6 | 5 ×1,5\n"
             "🛡 Gales pela assertividade individual de cada banca\n"
-            f"📊 Assertividade inicial: {ASSERTIVIDADE_REFERENCIA_PERCENTUAL:g}% ponderada em {PESO_ASSERTIVIDADE_OPERACOES} operações (14V/6D)\n"
+            f"📊 Assertividade inicial: {ASSERTIVIDADE_REFERENCIA_PERCENTUAL:g}% ponderada em {PESO_ASSERTIVIDADE_OPERACOES} operações (16V/4D)\n"
             f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} da perda da operação anterior\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
@@ -1730,7 +1730,7 @@ def taxa_ponderada(wins, losses):
 
 
 def taxa_banca_ponderada(banca):
-    """Assertividade da banca com prior de 70% equivalente a 20 operações.
+    """Assertividade da banca com prior de 80% equivalente a 20 operações.
 
     A janela real reinicia a cada 100 entradas; o prior é reaplicado no início
     de cada janela para evitar mudanças bruscas com poucas operações.
@@ -3018,7 +3018,7 @@ log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
     "FAIXAS <72=5, 72-<74=4, 74-<76=3, 76-<78=2, 78-<80=1, >=80=0; "
     "MULTIPLICADORES 1:3x, 2:2x, 3:1.8x, 4:1.6x, 5:1.5x | "
-    "PESO INICIAL=%s operacoes a %s%% (14V/6D); reset real a cada 100 entradas | "
+    "PESO INICIAL=%s operacoes a %s%% (16V/4D); reset real a cada 100 entradas | "
     "CICLOS ILIMITADOS | "
     "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%%",
 

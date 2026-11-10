@@ -202,7 +202,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.70)
         self.assertEqual(robo.prejuizo_banca_atual(banca_b), 0.0)
 
-    def test_accuracy_prior_is_70_percent_over_20_games(self):
+    def test_accuracy_prior_is_80_percent_over_20_games(self):
         banca = robo.BANCAS[0]
         with robo.estado_lock:
             dados = robo.estado_frentes[banca]
@@ -213,15 +213,15 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
                 losses_base_janela=0,
             )
 
-        self.assertEqual(robo.taxa_banca_ponderada(banca), 70.0)
+        self.assertEqual(robo.taxa_banca_ponderada(banca), 80.0)
 
         with robo.estado_lock:
             robo.estado_frentes[banca]["wins"] = 1
-        self.assertEqual(robo.taxa_banca_ponderada(banca), 71.43)
+        self.assertEqual(robo.taxa_banca_ponderada(banca), 80.95)
 
         with robo.estado_lock:
             robo.estado_frentes[banca].update(wins=0, losses=1)
-        self.assertEqual(robo.taxa_banca_ponderada(banca), 66.67)
+        self.assertEqual(robo.taxa_banca_ponderada(banca), 76.19)
 
     def test_assertiveness_and_recovery_ledgers_are_independent_per_bank(self):
         banca_a, banca_b = robo.BANCAS[:2]
@@ -253,15 +253,15 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             robo.estado_frentes[banca_b]["wins"] = 4
             robo.estado_frentes[banca_b]["resultado_liquido"] = 5.0
 
-        self.assertEqual(robo.taxa_banca_ponderada(banca_a), 68.18)
-        self.assertEqual(robo.taxa_banca_ponderada(banca_b), 75.0)
+        self.assertEqual(robo.taxa_banca_ponderada(banca_a), 77.27)
+        self.assertEqual(robo.taxa_banca_ponderada(banca_b), 83.33)
         self.assertEqual(
             robo.gales_por_assertividade(robo.taxa_banca_ponderada(banca_a)),
-            5,
+            2,
         )
         self.assertEqual(
             robo.gales_por_assertividade(robo.taxa_banca_ponderada(banca_b)),
-            3,
+            0,
         )
 
         with robo.estado_lock:

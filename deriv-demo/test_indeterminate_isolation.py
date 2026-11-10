@@ -152,6 +152,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.ENTRADA_BASE_USD, 0.35)
         self.assertEqual(robo.MULTIPLICADOR_GALE, 3.0)
         self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
+        self.assertEqual(robo.PRE_STOP_LOSS_USD, 100.0)
         self.assertEqual(
             robo.valores_do_ciclo(0.35, quantidade_gales=4),
             [0.35, 1.05, 3.15, 9.45, 28.35],
@@ -202,7 +203,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.70)
         self.assertEqual(robo.prejuizo_banca_atual(banca_b), 0.0)
 
-    def test_accuracy_prior_is_80_percent_over_20_games(self):
+    def test_accuracy_prior_is_70_percent_over_20_games(self):
         banca = robo.BANCAS[0]
         with robo.estado_lock:
             dados = robo.estado_frentes[banca]
@@ -213,15 +214,15 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
                 losses_base_janela=0,
             )
 
-        self.assertEqual(robo.taxa_banca_ponderada(banca), 80.0)
+        self.assertEqual(robo.taxa_banca_ponderada(banca), 70.0)
 
         with robo.estado_lock:
             robo.estado_frentes[banca]["wins"] = 1
-        self.assertEqual(robo.taxa_banca_ponderada(banca), 80.95)
+        self.assertEqual(robo.taxa_banca_ponderada(banca), 71.43)
 
         with robo.estado_lock:
             robo.estado_frentes[banca].update(wins=0, losses=1)
-        self.assertEqual(robo.taxa_banca_ponderada(banca), 76.19)
+        self.assertEqual(robo.taxa_banca_ponderada(banca), 66.67)
 
     def test_assertiveness_and_recovery_ledgers_are_independent_per_bank(self):
         banca_a, banca_b = robo.BANCAS[:2]
@@ -253,15 +254,15 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             robo.estado_frentes[banca_b]["wins"] = 4
             robo.estado_frentes[banca_b]["resultado_liquido"] = 5.0
 
-        self.assertEqual(robo.taxa_banca_ponderada(banca_a), 77.27)
-        self.assertEqual(robo.taxa_banca_ponderada(banca_b), 83.33)
+        self.assertEqual(robo.taxa_banca_ponderada(banca_a), 68.18)
+        self.assertEqual(robo.taxa_banca_ponderada(banca_b), 75.0)
         self.assertEqual(
             robo.gales_por_assertividade(robo.taxa_banca_ponderada(banca_a)),
-            2,
+            5,
         )
         self.assertEqual(
             robo.gales_por_assertividade(robo.taxa_banca_ponderada(banca_b)),
-            0,
+            3,
         )
 
         with robo.estado_lock:
@@ -288,6 +289,41 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             )
         self.assertEqual(entrada_a, 0.70)
         self.assertEqual(entrada_b, 0.35)
+
+    def test_pre_stop_loss_blocks_only_exposure_above_100_usd(self):
+        self.assertFalse(robo.pre_stop_loss_atingido(99.65, 0.35))
+        self.assertTrue(robo.pre_stop_loss_atingido(99.66, 0.35))
+        self.assertFalse(robo.pre_stop_loss_atingido(99.99, 0.0))
+        self.assertTrue(robo.pre_stop_loss_atingido(100.00, 0.0))
+
+    def test_pre_stop_restart_resets_only_target_bank_management(self):
+        banca_a, banca_b = robo.BANCAS[:2]
+        with robo.estado_lock:
+            for banca in (banca_a, banca_b):
+                robo.estado_frentes[banca].update(
+                    wins=0, losses=0, wins_base_janela=0, losses_base_janela=0,
+                    entradas_janela=0, recuperacao_pendente=0.0,
+                    pre_stop_loss_count=0, resultado_liquido=0.0, ciclo_gestao=0,
+                )
+            robo.estado_frentes[banca_a].update(
+                wins=4, losses=6, entradas_janela=25,
+                recuperacao_pendente=12.34, resultado_liquido=-8.25, ciclo_gestao=7,
+            )
+            robo.estado_frentes[banca_b].update(
+                wins=2, losses=1, recuperacao_pendente=3.5, resultado_liquido=1.25,
+            )
+
+        robo.reiniciar_gestao_banca_apos_pre_stop(banca_a, 99.65)
+
+        self.assertEqual(robo.taxa_banca_ponderada(banca_a), 70.0)
+        self.assertEqual(robo.taxa_banca_ponderada(banca_b), 70.37)
+        self.assertEqual(robo.estado_frentes[banca_a]["recuperacao_pendente"], 0.0)
+        self.assertEqual(robo.estado_frentes[banca_a]["resultado_liquido"], -8.25)
+        self.assertEqual(robo.estado_frentes[banca_a]["ciclo_gestao"], 7)
+        self.assertEqual(robo.estado_frentes[banca_a]["pre_stop_loss_count"], 1)
+        self.assertEqual(robo.estado_frentes[banca_a]["pre_stop_loss_ultima_perda"], 99.65)
+        self.assertEqual(robo.estado_frentes[banca_b]["recuperacao_pendente"], 3.5)
+        self.assertEqual(robo.estado_frentes[banca_b]["resultado_liquido"], 1.25)
 
 if __name__ == "__main__":
     unittest.main()

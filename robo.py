@@ -183,12 +183,11 @@ MULTIPLICADORES_POR_GALES = {
     2: 2.0,
     3: 1.8,
     4: 1.6,
-    5: 1.5,
 }
 
 # Assertividade e gales são calculados separadamente para cada banca.
-GALES_POR_CICLO = 5
-MAX_GALES = 5
+GALES_POR_CICLO = 4
+MAX_GALES = 4
 
 RECUPERACAO_PERCENTUAL = 1.0
 PRE_STOP_LOSS_USD = 100.0
@@ -578,7 +577,7 @@ def conectar():
             f"🏦 {QTD_BANCAS} bancas | gestão individual\n"
             "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            "📈 Multiplicadores por faixa: 1 gale ×3 | 2 ×2 | 3 ×1,8 | 4 ×1,6 | 5 ×1,5\n"
+            "📈 Multiplicadores por faixa: 1 gale ×3 | 2 ×2 | 3 ×1,8 | 4 ×1,6\n"
             "🛡 Gales pela assertividade individual de cada banca\n"
             f"📊 Assertividade inicial: {ASSERTIVIDADE_REFERENCIA_PERCENTUAL:g}% ponderada em {PESO_ASSERTIVIDADE_OPERACOES} operações (14V/6D)\n"
             f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} da perda da operação anterior\n"
@@ -1717,12 +1716,11 @@ def taxa(
 
 
 def gales_por_assertividade(percentual):
-    """Faixas individuais de 2 pontos: 80%+:0, depois 1 a 5 gales."""
+    """Faixas antigas: <50%=4, 50-<60=3, 60-<70=2, 70-<80=1, >=80=0."""
     valor = max(0.0, min(100.0, float(percentual)))
-    if valor < 72: return 5
-    if valor < 74: return 4
-    if valor < 76: return 3
-    if valor < 78: return 2
+    if valor < 50: return 4
+    if valor < 60: return 3
+    if valor < 70: return 2
     if valor < 80: return 1
     return 0
 
@@ -1971,7 +1969,7 @@ def snapshot_gestao_global():
                 for banca, assertividade in assertividade_por_banca.items()
             },
             "prejuizo_por_banca": prejuizo_por_banca,
-            "sequencia_gales": [5, 4, 3, 2, 1, 0],
+            "sequencia_gales": [4, 3, 2, 1, 0],
             "entradas_por_gale": {nivel: obter_entrada_base() for nivel in range(MAX_GALES + 1)},
             "multiplicador_gale": MULTIPLICADOR_GALE,
             "multiplicadores_por_gales": {str(nivel): valor for nivel, valor in MULTIPLICADORES_POR_GALES.items()},
@@ -1983,7 +1981,7 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Por banca: <72%=5, 72-<74%=4, 74-<76%=3, 76-<78%=2, 78-<80%=1, >=80%=0; multiplicadores 1:3x, 2:2x, 3:1.8x, 4:1.6x, 5:1.5x",
+            "regra_gales": "Por banca: <50%=4, 50-<60%=3, 60-<70%=2, 70-<80%=1, >=80%=0; multiplicadores 1:3x, 2:2x, 3:1.8x, 4:1.6x",
             "regra_recuperacao": f"{RECUPERACAO_PERCENTUAL:.0%} da perda líquida da última operação concluída por banca; vitórias antigas não compensam; recuperação independente",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
@@ -3087,8 +3085,8 @@ log.info(
 
 log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
-    "FAIXAS <72=5, 72-<74=4, 74-<76=3, 76-<78=2, 78-<80=1, >=80=0; "
-    "MULTIPLICADORES 1:3x, 2:2x, 3:1.8x, 4:1.6x, 5:1.5x | "
+    "FAIXAS <50=4, 50-<60=3, 60-<70=2, 70-<80=1, >=80=0; "
+    "MULTIPLICADORES 1:3x, 2:2x, 3:1.8x, 4:1.6x | "
     "PESO INICIAL=%s operacoes a %s%% (14V/6D); reset real a cada 100 entradas | "
     "CICLOS ILIMITADOS | "
     "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%% | PRE_STOP_LOSS USD %.2f POR BANCA/OPERACAO",

@@ -2346,18 +2346,25 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             if resultado == "loss" and nivel < gales:
                 time.sleep(1)
                 continue
-            if resultado == "win":
+            with estado_lock:
+                resultado_sinal_centavos = operacoes_ativas[banca]["resultado_centavos"]
+                liquido = resultado_sinal_centavos / 100
+            # O placar acompanha o P&L líquido do sinal completo (entrada + gales),
+            # igual à classificação exibida no histórico, não o último contrato isolado.
+            if resultado_sinal_centavos > 0:
+                resultado_sinal = "win"
                 registrar_win(banca, nivel)
                 with estado_lock:
                     vitorias_progressao += 1
-            elif resultado == "loss":
+            elif resultado_sinal_centavos < 0:
+                resultado_sinal = "loss"
                 registrar_loss(banca)
                 with estado_lock:
                     perdas_progressao += 1
-            with estado_lock:
-                liquido = operacoes_ativas[banca]["resultado_centavos"] / 100
+            else:
+                resultado_sinal = "draw"
             gestao = finalizar_operacao_global(banca)
-            telegram(f"🤖 Deriv DEMO | {'✅ WIN' if resultado == 'win' else '❌ LOSS COMPLETO' if resultado == 'loss' else '➖ EMPATE'}\n"
+            telegram(f"🤖 Deriv DEMO | {'✅ WIN' if resultado_sinal == 'win' else '❌ LOSS COMPLETO' if resultado_sinal == 'loss' else '➖ EMPATE'}\n"
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                      f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
                      f"♻️ Recuperação pendente da operação anterior: {getattr(api, 'currency', 'USD')} {estado_frentes[banca]['recuperacao_pendente']:.2f}\n"

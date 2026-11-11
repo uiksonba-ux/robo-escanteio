@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-ASSERT-REAL-100"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-ASSERT-REAL-300GLOBAL"
 
 app = Flask(__name__)
 
@@ -194,7 +194,7 @@ PRE_STOP_LOSS_USD = 100.0
 
 QTD_BANCAS = 10
 
-# Assertividade apenas com resultados reais; cada banca reinicia a janela após 100 operações encerradas.
+# Assertividade com resultados reais; as janelas individuais reiniciam juntas a cada 300 sinais gerais encerrados.
 
 # A assertividade define a quantidade de gales; entrada-base fixa em USD.
 ENTRADA_BASE_USD = 0.35
@@ -287,6 +287,9 @@ vitorias_progressao = 0
 perdas_progressao = 0
 entradas_globais_aceitas = 0
 entradas_normais_desde_reset = 0
+sinais_fechados_janela_global = 0
+wins_base_janela_global = 0
+losses_base_janela_global = 0
 contador_entrada_lock = threading.Lock()
 resultado_global_centavos = 0
 ultimo_saldo_demo = None
@@ -344,7 +347,6 @@ estado_frentes = {
         "losses": 0,
         "wins_base_janela": 0,
         "losses_base_janela": 0,
-        "entradas_janela": 0,
 
         "win_direto": 0,
         "win_g1": 0,
@@ -573,7 +575,7 @@ def conectar():
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             "📈 Multiplicadores por faixa: 1 gale ×3 | 2 ×2 | 3 ×1,8 | 4 ×1,6\n"
             "🛡 Gales pela assertividade individual de cada banca\n"
-            "📊 Assertividade baseada somente em WIN/LOSS reais; janela por banca reinicia após 100 operações encerradas\n"
+            "📊 Assertividade baseada somente em WIN/LOSS reais; todas as janelas reiniciam a cada 300 sinais gerais encerrados\n"
             f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} da perda da operação anterior\n"
             f"🛑 Pré stop-loss: USD {PRE_STOP_LOSS_USD:.2f} por banca/operação; se atingir, reinicia a gestão da banca\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
@@ -1724,8 +1726,22 @@ def taxa_global_real(wins, losses):
     return taxa(wins, losses)
 
 
+def placar_global_janela_real():
+    """Placar real desde o último bloco de 300 sinais encerrados."""
+    with estado_lock:
+        return (
+            max(0, stats["wins"] - wins_base_janela_global),
+            max(0, stats["losses"] - losses_base_janela_global),
+        )
+
+
+def taxa_global_janela_real():
+    wins_reais, losses_reais = placar_global_janela_real()
+    return taxa(wins_reais, losses_reais)
+
+
 def taxa_banca_real(banca):
-    """Percentual real da banca desde o início da janela atual de 100 operações."""
+    """Percentual real da banca desde o último reset global de 300 sinais."""
     with estado_lock:
         dados = estado_frentes[banca]
         wins_reais = max(0, dados["wins"] - dados["wins_base_janela"])
@@ -1734,23 +1750,31 @@ def taxa_banca_real(banca):
 
 
 def registrar_operacao_fechada_assertividade(banca):
-    """Conta uma operação encerrada e reinicia só a janela desta banca ao chegar a 100."""
+    """Conta sinais encerrados globalmente e reinicia todas as bancas a cada 300."""
+    global sinais_fechados_janela_global, wins_base_janela_global, losses_base_janela_global
     with estado_lock:
-        dados = estado_frentes[banca]
-        dados["entradas_janela"] += 1
-        if dados["entradas_janela"] < 100:
+        sinais_fechados_janela_global += 1
+        if sinais_fechados_janela_global < 300:
             return False
 
-        wins_janela = max(0, dados["wins"] - dados["wins_base_janela"])
-        losses_janela = max(0, dados["losses"] - dados["losses_base_janela"])
-        percentual = taxa(wins_janela, losses_janela)
-        dados["wins_base_janela"] = dados["wins"]
-        dados["losses_base_janela"] = dados["losses"]
-        dados["entradas_janela"] = 0
+        resumo = []
+        for nome in BANCAS:
+            dados = estado_frentes[nome]
+            wins_janela = max(0, dados["wins"] - dados["wins_base_janela"])
+            losses_janela = max(0, dados["losses"] - dados["losses_base_janela"])
+            resumo.append(f"{nome}={taxa(wins_janela, losses_janela):.2f}% ({wins_janela}W/{losses_janela}L)")
+            dados["wins_base_janela"] = dados["wins"]
+            dados["losses_base_janela"] = dados["losses"]
+
+        wins_janela_global = max(0, stats["wins"] - wins_base_janela_global)
+        losses_janela_global = max(0, stats["losses"] - losses_base_janela_global)
+        wins_base_janela_global = stats["wins"]
+        losses_base_janela_global = stats["losses"]
+        sinais_fechados_janela_global = 0
         log.info(
-            "ASSERTIVIDADE REAL REINICIADA | banca=%s | operacoes=100 | "
-            "wins=%s | losses=%s | assertividade_final=%.2f%%",
-            banca, wins_janela, losses_janela, percentual,
+            "ASSERTIVIDADE REAL REINICIADA | sinais_gerais=300 | "
+            "bancas=%s | placar_janela_global=%sW/%sL",
+            " ; ".join(resumo), wins_janela_global, losses_janela_global,
         )
         return True
 
@@ -1908,9 +1932,6 @@ def reiniciar_gestao_banca_apos_pre_stop(banca, perda_operacao):
     """Reinicia a gestão da banca, preservando o P&L e o placar real histórico."""
     with estado_lock:
         dados = estado_frentes[banca]
-        dados["wins_base_janela"] = dados["wins"]
-        dados["losses_base_janela"] = dados["losses"]
-        dados["entradas_janela"] = 0
         dados["entrada_atual"] = ENTRADA_BASE_USD
         dados["recuperacao_pendente"] = 0.0
         dados["entradas_recuperacao_restantes"] = 0
@@ -1968,8 +1989,12 @@ def snapshot_gestao_global():
             "recuperacao_pendente_por_banca": prejuizo_por_banca,
             "recuperacoes_em_curso": sorted(recuperacoes_em_curso),
             "entradas_globais_aceitas": entradas_globais_aceitas,
-            "assertividade_global": taxa_global_real(stats["wins"], stats["losses"]),
-            "gales_proximos": gales_por_assertividade(taxa_global_real(stats["wins"], stats["losses"])),
+            "assertividade_global": taxa_global_janela_real(),
+            "wins_ciclo_assertividade": placar_global_janela_real()[0],
+            "losses_ciclo_assertividade": placar_global_janela_real()[1],
+            "sinais_encerrados_no_ciclo_assertividade": sinais_fechados_janela_global,
+            "limite_reset_assertividade_global": 300,
+            "gales_proximos": gales_por_assertividade(taxa_global_janela_real()),
             "assertividade_por_banca": assertividade_por_banca,
             "gales_por_banca": {
                 banca: gales_por_assertividade(assertividade)
@@ -2809,10 +2834,10 @@ def home():
             **stats,
 
             "assertividade":
-                taxa_global_real(
-                    stats["wins"],
-                    stats["losses"]
-                ),
+                taxa_global_janela_real(),
+            "wins_ciclo_assertividade": placar_global_janela_real()[0],
+            "losses_ciclo_assertividade": placar_global_janela_real()[1],
+            "sinais_encerrados_no_ciclo_assertividade": sinais_fechados_janela_global,
         }
 
         ativos_uso = sorted(
@@ -2940,7 +2965,11 @@ def monitor_practice():
         geral = {
             "wins": int(stats["wins"]),
             "losses": int(stats["losses"]),
-            "assertividade": taxa_global_real(stats["wins"], stats["losses"]),
+            "assertividade": taxa_global_janela_real(),
+            "wins_ciclo_assertividade": placar_global_janela_real()[0],
+            "losses_ciclo_assertividade": placar_global_janela_real()[1],
+            "sinais_encerrados_no_ciclo_assertividade": sinais_fechados_janela_global,
+            "limite_reset_assertividade_global": 300,
         }
         frentes = {
             nome: {
@@ -3097,7 +3126,7 @@ log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
     "FAIXAS <50=4, 50-<60=3, 60-<70=2, 70-<80=1, >=80=0; "
     "MULTIPLICADORES 1:3x, 2:2x, 3:1.8x, 4:1.6x | "
-    "ASSERTIVIDADE REAL por banca; reset da janela após 100 operações encerradas | "
+    "ASSERTIVIDADE REAL por banca; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados | "
     "CICLOS ILIMITADOS | "
     "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%% | PRE_STOP_LOSS USD %.2f POR BANCA/OPERACAO",
 

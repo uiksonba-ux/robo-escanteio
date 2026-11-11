@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-2B-USD035-ASSERT-2PCT-GALE-MULTI-REC100"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-ASSERT-REAL-100"
 
 app = Flask(__name__)
 
@@ -194,11 +194,7 @@ PRE_STOP_LOSS_USD = 100.0
 
 QTD_BANCAS = 10
 
-# Prior suavizador: começa como 20 operações com assertividade de 70%.
-PESO_ASSERTIVIDADE_OPERACOES = 20
-ASSERTIVIDADE_REFERENCIA_PERCENTUAL = 70.0
-VITORIAS_BASE_PONDERADA = PESO_ASSERTIVIDADE_OPERACOES * ASSERTIVIDADE_REFERENCIA_PERCENTUAL / 100
-DERROTAS_BASE_PONDERADA = PESO_ASSERTIVIDADE_OPERACOES - VITORIAS_BASE_PONDERADA
+# Assertividade apenas com resultados reais; cada banca reinicia a janela após 100 operações encerradas.
 
 # A assertividade define a quantidade de gales; entrada-base fixa em USD.
 ENTRADA_BASE_USD = 0.35
@@ -291,8 +287,6 @@ vitorias_progressao = 0
 perdas_progressao = 0
 entradas_globais_aceitas = 0
 entradas_normais_desde_reset = 0
-wins_base_ponderada = 0
-losses_base_ponderada = 0
 contador_entrada_lock = threading.Lock()
 resultado_global_centavos = 0
 ultimo_saldo_demo = None
@@ -579,7 +573,7 @@ def conectar():
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             "📈 Multiplicadores por faixa: 1 gale ×3 | 2 ×2 | 3 ×1,8 | 4 ×1,6\n"
             "🛡 Gales pela assertividade individual de cada banca\n"
-            f"📊 Assertividade inicial: {ASSERTIVIDADE_REFERENCIA_PERCENTUAL:g}% ponderada em {PESO_ASSERTIVIDADE_OPERACOES} operações (14V/6D)\n"
+            "📊 Assertividade baseada somente em WIN/LOSS reais; janela por banca reinicia após 100 operações encerradas\n"
             f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} da perda da operação anterior\n"
             f"🛑 Pré stop-loss: USD {PRE_STOP_LOSS_USD:.2f} por banca/operação; se atingir, reinicia a gestão da banca\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
@@ -1725,26 +1719,40 @@ def gales_por_assertividade(percentual):
     return 0
 
 
-def taxa_ponderada(wins, losses):
-    """Taxa agregada das ordens, usada apenas para estatísticas gerais."""
-    return taxa(max(0, wins - wins_base_ponderada),
-                max(0, losses - losses_base_ponderada))
+def taxa_global_real(wins, losses):
+    """Percentual global baseado apenas nos WINs e LOSSes reais."""
+    return taxa(wins, losses)
 
 
-def taxa_banca_ponderada(banca):
-    """Assertividade da banca com prior de 70% equivalente a 20 operações.
-
-    A janela real reinicia a cada 100 entradas; o prior é reaplicado no início
-    de cada janela para evitar mudanças bruscas com poucas operações.
-    """
+def taxa_banca_real(banca):
+    """Percentual real da banca desde o início da janela atual de 100 operações."""
     with estado_lock:
         dados = estado_frentes[banca]
         wins_reais = max(0, dados["wins"] - dados["wins_base_janela"])
         losses_reais = max(0, dados["losses"] - dados["losses_base_janela"])
-        return taxa(
-            VITORIAS_BASE_PONDERADA + wins_reais,
-            DERROTAS_BASE_PONDERADA + losses_reais,
+        return taxa(wins_reais, losses_reais)
+
+
+def registrar_operacao_fechada_assertividade(banca):
+    """Conta uma operação encerrada e reinicia só a janela desta banca ao chegar a 100."""
+    with estado_lock:
+        dados = estado_frentes[banca]
+        dados["entradas_janela"] += 1
+        if dados["entradas_janela"] < 100:
+            return False
+
+        wins_janela = max(0, dados["wins"] - dados["wins_base_janela"])
+        losses_janela = max(0, dados["losses"] - dados["losses_base_janela"])
+        percentual = taxa(wins_janela, losses_janela)
+        dados["wins_base_janela"] = dados["wins"]
+        dados["losses_base_janela"] = dados["losses"]
+        dados["entradas_janela"] = 0
+        log.info(
+            "ASSERTIVIDADE REAL REINICIADA | banca=%s | operacoes=100 | "
+            "wins=%s | losses=%s | assertividade_final=%.2f%%",
+            banca, wins_janela, losses_janela, percentual,
         )
+        return True
 
 
 def registrar_win(
@@ -1910,7 +1918,7 @@ def reiniciar_gestao_banca_apos_pre_stop(banca, perda_operacao):
         dados["em_recuperacao"] = False
         dados["pre_stop_loss_count"] += 1
         dados["pre_stop_loss_ultima_perda"] = round(float(perda_operacao), 2)
-        dados["gales_reativos"] = gales_por_assertividade(taxa_banca_ponderada(banca))
+        dados["gales_reativos"] = gales_por_assertividade(taxa_banca_real(banca))
         gales_apos_reset = dados["gales_reativos"]
     log.warning("PRE-STOP LOSS | banca=%s | perda_operacao=%.2f/%.2f | gestao_reiniciada=true | historico_e_pnl_preservados=true | gales_apos_reset=%s | conta=DEMO",
                 banca, perda_operacao, PRE_STOP_LOSS_USD, gales_apos_reset)
@@ -1938,7 +1946,7 @@ def processar_pre_stop_loss(banca, ativo):
 def snapshot_gestao_global():
     with estado_lock:
         assertividade_por_banca = {
-            banca: taxa_banca_ponderada(banca)
+            banca: taxa_banca_real(banca)
             for banca in BANCAS
         }
         prejuizo_por_banca = {
@@ -1960,8 +1968,8 @@ def snapshot_gestao_global():
             "recuperacao_pendente_por_banca": prejuizo_por_banca,
             "recuperacoes_em_curso": sorted(recuperacoes_em_curso),
             "entradas_globais_aceitas": entradas_globais_aceitas,
-            "assertividade_global": taxa_ponderada(stats["wins"], stats["losses"]),
-            "gales_proximos": gales_por_assertividade(taxa_ponderada(stats["wins"], stats["losses"])),
+            "assertividade_global": taxa_global_real(stats["wins"], stats["losses"]),
+            "gales_proximos": gales_por_assertividade(taxa_global_real(stats["wins"], stats["losses"])),
             "assertividade_por_banca": assertividade_por_banca,
             "gales_por_banca": {
                 banca: gales_por_assertividade(assertividade)
@@ -2034,7 +2042,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
         with estado_lock:
             ultimo_saldo_demo = saldo
             if nivel == 0:
-                assertividade_atual = taxa_banca_ponderada(banca)
+                assertividade_atual = taxa_banca_real(banca)
                 posicao = gales_por_assertividade(assertividade_atual)
                 perda_anterior = estado_frentes[banca]["recuperacao_pendente"]
                 alvo = calcular_alvo_recuperacao(perda_anterior)
@@ -2117,11 +2125,6 @@ def confirmar_ordem_gerida(banca, ativo, nivel, valor, order_id, contexto):
             contexto["primeira_ordem"] = order_id
             operacoes_ativas[banca] = contexto
             dados = estado_frentes[banca]
-            dados["entradas_janela"] += 1
-            if dados["entradas_janela"] >= 100:
-                dados["wins_base_janela"] = dados["wins"]
-                dados["losses_base_janela"] = dados["losses"]
-                dados["entradas_janela"] = 0
         contexto["ultimo_nivel"] = nivel
         ordens_pendentes[order_id] = {"banca": banca, "valor": valor, "nivel": nivel}
         estado_frentes[banca].update(order_id=order_id, entrada_atual=contexto["entrada"],
@@ -2247,6 +2250,7 @@ def finalizar_operacao_global(banca):
                 "assertividade": float(contexto.get("assertividade_banca", 0.0)),
             })
             del historico_operacoes[:-100]
+            registrar_operacao_fechada_assertividade(banca)
         operacoes_ativas.pop(banca)
         recuperacoes_em_curso.discard(banca)
         estado_frentes[banca]["em_recuperacao"] = False
@@ -2367,9 +2371,9 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                      f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
                      f"♻️ Recuperação pendente da operação anterior: {getattr(api, 'currency', 'USD')} {estado_frentes[banca]['recuperacao_pendente']:.2f}\n"
-                     f"🛡 Próxima faixa desta banca: {gales_por_assertividade(taxa_banca_ponderada(banca))} gales\n"
+                     f"🛡 Próxima faixa desta banca: {gales_por_assertividade(taxa_banca_real(banca))} gales\n"
                      f"📊 Total geral: {stats['wins']} WIN / {stats['losses']} LOSS\n"
-                     f"🎯 Assertividade da {banca}: {taxa_banca_ponderada(banca)}%\n"
+                     f"🎯 Assertividade da {banca}: {taxa_banca_real(banca)}%\n"
                      f"💰 Saldo Deriv DEMO: {texto_saldo()} {getattr(api, 'currency', '')}")
             return
     finally:
@@ -2789,8 +2793,8 @@ def home():
 
                 **dados,
 
-                "assertividade": taxa_banca_ponderada(nome),
-                "gales_proximos": gales_por_assertividade(taxa_banca_ponderada(nome)),
+                "assertividade": taxa_banca_real(nome),
+                "gales_proximos": gales_por_assertividade(taxa_banca_real(nome)),
                 "prejuizo_acumulado": dados["prejuizo_acumulado"],
                 "recuperacao_pendente": dados["recuperacao_pendente"],
                 "em_recuperacao": dados["em_recuperacao"],
@@ -2805,7 +2809,7 @@ def home():
             **stats,
 
             "assertividade":
-                taxa_ponderada(
+                taxa_global_real(
                     stats["wins"],
                     stats["losses"]
                 ),
@@ -2936,14 +2940,14 @@ def monitor_practice():
         geral = {
             "wins": int(stats["wins"]),
             "losses": int(stats["losses"]),
-            "assertividade": taxa_ponderada(stats["wins"], stats["losses"]),
+            "assertividade": taxa_global_real(stats["wins"], stats["losses"]),
         }
         frentes = {
             nome: {
                 "wins": int(dados.get("wins", 0)),
                 "losses": int(dados.get("losses", 0)),
-                "assertividade": taxa_banca_ponderada(nome),
-                "gales_proximos": gales_por_assertividade(taxa_banca_ponderada(nome)),
+                "assertividade": taxa_banca_real(nome),
+                "gales_proximos": gales_por_assertividade(taxa_banca_real(nome)),
                 "prejuizo_acumulado": float(dados.get("prejuizo_acumulado", 0.0)),
                 "pre_stop_loss_disparos": int(dados.get("pre_stop_loss_count", 0)),
                 "pre_stop_loss_ultima_perda": float(dados.get("pre_stop_loss_ultima_perda", 0.0)),
@@ -3093,12 +3097,10 @@ log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
     "FAIXAS <50=4, 50-<60=3, 60-<70=2, 70-<80=1, >=80=0; "
     "MULTIPLICADORES 1:3x, 2:2x, 3:1.8x, 4:1.6x | "
-    "PESO INICIAL=%s operacoes a %s%% (14V/6D); reset real a cada 100 entradas | "
+    "ASSERTIVIDADE REAL por banca; reset da janela após 100 operações encerradas | "
     "CICLOS ILIMITADOS | "
     "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%% | PRE_STOP_LOSS USD %.2f POR BANCA/OPERACAO",
 
-    PESO_ASSERTIVIDADE_OPERACOES,
-    f"{ASSERTIVIDADE_REFERENCIA_PERCENTUAL:g}",
     RECUPERACAO_PERCENTUAL * 100,
     PRE_STOP_LOSS_USD
 )

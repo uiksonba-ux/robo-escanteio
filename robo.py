@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-ASSERT-REAL-300GLOBAL"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-ASSERT-REAL-300GLOBAL-X3ALL"
 
 app = Flask(__name__)
 
@@ -177,12 +177,12 @@ TEMPO_BLOQUEIO = env_int(
 
 ENTRADA_MINIMA = 0.01
 
-MULTIPLICADOR_GALE = 3.0  # compatibilidade: multiplicador da faixa de 1 gale
+MULTIPLICADOR_GALE = 3.0
 MULTIPLICADORES_POR_GALES = {
     1: 3.0,
-    2: 2.0,
-    3: 1.8,
-    4: 1.6,
+    2: 3.0,
+    3: 3.0,
+    4: 3.0,
 }
 
 # Assertividade e gales são calculados separadamente para cada banca.
@@ -573,7 +573,7 @@ def conectar():
             f"🏦 {QTD_BANCAS} bancas | gestão individual\n"
             "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            "📈 Multiplicadores por faixa: 1 gale ×3 | 2 ×2 | 3 ×1,8 | 4 ×1,6\n"
+            "📈 Multiplicador de gale ×3 em todos os níveis e em todas as bancas\n"
             "🛡 Gales pela assertividade individual de cada banca\n"
             "📊 Assertividade baseada somente em WIN/LOSS reais; todas as janelas reiniciam a cada 300 sinais gerais encerrados\n"
             f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} da perda da operação anterior\n"
@@ -3125,7 +3125,7 @@ log.info(
 log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
     "FAIXAS <50=4, 50-<60=3, 60-<70=2, 70-<80=1, >=80=0; "
-    "MULTIPLICADORES 1:3x, 2:2x, 3:1.8x, 4:1.6x | "
+    "MULTIPLICADOR X3 em todos os níveis de gale e todas as bancas | "
     "ASSERTIVIDADE REAL por banca; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados | "
     "CICLOS ILIMITADOS | "
     "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%% | PRE_STOP_LOSS USD %.2f POR BANCA/OPERACAO",

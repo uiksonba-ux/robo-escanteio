@@ -151,12 +151,20 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(set(robo.estado_frentes), set(robo.BANCAS))
         self.assertEqual(robo.ENTRADA_BASE_USD, 0.35)
         self.assertEqual(robo.MULTIPLICADOR_GALE, 3.0)
+        self.assertEqual(robo.MULTIPLICADORES_POR_GALES, {1: 3.0, 2: 3.0, 3: 3.0, 4: 3.0})
+        self.assertEqual(
+            [robo.multiplicador_por_gales(n) for n in range(1, 5)],
+            [3.0, 3.0, 3.0, 3.0],
+        )
         self.assertEqual(robo.GALES_POR_CICLO, 4)
         self.assertEqual(robo.MAX_GALES, 4)
         self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
         self.assertEqual(robo.PRE_STOP_LOSS_USD, 100.0)
         self.assertEqual(
-            robo.valores_do_ciclo(0.35, quantidade_gales=4),
+            robo.valores_do_ciclo(
+                0.35, quantidade_gales=4,
+                multiplicador=robo.multiplicador_por_gales(4),
+            ),
             [0.35, 1.05, 3.15, 9.45, 28.35],
         )
 

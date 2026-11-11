@@ -229,44 +229,64 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.taxa_banca_real(banca), 0.0)
         self.assertEqual(robo.gales_por_assertividade(0.0), 4)
 
-    def test_window_restarts_after_100_closed_operations_per_bank(self):
+    def test_all_bank_windows_restart_after_300_global_closed_signals(self):
         banca_a, banca_b = robo.BANCAS[:2]
-        fields = ("wins", "losses", "wins_base_janela", "losses_base_janela", "entradas_janela")
+        fields = ("wins", "losses", "wins_base_janela", "losses_base_janela")
         with robo.estado_lock:
             saved_banks = {
                 banca: {field: robo.estado_frentes[banca][field] for field in fields}
-                for banca in (banca_a, banca_b)
+                for banca in robo.BANCAS
             }
-            saved_total_wins = robo.stats["wins"]
-            robo.estado_frentes[banca_a].update(
-                wins=0, losses=0, wins_base_janela=0,
-                losses_base_janela=0, entradas_janela=0,
+            saved_totals = (robo.stats["wins"], robo.stats["losses"])
+            saved_global = (
+                robo.sinais_fechados_janela_global,
+                robo.wins_base_janela_global,
+                robo.losses_base_janela_global,
             )
-            robo.estado_frentes[banca_b].update(
-                wins=1, losses=1, wins_base_janela=0,
-                losses_base_janela=0, entradas_janela=7,
-            )
+            for banca in robo.BANCAS:
+                robo.estado_frentes[banca].update(
+                    wins=0, losses=0, wins_base_janela=0, losses_base_janela=0,
+                )
+            robo.stats.update(wins=0, losses=0)
+            robo.sinais_fechados_janela_global = 0
+            robo.wins_base_janela_global = 0
+            robo.losses_base_janela_global = 0
 
         try:
             for _ in range(99):
                 robo.registrar_win(banca_a, 0)
                 self.assertFalse(robo.registrar_operacao_fechada_assertividade(banca_a))
+            for _ in range(100):
+                robo.registrar_win(banca_b, 0)
+                self.assertFalse(robo.registrar_operacao_fechada_assertividade(banca_b))
+            for _ in range(100):
+                robo.registrar_loss(banca_b)
+                self.assertFalse(robo.registrar_operacao_fechada_assertividade(banca_b))
 
-            self.assertEqual(robo.estado_frentes[banca_a]["entradas_janela"], 99)
+            self.assertEqual(robo.sinais_fechados_janela_global, 299)
             self.assertEqual(robo.taxa_banca_real(banca_a), 100.0)
-            self.assertEqual(robo.estado_frentes[banca_b]["entradas_janela"], 7)
+            self.assertEqual(robo.taxa_banca_real(banca_b), 50.0)
 
-            robo.registrar_win(banca_a, 0)
-            self.assertTrue(robo.registrar_operacao_fechada_assertividade(banca_a))
-            self.assertEqual(robo.estado_frentes[banca_a]["entradas_janela"], 0)
+            robo.registrar_loss(banca_b)
+            self.assertTrue(robo.registrar_operacao_fechada_assertividade(banca_b))
+            self.assertEqual(robo.sinais_fechados_janela_global, 0)
+            self.assertEqual(robo.estado_frentes[banca_a]["wins_base_janela"], 99)
+            self.assertEqual(robo.estado_frentes[banca_b]["wins_base_janela"], 100)
+            self.assertEqual(robo.estado_frentes[banca_b]["losses_base_janela"], 101)
             self.assertEqual(robo.taxa_banca_real(banca_a), 0.0)
-            self.assertEqual(robo.estado_frentes[banca_b]["wins_base_janela"], 0)
-            self.assertEqual(robo.estado_frentes[banca_b]["losses_base_janela"], 0)
+            self.assertEqual(robo.taxa_banca_real(banca_b), 0.0)
+            self.assertEqual(robo.wins_base_janela_global, robo.stats["wins"])
+            self.assertEqual(robo.losses_base_janela_global, robo.stats["losses"])
         finally:
             with robo.estado_lock:
                 for banca, values in saved_banks.items():
                     robo.estado_frentes[banca].update(values)
-                robo.stats["wins"] = saved_total_wins
+                robo.stats["wins"], robo.stats["losses"] = saved_totals
+                (
+                    robo.sinais_fechados_janela_global,
+                    robo.wins_base_janela_global,
+                    robo.losses_base_janela_global,
+                ) = saved_global
 
     def test_legacy_assertiveness_band_boundaries(self):
         cases = (
@@ -296,7 +316,6 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
                     losses=0,
                     wins_base_janela=0,
                     losses_base_janela=0,
-                    entradas_janela=0,
                     resultado_liquido=0.0,
                     prejuizo_acumulado=0.0,
                     recuperacao_pendente=0.0,
@@ -356,11 +375,11 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             for banca in (banca_a, banca_b):
                 robo.estado_frentes[banca].update(
                     wins=0, losses=0, wins_base_janela=0, losses_base_janela=0,
-                    entradas_janela=0, recuperacao_pendente=0.0,
+                    recuperacao_pendente=0.0,
                     pre_stop_loss_count=0, resultado_liquido=0.0, ciclo_gestao=0,
                 )
             robo.estado_frentes[banca_a].update(
-                wins=4, losses=6, entradas_janela=25,
+                wins=4, losses=6,
                 recuperacao_pendente=12.34, resultado_liquido=-8.25, ciclo_gestao=7,
             )
             robo.estado_frentes[banca_b].update(
@@ -369,8 +388,10 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
 
         robo.reiniciar_gestao_banca_apos_pre_stop(banca_a, 99.65)
 
-        self.assertEqual(robo.taxa_banca_real(banca_a), 0.0)
+        self.assertEqual(robo.taxa_banca_real(banca_a), 40.0)
         self.assertEqual(robo.gales_por_assertividade(robo.taxa_banca_real(banca_a)), 4)
+        self.assertEqual(robo.estado_frentes[banca_a]["wins_base_janela"], 0)
+        self.assertEqual(robo.estado_frentes[banca_a]["losses_base_janela"], 0)
         self.assertEqual(robo.taxa_banca_real(banca_b), 66.67)
         self.assertEqual(robo.estado_frentes[banca_a]["recuperacao_pendente"], 0.0)
         self.assertEqual(robo.estado_frentes[banca_a]["resultado_liquido"], -8.25)

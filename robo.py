@@ -2239,6 +2239,7 @@ def finalizar_operacao_global(banca):
                 "resultado": "WIN" if resultado_operacao > 0 else "LOSS" if resultado_operacao < 0 else "EMPATE",
                 "resultado_liquido": resultado_operacao / 100,
                 "entrada": float(contexto.get("entrada", 0.0)),
+                "gale_inicio": int(contexto.get("posicao", 0)),
                 "gales": int(contexto.get("gales", 0)),
                 "multiplicador": float(multiplicador_por_gales(contexto.get("gales", 0))),
                 "ultimo_nivel": int(contexto.get("ultimo_nivel", 0)),
@@ -2327,7 +2328,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                  f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n🔥 Score: {score}/100\n"
                  f"🔢 Operação da {banca}: {contexto['numero']} / assertividade {contexto['assertividade_banca']:.2f}%\n"
                  f"🛡 Gale atual: G{contexto['posicao']} | até G{MAX_GALES} | X{MULTIPLICADOR_GALE:g}\n💰 {sequencia}\n"
-                 f"♻️ Perda da operação anterior reservada: {getattr(api, 'currency', 'USD')} {contexto['prejuizo_alocado']:.2f}\n🧪 Deriv DEMO")
+                 "♻️ Recuperação desativada\n🧪 Deriv DEMO")
 
         for nivel in range(gales + 1):
             if nivel > 0:

@@ -2306,8 +2306,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         )
         log.info("GESTÃO DA BANCA | %s | operação=%s | assertividade=%.2f%% | gale_atual=G%s | gales_restantes=%s | base=%.2f | entrada=%.2f | X%s | recuperação=desativada",
                  banca, contexto["numero"], contexto["assertividade_banca"], contexto["posicao"], gales,
-                 contexto["base"], contexto["entrada"], f"{MULTIPLICADOR_GALE:g}",
-                 )
+                 contexto["base"], contexto["entrada"], f"{MULTIPLICADOR_GALE:g}")
         with estado_lock:
             estado_frentes[banca]["ultimo_sinal"] = {
                 "ativo": ativo, "direcao": direcao, "score": score,
@@ -2361,7 +2360,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             telegram(f"🤖 Deriv DEMO | {'✅ WIN' if resultado_sinal == 'win' else '❌ LOSS COMPLETO' if resultado_sinal == 'loss' else '➖ EMPATE'}\n"
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                      f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                     "♻️ Recuperação: desativada\n💵 Entrada fixa por ordem: USD 0.35\n"
+                     "♻️ Recuperação desativada; entrada-base USD 0.35\n"
                      f"🛡 Próximo nível desta banca: G{estado_frentes[banca]['gale_progression_level']}\n"
                      f"📊 Total geral: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                      f"🎯 Assertividade da {banca}: {taxa_banca_real(banca)}%\n"

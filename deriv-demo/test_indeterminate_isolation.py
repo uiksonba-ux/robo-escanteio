@@ -370,7 +370,6 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(entrada_a, 0.70)
         self.assertEqual(entrada_b, 0.35)
 
-remove retired stop-loss tests
 class FinalizedSignalScoreboardTests(unittest.TestCase):
     def test_loss_is_counted_when_cycle_closes_after_gale_send_failure(self):
         banca = robo.BANCAS[0]

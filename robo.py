@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-GALE-CYCLE-6-X2"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-GALE-CYCLE-6-X2-PORTFOLIO-FILTER"
 
 app = Flask(__name__)
 
@@ -193,6 +193,9 @@ GALES_POR_CICLO = 6
 MAX_GALES = 6
 
 RECUPERACAO_PERCENTUAL = 1.0
+
+# Expired portfolio rows are ignored after a settlement grace period.
+PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
 
 QTD_BANCAS = 10
 
@@ -2701,8 +2704,25 @@ def supervisor():
 # WORKER
 # ============================================================
 
+def separar_contratos_vencidos(contratos, agora=None):
+    """Filtra só linhas vencidas há mais que a margem de liquidação."""
+    agora = int(time.time()) if agora is None else int(agora)
+    limite = agora - PORTFOLIO_EXPIRY_GRACE_SECONDS
+    ativos = []
+    vencidos = []
+    for contrato in contratos:
+        expiry = contrato.get("expiry_time")
+        if (isinstance(expiry, int) and not isinstance(expiry, bool)
+                and expiry > 0 and expiry <= limite):
+            vencidos.append(contrato)
+        else:
+            # Sem validade confirmada, a posição continua bloqueando o startup.
+            ativos.append(contrato)
+    return ativos, vencidos
+
+
 def aguardar_portfolio_demo_sem_posicoes():
-    """Após restart, não inicia scanners até a carteira DEMO estar sem contratos abertos."""
+    """Espera contratos ainda válidos; ignora registros expirados após a margem."""
     ultimo_aviso = 0.0
     while True:
         if not garantir_practice():
@@ -2713,14 +2733,18 @@ def aguardar_portfolio_demo_sem_posicoes():
             "startup_portfolio", cliente.get_portfolio, PRAZO_CONSULTA_API, cliente
         )
         if estado == "ok" and isinstance(contratos, list):
-            if not contratos:
-                log.info("CARTEIRA DEMO SINCRONIZADA | contratos_abertos=0 | scanners_liberados=true")
+            contratos_ativos, contratos_vencidos = separar_contratos_vencidos(contratos)
+            if not contratos_ativos:
+                log.info("CARTEIRA DEMO SINCRONIZADA | contratos_ativos=0 | registros_vencidos_ignorados=%s | scanners_liberados=true",
+                         len(contratos_vencidos))
                 return True
             if time.monotonic() - ultimo_aviso >= 60:
-                log.warning("AGUARDANDO CONTRATOS DEMO ABERTOS | quantidade=%s | scanners_liberados=false",
-                            len(contratos))
-                telegram("🧪 Baskaraido Trader PRO DEMO: aguardando a liquidação de "
-                         f"{len(contratos)} contrato(s) aberto(s) antes de retomar os sinais.")
+                log.warning("AGUARDANDO CONTRATOS DEMO ABERTOS | ativos=%s | vencidos_ignorados=%s | tolerancia_vencimento_seg=%s | scanners_liberados=false",
+                            len(contratos_ativos), len(contratos_vencidos),
+                            PORTFOLIO_EXPIRY_GRACE_SECONDS)
+                telegram("🧪 Baskaraido Trader PRO DEMO: aguardando "
+                         f"{len(contratos_ativos)} contrato(s) ainda válido(s); "
+                         f"{len(contratos_vencidos)} registro(s) vencido(s) ignorado(s).")
                 ultimo_aviso = time.monotonic()
         else:
             if time.monotonic() - ultimo_aviso >= 60:

@@ -150,22 +150,21 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.BANCAS, [f"BANCA {i}" for i in range(1, 11)])
         self.assertEqual(set(robo.estado_frentes), set(robo.BANCAS))
         self.assertEqual(robo.ENTRADA_BASE_USD, 0.35)
-        self.assertEqual(robo.MULTIPLICADOR_GALE, 3.0)
-        self.assertEqual(robo.MULTIPLICADORES_POR_GALES, {1: 3.0, 2: 3.0, 3: 3.0, 4: 3.0})
+        self.assertEqual(robo.MULTIPLICADOR_GALE, 2.0)
+        self.assertEqual(robo.MULTIPLICADORES_POR_GALES, {n: 2.0 for n in range(7)})
         self.assertEqual(
-            [robo.multiplicador_por_gales(n) for n in range(1, 5)],
-            [3.0, 3.0, 3.0, 3.0],
+            [robo.multiplicador_por_gales(n) for n in range(7)],
+            [2.0] * 7,
         )
-        self.assertEqual(robo.GALES_POR_CICLO, 4)
-        self.assertEqual(robo.MAX_GALES, 4)
+        self.assertEqual(robo.GALES_POR_CICLO, 6)
+        self.assertEqual(robo.MAX_GALES, 6)
         self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
-        self.assertEqual(robo.PRE_STOP_LOSS_USD, 100.0)
         self.assertEqual(
             robo.valores_do_ciclo(
-                0.35, quantidade_gales=4,
-                multiplicador=robo.multiplicador_por_gales(4),
+                0.35, quantidade_gales=6,
+                multiplicador=robo.multiplicador_por_gales(6),
             ),
-            [0.35, 1.05, 3.15, 9.45, 28.35],
+            [0.35, 0.70, 1.40, 2.80, 5.60, 11.20, 22.40],
         )
 
     def test_successful_recovery_clears_only_that_bank_pending_loss(self):
@@ -370,45 +369,6 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             )
         self.assertEqual(entrada_a, 0.70)
         self.assertEqual(entrada_b, 0.35)
-
-    def test_pre_stop_loss_blocks_only_exposure_above_100_usd(self):
-        self.assertFalse(robo.pre_stop_loss_atingido(99.65, 0.35))
-        self.assertTrue(robo.pre_stop_loss_atingido(99.66, 0.35))
-        self.assertFalse(robo.pre_stop_loss_atingido(99.99, 0.0))
-        self.assertTrue(robo.pre_stop_loss_atingido(100.00, 0.0))
-
-    def test_pre_stop_restart_resets_only_target_bank_management(self):
-        banca_a, banca_b = robo.BANCAS[:2]
-        with robo.estado_lock:
-            for banca in (banca_a, banca_b):
-                robo.estado_frentes[banca].update(
-                    wins=0, losses=0, wins_base_janela=0, losses_base_janela=0,
-                    recuperacao_pendente=0.0,
-                    pre_stop_loss_count=0, resultado_liquido=0.0, ciclo_gestao=0,
-                )
-            robo.estado_frentes[banca_a].update(
-                wins=4, losses=6,
-                recuperacao_pendente=12.34, resultado_liquido=-8.25, ciclo_gestao=7,
-            )
-            robo.estado_frentes[banca_b].update(
-                wins=2, losses=1, recuperacao_pendente=3.5, resultado_liquido=1.25,
-            )
-
-        robo.reiniciar_gestao_banca_apos_pre_stop(banca_a, 99.65)
-
-        self.assertEqual(robo.taxa_banca_real(banca_a), 40.0)
-        self.assertEqual(robo.gales_por_assertividade(robo.taxa_banca_real(banca_a)), 4)
-        self.assertEqual(robo.estado_frentes[banca_a]["wins_base_janela"], 0)
-        self.assertEqual(robo.estado_frentes[banca_a]["losses_base_janela"], 0)
-        self.assertEqual(robo.taxa_banca_real(banca_b), 66.67)
-        self.assertEqual(robo.estado_frentes[banca_a]["recuperacao_pendente"], 0.0)
-        self.assertEqual(robo.estado_frentes[banca_a]["resultado_liquido"], -8.25)
-        self.assertEqual(robo.estado_frentes[banca_a]["ciclo_gestao"], 7)
-        self.assertEqual(robo.estado_frentes[banca_a]["pre_stop_loss_count"], 1)
-        self.assertEqual(robo.estado_frentes[banca_a]["pre_stop_loss_ultima_perda"], 99.65)
-        self.assertEqual(robo.estado_frentes[banca_b]["recuperacao_pendente"], 3.5)
-        self.assertEqual(robo.estado_frentes[banca_b]["resultado_liquido"], 1.25)
-
 
 class FinalizedSignalScoreboardTests(unittest.TestCase):
     def test_loss_is_counted_when_cycle_closes_after_gale_send_failure(self):

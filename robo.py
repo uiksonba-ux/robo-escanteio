@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-GALE-CYCLE-6-X2-PORTFOLIO-FILTER"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-GALE-CYCLE-6-X2-BASE-035-NO-RECOVERY"
 
 app = Flask(__name__)
 
@@ -175,7 +175,7 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_MINIMA = 0.01
+ENTRADA_MINIMA = 0.35
 
 MULTIPLICADOR_GALE = 2.0
 MULTIPLICADORES_POR_GALES = {
@@ -192,7 +192,7 @@ MULTIPLICADORES_POR_GALES = {
 GALES_POR_CICLO = 6
 MAX_GALES = 6
 
-RECUPERACAO_PERCENTUAL = 1.0
+RECUPERACAO_PERCENTUAL = 0.0
 
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
@@ -222,11 +222,7 @@ def agora_brasil():
 # ============================================================
 
 def obter_entrada_base(saldo=None):
-    """Entrada equivalente a R$ 2, convertida para a moeda da conta DEMO."""
-    cliente = api
-    valor = getattr(cliente, "base_stake", None) if cliente is not None else None
-    if isinstance(valor, (int, float)) and not isinstance(valor, bool) and math.isfinite(valor) and valor > 0:
-        return float(valor)
+    """Retorna sempre a entrada fixa de USD 0.35 para a conta DEMO."""
     return float(ENTRADA_BASE_USD)
 
 
@@ -580,10 +576,10 @@ def conectar():
             f"🏦 {QTD_BANCAS} bancas | gestão individual\n"
             "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            "📈 Multiplicador de gale ×2; progressão individual G0–G6\n"
+            "📈 Base USD 0.35; multiplicador de gale X2; progressão individual G0–G6\n"
             "🛡 LOSS avança; WIN/empate mantém; LOSS no G6 volta ao G0\n"
             "📊 Assertividade baseada somente em WIN/LOSS reais; todas as janelas reiniciam a cada 300 sinais gerais encerrados\n"
-            f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} da perda da operação anterior\n"
+            "💰 Entrada-base USD 0.35; gales X2; recuperação desativada\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
         return True
@@ -1934,7 +1930,7 @@ def calcular_alvo_recuperacao(prejuizo):
 
 
 def calcular_entrada_recuperacao(perda_anterior, saldo=None):
-    """Soma a entrada-base a 100% da perda da operação anterior da mesma banca."""
+    """Retorna a entrada fixa; perdas anteriores nunca alteram o valor."""
     adicional = max(Decimal("0"), Decimal(str(perda_anterior)))
     if not adicional.is_finite():
         raise ValueError("Perda anterior inválida")
@@ -1997,8 +1993,8 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Por banca: inicia em G0; LOSS avança um nível; WIN/empate mantém; LOSS em G6 volta a G0; multiplicador 2x por nível.",
-            "regra_recuperacao": f"{RECUPERACAO_PERCENTUAL:.0%} da perda líquida da última operação concluída por banca; vitórias antigas não compensam; recuperação independente",
+            "regra_gales": "Por banca: inicia em G0; LOSS avança um nível; WIN/empate mantém; LOSS em G6 volta a G0; entrada-base de USD 0.35 com multiplicador 2x nos gales.",
+            "regra_recuperacao": "Desativada; entrada-base USD 0.35, com multiplicador 2x nos gales.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }
@@ -2046,8 +2042,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             log.warning("SALDO DEMO INDISPONÍVEL | %s", banca)
             return False, "saldo_indisponivel", contexto
 
-        # Recuperação usa somente a perda da operação anterior desta banca.
-        # Não consulta payout nem compensa a perda com vitórias antigas.
+        # Recuperação desativada: perdas anteriores não alteram a entrada-base.
         with estado_lock:
             ultimo_saldo_demo = saldo
             if nivel == 0:
@@ -2228,16 +2223,8 @@ def finalizar_operacao_global(banca):
             dados["resultado_liquido"] = local / 100
             dados["prejuizo_acumulado"] = max(0, -local) / 100
 
-            # O ledger de recuperação representa somente a operação recém-concluída.
-            # Ganhos anteriores permanecem no P&L, mas nunca compensam uma perda nova.
-            if resultado_operacao < 0:
-                perda_atual = abs(resultado_operacao) / 100
-                if contexto.get("recuperacao_diferida"):
-                    dados["recuperacao_pendente"] += perda_atual
-                else:
-                    dados["recuperacao_pendente"] = perda_atual
-            elif contexto.get("prejuizo_alocado", 0) > 0 and resultado_operacao > 0:
-                dados["recuperacao_pendente"] = 0.0
+            # Recuperação desativada: perdas não são reservadas para entradas futuras.
+            dados["recuperacao_pendente"] = 0.0
             historico_operacoes.append({
                 "data": agora_brasil().isoformat(),
                 "data_sinal": (dados.get("ultimo_sinal") or {}).get("data"),
@@ -2317,10 +2304,10 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         valores = valores_do_ciclo(
             contexto["entrada"], gales, MULTIPLICADOR_GALE
         )
-        log.info("GESTÃO DA BANCA | %s | operação=%s | assertividade=%.2f%% | gale_atual=G%s | gales_restantes=%s | base=%.2f | entrada=%.2f | X%s | recuperação_da_banca=%.2f",
+        log.info("GESTÃO DA BANCA | %s | operação=%s | assertividade=%.2f%% | gale_atual=G%s | gales_restantes=%s | base=%.2f | entrada=%.2f | X%s | recuperação=desativada",
                  banca, contexto["numero"], contexto["assertividade_banca"], contexto["posicao"], gales,
                  contexto["base"], contexto["entrada"], f"{MULTIPLICADOR_GALE:g}",
-                 contexto["prejuizo_alocado"])
+                 )
         with estado_lock:
             estado_frentes[banca]["ultimo_sinal"] = {
                 "ativo": ativo, "direcao": direcao, "score": score,
@@ -2374,7 +2361,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             telegram(f"🤖 Deriv DEMO | {'✅ WIN' if resultado_sinal == 'win' else '❌ LOSS COMPLETO' if resultado_sinal == 'loss' else '➖ EMPATE'}\n"
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                      f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                     f"♻️ Recuperação pendente da operação anterior: {getattr(api, 'currency', 'USD')} {estado_frentes[banca]['recuperacao_pendente']:.2f}\n"
+                     "♻️ Recuperação: desativada\n💵 Entrada fixa por ordem: USD 0.35\n"
                      f"🛡 Próximo nível desta banca: G{estado_frentes[banca]['gale_progression_level']}\n"
                      f"📊 Total geral: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                      f"🎯 Assertividade da {banca}: {taxa_banca_real(banca)}%\n"
@@ -2906,7 +2893,7 @@ def home():
 
         "distribuicao":
             (
-                f"{QTD_BANCAS} bancas paralelas; assertividade e recuperação independentes por banca"
+                f"{QTD_BANCAS} bancas paralelas; assertividade e progressão de gales independentes por banca; recuperação desativada"
             ),
 
         "estatisticas":
@@ -3125,12 +3112,11 @@ log.info(
 log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
     "PROGRESSÃO G0-G6: LOSS avança, WIN/empate mantém, LOSS em G6 retorna a G0; "
-    "MULTIPLICADOR X2 em todos os níveis | "
+    "ENTRADA BASE USD 0.35; MULTIPLICADOR X2 NOS GALES | "
     "ASSERTIVIDADE REAL por banca; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados | "
-    "CICLOS ILIMITADOS | "
-    "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%%",
+    "CICLOS ILIMITADOS | ENTRADA BASE USD 0.35 | RECUPERACAO DESATIVADA | MULTIPLICADOR X%g",
 
-    RECUPERACAO_PERCENTUAL * 100
+    MULTIPLICADOR_GALE
 )
 
 log.info(

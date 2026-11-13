@@ -193,7 +193,6 @@ GALES_POR_CICLO = 6
 MAX_GALES = 6
 
 RECUPERACAO_PERCENTUAL = 1.0
-PRE_STOP_LOSS_USD = 100.0
 
 QTD_BANCAS = 10
 
@@ -373,8 +372,6 @@ estado_frentes = {
         "gales_reativos": 0,
 
         "prejuizo_acumulado": 0.0,
-        "pre_stop_loss_count": 0,
-        "pre_stop_loss_ultima_perda": 0.0,
         "recuperacao_pendente": 0.0,
         "entradas_recuperacao_restantes": 0,
         "recuperacao_estendida": False,
@@ -584,7 +581,6 @@ def conectar():
             "🛡 LOSS avança; WIN/empate mantém; LOSS no G6 volta ao G0\n"
             "📊 Assertividade baseada somente em WIN/LOSS reais; todas as janelas reiniciam a cada 300 sinais gerais encerrados\n"
             f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} da perda da operação anterior\n"
-            f"🛑 Pré stop-loss: USD {PRE_STOP_LOSS_USD:.2f} por banca/operação; se atingir, reinicia a gestão da banca\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
         return True
@@ -1944,52 +1940,6 @@ def calcular_entrada_recuperacao(perda_anterior, saldo=None):
     return float(Decimal(str(obter_entrada_base(saldo))) + adicional)
 
 
-def pre_stop_loss_atingido(perda_confirmada, proxima_entrada=0.0):
-    """Impede que a perda acumulada prevista de um sinal ultrapasse o limite."""
-    perda_centavos = max(0, em_centavos(perda_confirmada))
-    proxima_centavos = max(0, em_centavos(proxima_entrada))
-    limite_centavos = em_centavos(PRE_STOP_LOSS_USD)
-    return perda_centavos >= limite_centavos or perda_centavos + proxima_centavos > limite_centavos
-
-
-def reiniciar_gestao_banca_apos_pre_stop(banca, perda_operacao):
-    """Reinicia a gestão da banca, preservando o P&L e o placar real histórico."""
-    with estado_lock:
-        dados = estado_frentes[banca]
-        dados["entrada_atual"] = ENTRADA_BASE_USD
-        dados["recuperacao_pendente"] = 0.0
-        dados["entradas_recuperacao_restantes"] = 0
-        dados["recuperacao_estendida"] = False
-        dados["em_recuperacao"] = False
-        dados["pre_stop_loss_count"] += 1
-        dados["pre_stop_loss_ultima_perda"] = round(float(perda_operacao), 2)
-        dados["gale_progression_level"] = 0
-        dados["gale_atual"] = 0
-        dados["gales_reativos"] = 0
-        gales_apos_reset = 0
-    log.warning("PRE-STOP LOSS | banca=%s | perda_operacao=%.2f/%.2f | gestao_reiniciada=true | historico_e_pnl_preservados=true | gales_apos_reset=%s | conta=DEMO",
-                banca, perda_operacao, PRE_STOP_LOSS_USD, gales_apos_reset)
-    telegram(f"🛑 PRÉ STOP-LOSS | {banca}\n"
-             f"Perda acumulada da operação: USD {perda_operacao:.2f} | limite: USD {PRE_STOP_LOSS_USD:.2f}\n"
-             "Gestão desta banca reiniciada; P&L e histórico real preservados. Deriv DEMO")
-    return True
-
-
-def processar_pre_stop_loss(banca, ativo):
-    """Fecha a operação parcial, reinicia só sua gestão e libera o restante."""
-    with estado_lock:
-        contexto = operacoes_ativas.get(banca)
-        if banca in envios_indeterminados or any(o["banca"] == banca for o in ordens_pendentes.values()):
-            log.error("PRE-STOP ADIADO | banca=%s | ordem pendente ou indeterminada", banca)
-            return False
-        perda = max(0, -contexto["resultado_centavos"]) / 100 if contexto else 0.0
-    if contexto is not None:
-        # O finalizador registra P&L, histórico e placar de forma idempotente.
-        finalizar_operacao_global(banca)
-    reiniciar_gestao_banca_apos_pre_stop(banca, perda)
-    return True
-
-
 def snapshot_gestao_global():
     with estado_lock:
         assertividade_por_banca = {
@@ -2039,8 +1989,6 @@ def snapshot_gestao_global():
             "multiplicador_gale": MULTIPLICADOR_GALE,
             "multiplicadores_por_gales": {str(nivel): valor for nivel, valor in MULTIPLICADORES_POR_GALES.items()},
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
-            "pre_stop_loss_usd": PRE_STOP_LOSS_USD,
-            "regra_pre_stop_loss": "por banca e por sinal; bloqueia gale se a perda acumulada puder exceder o limite; reinicia a gestao da banca",
             "envio_indeterminado": dict(next(iter(envios_indeterminados.values()))) if envios_indeterminados else None,
             "envios_indeterminados": [dict(item) for item in envios_indeterminados.values()],
             "envios_indeterminados_count": len(envios_indeterminados),
@@ -2137,11 +2085,6 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 contexto["prejuizo_alocado"] = 0.0
                 contexto["recuperacao_diferida"] = True
                 valor = contexto["entrada"]
-            perda_confirmada = max(0, -contexto.get("resultado_centavos", 0)) / 100
-            if pre_stop_loss_atingido(perda_confirmada, valor):
-                log.warning("PRE-STOP PREVENTIVO | banca=%s | ativo=%s | perda_confirmada=%.2f | proxima_entrada=%.2f | limite=%.2f | conta=DEMO",
-                            banca, ativo, perda_confirmada, valor, PRE_STOP_LOSS_USD)
-                return False, "pre_stop_loss", operacoes_ativas.get(banca)
             if valor > disponivel or valor < ENTRADA_MINIMA:
                 log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=saldo_insuficiente | nivel=%s | valor=%.2f | saldo=%.2f | comprometido=%.2f | disponivel=%.2f", banca, ativo, nivel, valor, saldo, comprometido, disponivel)
                 return False, "saldo_insuficiente", operacoes_ativas.get(banca)
@@ -2366,8 +2309,6 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         if ok is None:
             ok, order_id, contexto = aguardar_confirmacao_envio_gerido(banca)
         if not ok:
-            if order_id == "pre_stop_loss":
-                processar_pre_stop_loss(banca, ativo)
             return
         gales = contexto["gales"]
         valores = valores_do_ciclo(
@@ -2405,10 +2346,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                 if ok is None:
                     ok, order_id, _ = aguardar_confirmacao_envio_gerido(banca)
                 if not ok:
-                    if order_id == "pre_stop_loss":
-                        processar_pre_stop_loss(banca, ativo)
-                    else:
-                        log.warning("CICLO INTERROMPIDO | %s | %s", banca, order_id)
+                    log.warning("CICLO INTERROMPIDO | %s | %s", banca, order_id)
                     return
             resultado, lucro = aguardar_resultado_confirmado(order_id)
             if not registrar_resultado_ordem(order_id, resultado, lucro):
@@ -2416,11 +2354,6 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             nivel_absoluto = contexto["posicao"] + nivel
             log.info("RESULTADO %s | banca=%s | ativo=%s | order_id=%s | M%s | gale=G%s | lucro=%.2f | conta=DEMO",
                      resultado.upper(), banca, ativo, order_id, timeframe_analise, nivel_absoluto, lucro)
-            with estado_lock:
-                perda_operacao = max(0, -operacoes_ativas[banca]["resultado_centavos"]) / 100
-            if pre_stop_loss_atingido(perda_operacao):
-                processar_pre_stop_loss(banca, ativo)
-                return
             atualizar_progressao_gale(banca, nivel_absoluto, resultado)
             if resultado == "loss" and nivel_absoluto < MAX_GALES:
                 time.sleep(1)
@@ -3023,8 +2956,6 @@ def monitor_practice():
                 "gales_proximos": dados["gale_progression_level"],
                 "gale_atual": int(dados.get("gale_progression_level", 0)),
                 "prejuizo_acumulado": float(dados.get("prejuizo_acumulado", 0.0)),
-                "pre_stop_loss_disparos": int(dados.get("pre_stop_loss_count", 0)),
-                "pre_stop_loss_ultima_perda": float(dados.get("pre_stop_loss_ultima_perda", 0.0)),
                 "recuperacao_pendente": float(dados.get("recuperacao_pendente", 0.0)),
                 "em_recuperacao": bool(dados.get("em_recuperacao", False)),
                 "ocupada": bool(dados.get("ocupada", False)),
@@ -3173,10 +3104,9 @@ log.info(
     "MULTIPLICADOR X2 em todos os níveis | "
     "ASSERTIVIDADE REAL por banca; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados | "
     "CICLOS ILIMITADOS | "
-    "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%% | PRE_STOP_LOSS USD %.2f POR BANCA/OPERACAO",
+    "RECUPERACAO DA ULTIMA OPERACAO POR BANCA %g%%",
 
-    RECUPERACAO_PERCENTUAL * 100,
-    PRE_STOP_LOSS_USD
+    RECUPERACAO_PERCENTUAL * 100
 )
 
 log.info(

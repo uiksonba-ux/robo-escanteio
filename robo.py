@@ -1856,7 +1856,7 @@ def atualizar_progressao_gale(banca, nivel, resultado):
 
 # ============================================================
 # GALE FIXO CONFIGURÁVEL
-============================================================
+# ============================================================
 
 def multiplicador_por_gales(quantidade_gales):
     quantidade = max(0, min(MAX_GALES, int(quantidade_gales)))

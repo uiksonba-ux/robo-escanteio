@@ -2142,7 +2142,13 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                         alvo, payout_recuperacao, saldo)
                 else:
                     entrada_base_gale = base
-                entrada_inicial = round(entrada_base_gale * (MULTIPLICADOR_GALE ** posicao), 2)
+                # A recuperação substitui a entrada do nível atual; o x3 vale para os gales seguintes.
+                entrada_inicial = round(
+                    entrada_base_gale
+                    if alvo > 0
+                    else base * (MULTIPLICADOR_GALE ** posicao),
+                    2,
+                )
                 contexto = {"posicao": posicao,
                             "numero": estado_frentes[banca]["ciclo_gestao"] + 1,
                             "gales": MAX_GALES - posicao,

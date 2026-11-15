@@ -138,11 +138,11 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
 
         self.assertEqual(len(robo._extrato_corresponde_ao_envio(rows, envio)), 2)
 
-    def test_recovery_entry_adds_base_to_pending_loss(self):
+    def test_recovery_entry_covers_loss_and_base_profit_at_payout(self):
         with mock.patch.object(robo, "obter_entrada_base", return_value=0.35):
             alvo = robo.calcular_alvo_recuperacao(4.55)
             self.assertEqual(alvo, 4.55)
-            self.assertEqual(robo.calcular_entrada_recuperacao(alvo), 4.90)
+            self.assertEqual(robo.calcular_entrada_recuperacao(alvo, 0.89), 5.51)
 
     def test_requested_base_gale_and_recovery_settings(self):
         self.assertEqual(robo.QTD_BANCAS, 10)
@@ -386,13 +386,15 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
 
         with mock.patch.object(robo, "obter_entrada_base", return_value=0.35):
             entrada_a = robo.calcular_entrada_recuperacao(
-                robo.calcular_alvo_recuperacao(robo.prejuizo_banca_atual(banca_a))
+                robo.calcular_alvo_recuperacao(robo.prejuizo_banca_atual(banca_a)),
+                0.89,
             )
             entrada_b = robo.calcular_entrada_recuperacao(
-                robo.calcular_alvo_recuperacao(robo.prejuizo_banca_atual(banca_b))
+                robo.calcular_alvo_recuperacao(robo.prejuizo_banca_atual(banca_b)),
+                0.89,
             )
-        self.assertEqual(entrada_a, 0.70)
-        self.assertEqual(entrada_b, 0.35)
+        self.assertEqual(entrada_a, 0.79)
+        self.assertEqual(entrada_b, 0.40)
 
 class FinalizedSignalScoreboardTests(unittest.TestCase):
     def test_loss_is_counted_when_cycle_closes_after_gale_send_failure(self):

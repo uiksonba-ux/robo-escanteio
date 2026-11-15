@@ -575,10 +575,10 @@ def conectar():
             f"🏦 {QTD_BANCAS} bancas | gestão individual\n"
             "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            "📈 Base USD 0.35; multiplicador de gale X2; progressão individual G0–G6\n"
-            "🛡 LOSS avança; WIN/empate mantém; LOSS no G6 volta ao G0\n"
+            "📈 Base USD 0.35; gales G0–G2 com multiplicador X3\n"
+            "🛡 LOSS avança; WIN/empate mantém; LOSS no G2 volta ao G0\n"
             "📊 Assertividade baseada somente em WIN/LOSS reais; todas as janelas reiniciam a cada 300 sinais gerais encerrados\n"
-            "💰 Entrada-base USD 0.35; gales X2; recuperação desativada\n"
+            "💰 Recuperação 100% por banca: déficit pendente + entrada-base USD 0.35\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
         return True
@@ -1836,7 +1836,7 @@ def registrar_loss(
 
 
 def atualizar_progressao_gale(banca, nivel, resultado):
-    """Loss avança; win/empate mantém o nível; loss em G6 reinicia em G0."""
+    """Loss avança; win/empate mantém o nível; loss em G2 reinicia em G0."""
     nivel = max(0, min(MAX_GALES, int(nivel)))
     with estado_lock:
         if resultado == "loss":
@@ -2392,7 +2392,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         valores = valores_do_ciclo(
             contexto["entrada"], gales, MULTIPLICADOR_GALE
         )
-        log.info("GESTÃO DA BANCA | %s | operação=%s | assertividade=%.2f%% | gale_atual=G%s | gales_restantes=%s | base=%.2f | entrada=%.2f | X%s | recuperação=desativada",
+        log.info("GESTÃO DA BANCA | %s | operação=%s | assertividade=%.2f%% | gale_atual=G%s | gales_restantes=%s | base=%.2f | entrada=%.2f | X%s | recuperação=100%% por banca",
                  banca, contexto["numero"], contexto["assertividade_banca"], contexto["posicao"], gales,
                  contexto["base"], contexto["entrada"], f"{MULTIPLICADOR_GALE:g}")
         with estado_lock:

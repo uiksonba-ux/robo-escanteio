@@ -1930,10 +1930,11 @@ def calcular_alvo_recuperacao(prejuizo):
 
 def calcular_entrada_recuperacao(perda_anterior, payout_liquido, saldo=None):
     """Dimensiona a entrada para recuperar a dívida e obter o lucro-base líquido."""
-    perda = max(Decimal("0"), Decimal(str(perda_anterior)))
+    perda = Decimal(str(perda_anterior))
     payout = Decimal(str(payout_liquido))
     if not perda.is_finite() or not payout.is_finite() or payout <= 0:
         raise ValueError("Perda ou payout de recuperação inválido")
+    perda = max(Decimal("0"), perda)
     alvo_liquido = (
         Decimal(str(obter_entrada_base(saldo)))
         + perda * Decimal(str(RECUPERACAO_PERCENTUAL))

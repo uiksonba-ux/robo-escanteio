@@ -1928,14 +1928,20 @@ def calcular_alvo_recuperacao(prejuizo):
     return float(max(Decimal("0"), valor) * percentual)
 
 
-def calcular_entrada_recuperacao(perda_anterior, saldo=None):
-    """Entrada de recuperação = base + percentual da perda ainda não recuperada."""
-    adicional = max(Decimal("0"), Decimal(str(perda_anterior)))
-    if not adicional.is_finite():
-        raise ValueError("Perda anterior inválida")
-    adicional = (adicional * Decimal(str(RECUPERACAO_PERCENTUAL))).quantize(
+def calcular_entrada_recuperacao(perda_anterior, payout_liquido, saldo=None):
+    """Dimensiona a entrada para recuperar a dívida e obter o lucro-base líquido."""
+    perda = Decimal(str(perda_anterior))
+    payout = Decimal(str(payout_liquido))
+    if not perda.is_finite() or not payout.is_finite() or payout <= 0:
+        raise ValueError("Perda ou payout de recuperação inválido")
+    perda = max(Decimal("0"), perda)
+    alvo_liquido = (
+        Decimal(str(obter_entrada_base(saldo)))
+        + perda * Decimal(str(RECUPERACAO_PERCENTUAL))
+    )
+    entrada = (alvo_liquido / payout).quantize(
         Decimal("0.01"), rounding=ROUND_UP)
-    return float(Decimal(str(obter_entrada_base(saldo))) + adicional)
+    return float(entrada)
 
 
 def pre_stop_loss_atingido(perda_confirmada, proxima_entrada=0.0):
@@ -2110,7 +2116,17 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             log.warning("SALDO DEMO INDISPONÍVEL | %s", banca)
             return False, "saldo_indisponivel", contexto
 
-        # Recuperação desativada: perdas anteriores não alteram a entrada-base.
+        # Consulta o payout conservador antes de dimensionar uma recuperação.
+        with estado_lock:
+            precisa_recuperacao = (
+                nivel == 0
+                and estado_frentes[banca]["recuperacao_pendente"] > 0
+            )
+        payout_recuperacao = (
+            obter_payout_digital(ativo, expiracao)
+            if precisa_recuperacao else None
+        )
+
         with estado_lock:
             ultimo_saldo_demo = saldo
             if nivel == 0:
@@ -2119,7 +2135,13 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 perda_anterior = estado_frentes[banca]["recuperacao_pendente"]
                 alvo = calcular_alvo_recuperacao(perda_anterior)
                 base = obter_entrada_base(saldo)
-                entrada_base_gale = calcular_entrada_recuperacao(alvo, saldo) if alvo > 0 else base
+                if alvo > 0:
+                    if payout_recuperacao is None or payout_recuperacao <= 0:
+                        return False, "payout_recuperacao_indisponivel", operacoes_ativas.get(banca)
+                    entrada_base_gale = calcular_entrada_recuperacao(
+                        alvo, payout_recuperacao, saldo)
+                else:
+                    entrada_base_gale = base
                 entrada_inicial = round(entrada_base_gale * (MULTIPLICADOR_GALE ** posicao), 2)
                 contexto = {"posicao": posicao,
                             "numero": estado_frentes[banca]["ciclo_gestao"] + 1,
@@ -2151,8 +2173,9 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 contexto["prejuizo_alocado"] = 0.0
                 contexto["recuperacao_diferida"] = True
                 valor = contexto["entrada"]
+            # resultado_centavos já está em centavos; não passar de novo por em_centavos.
             perda_confirmada = max(
-                0, -em_centavos(contexto.get("resultado_centavos", 0))
+                0, -int(contexto.get("resultado_centavos", 0))
             ) / 100
             if pre_stop_loss_atingido(perda_confirmada, valor):
                 log.warning(

@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-GALE-CYCLE-6-X2-BASE-035-NO-RECOVERY-PRESTOP100"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-OPPOSITE-PAIRS-GALE2-X3-RECOVERY100-PRESTOP100"
 
 app = Flask(__name__)
 
@@ -177,22 +177,14 @@ TEMPO_BLOQUEIO = env_int(
 
 ENTRADA_MINIMA = 0.35
 
-MULTIPLICADOR_GALE = 2.0
-MULTIPLICADORES_POR_GALES = {
-    0: 2.0,
-    1: 2.0,
-    2: 2.0,
-    3: 2.0,
-    4: 2.0,
-    5: 2.0,
-    6: 2.0,
-}
+MULTIPLICADOR_GALE = 3.0
+MULTIPLICADORES_POR_GALES = {0: 3.0, 1: 3.0, 2: 3.0}
 
-# A progressão é individual por banca e percorre G0 a G6.
-GALES_POR_CICLO = 6
-MAX_GALES = 6
+# Cada banca inicia em G0 e pode usar até G1 e G2.
+GALES_POR_CICLO = 2
+MAX_GALES = 2
 
-RECUPERACAO_PERCENTUAL = 0.0
+RECUPERACAO_PERCENTUAL = 1.0
 PRE_STOP_LOSS_USD = 100.0
 
 # Expired portfolio rows are ignored after a settlement grace period.
@@ -262,6 +254,9 @@ BANCAS = [
     )
 ]
 
+PARES_BANCAS = tuple((BANCAS[i], BANCAS[i + 5]) for i in range(5))
+DIRECAO_OPPOSTA = {"call": "put", "put": "call"}
+
 
 # ============================================================
 # ATIVOS
@@ -281,6 +276,7 @@ connect_lock = threading.Lock()
 estado_lock = threading.RLock()
 
 ativos_em_uso = set()
+proximo_par_banca = 0
 bloqueados = {}
 ativos_validos = set()
 contador_sinais = 0
@@ -1933,7 +1929,7 @@ def calcular_alvo_recuperacao(prejuizo):
 
 
 def calcular_entrada_recuperacao(perda_anterior, saldo=None):
-    """Retorna a entrada fixa; perdas anteriores nunca alteram o valor."""
+    """Entrada de recuperação = base + percentual da perda ainda não recuperada."""
     adicional = max(Decimal("0"), Decimal(str(perda_anterior)))
     if not adicional.is_finite():
         raise ValueError("Perda anterior inválida")
@@ -2065,8 +2061,8 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Por banca: inicia em G0; LOSS avança um nível; WIN/empate mantém; LOSS em G6 volta a G0; entrada-base de USD 0.35 com multiplicador 2x nos gales.",
-            "regra_recuperacao": "Desativada; entrada-base USD 0.35, com multiplicador 2x nos gales.",
+            "regra_gales": "Por banca: inicia em G0; LOSS avança um nível; WIN/empate mantém; LOSS em G2 volta a G0; entrada-base USD 0.35 com multiplicador 3x nos gales.",
+            "regra_recuperacao": "100% por banca: próxima entrada é USD 0.35 mais o déficit ainda não recuperado.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }
@@ -2306,8 +2302,13 @@ def finalizar_operacao_global(banca):
             dados["resultado_liquido"] = local / 100
             dados["prejuizo_acumulado"] = max(0, -local) / 100
 
-            # Recuperação desativada: perdas não são reservadas para entradas futuras.
-            dados["recuperacao_pendente"] = 0.0
+            # Atualiza somente o déficit ainda não recuperado desta banca.
+            pendente = max(0.0, float(dados.get("recuperacao_pendente", 0.0)))
+            if resultado_operacao < 0:
+                pendente += abs(resultado_operacao) / 100
+            elif resultado_operacao > 0:
+                pendente = max(0.0, pendente - (resultado_operacao / 100))
+            dados["recuperacao_pendente"] = round(pendente, 2)
             historico_operacoes.append({
                 "data": agora_brasil().isoformat(),
                 "data_sinal": (dados.get("ultimo_sinal") or {}).get("data"),
@@ -2348,7 +2349,8 @@ def liberar_banca(banca, ativo):
             return False
         dados.update(ocupada=False, ativo=None, direcao=None, score=None, timeframe=None,
                      expiracao=None, order_id=None, ciclo_em_execucao=False)
-        ativos_em_uso.discard(ativo)
+        if not any(item["ocupada"] and item["ativo"] == ativo for item in estado_frentes.values()):
+            ativos_em_uso.discard(ativo)
         return True
 
 
@@ -2413,7 +2415,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                  f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n🔥 Score: {score}/100\n"
                  f"🔢 Operação da {banca}: {contexto['numero']} / assertividade {contexto['assertividade_banca']:.2f}%\n"
                  f"🛡 Gale atual: G{contexto['posicao']} | até G{MAX_GALES} | X{MULTIPLICADOR_GALE:g}\n💰 {sequencia}\n"
-                 "♻️ Recuperação desativada\n🧪 Deriv DEMO")
+                 "♻️ Recuperação 100% por banca\n🧪 Deriv DEMO")
 
         for nivel in range(gales + 1):
             if nivel > 0:
@@ -2456,7 +2458,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             telegram(f"🤖 Deriv DEMO | {'✅ WIN' if resultado_sinal == 'win' else '❌ LOSS COMPLETO' if resultado_sinal == 'loss' else '➖ EMPATE'}\n"
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                      f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                     "♻️ Recuperação desativada; entrada-base USD 0.35\n"
+                     "♻️ Recuperação 100% por banca; base USD 0.35\n"
                      f"🛡 Próximo nível desta banca: G{estado_frentes[banca]['gale_progression_level']}\n"
                      f"📊 Total geral: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                      f"🎯 Assertividade da {banca}: {taxa_banca_real(banca)}%\n"
@@ -2493,21 +2495,56 @@ def reservar_banca(ativo, direcao, score, timeframe, expiracao):
         log.warning("SINAL SEM RESERVA | ativo=%s | M%s | motivo=sem_banca_livre", ativo, timeframe)
     return None
 
+def reservar_par_bancas(ativo, direcao, score, timeframe, expiracao):
+    """Reserva duas bancas livres para o mesmo sinal em direções opostas."""
+    global proximo_par_banca
+    ativo = str(ativo).strip().upper()
+    direcao = str(direcao).strip().lower()
+    if direcao not in DIRECAO_OPPOSTA:
+        return None
+    with estado_lock:
+        if envios_indeterminados or ativo in ativos_em_uso:
+            return None
+        for offset in range(len(PARES_BANCAS)):
+            indice = (proximo_par_banca + offset) % len(PARES_BANCAS)
+            banca_direta, banca_inversa = PARES_BANCAS[indice]
+            if estado_frentes[banca_direta]["ocupada"] or estado_frentes[banca_inversa]["ocupada"]:
+                continue
+            for banca, lado in (
+                (banca_direta, direcao),
+                (banca_inversa, DIRECAO_OPPOSTA[direcao]),
+            ):
+                estado_frentes[banca].update({
+                    "ocupada": True, "ativo": ativo, "direcao": lado,
+                    "score": score, "timeframe": timeframe, "expiracao": expiracao,
+                })
+            ativos_em_uso.add(ativo)
+            proximo_par_banca = (indice + 1) % len(PARES_BANCAS)
+            return indice, banca_direta, banca_inversa
+    return None
+
+
 def disparar_sinal(ativo, direcao, score, timeframe, expiracao):
     ativo = str(ativo).strip().upper()
     log.info("SINAL APROVADO | ativo=%s | direcao=%s | M%s | expiracao=%s | score=%s", ativo, direcao, timeframe, expiracao, score)
-    banca = reservar_banca(ativo, direcao, score, timeframe, expiracao)
-    if banca is None:
+    par = reservar_par_bancas(ativo, direcao, score, timeframe, expiracao)
+    if par is None:
+        log.warning("SINAL SEM PAR LIVRE | ativo=%s | M%s", ativo, timeframe)
         return False
-    log.info("SINAL APROVADO E DISTRIBUÍDO | banca=%s | ativo=%s | direcao=%s | M%s | expiracao=%s | reserva_banca=true", banca, ativo, direcao, timeframe, expiracao)
-    try:
-        threading.Thread(target=ciclo, args=(banca, ativo, direcao, score, timeframe, expiracao),
-                         daemon=True, name=f"operacao-{banca}-M{timeframe}-{ativo}").start()
-    except Exception as erro:
-        liberar_banca(banca, ativo)
-        log.error("SINAL NAO INICIADO | banca=%s | ativo=%s | motivo=falha_thread | tipo=%s", banca, ativo, type(erro).__name__)
-        return False
-    return True
+    indice, banca_direta, banca_inversa = par
+    direcoes = ((banca_direta, direcao), (banca_inversa, DIRECAO_OPPOSTA[direcao]))
+    log.info("SINAL DISTRIBUÍDO EM PAR | par=%s | bancas=%s/%s | ativo=%s | direções=%s/%s | M%s | expiração=%s",
+             indice + 1, banca_direta, banca_inversa, ativo, direcoes[0][1], direcoes[1][1], timeframe, expiracao)
+    iniciadas = 0
+    for banca, lado in direcoes:
+        try:
+            threading.Thread(target=ciclo, args=(banca, ativo, lado, score, timeframe, expiracao),
+                             daemon=True, name=f"operacao-{banca}-M{timeframe}-{ativo}").start()
+            iniciadas += 1
+        except Exception as erro:
+            liberar_banca(banca, ativo)
+            log.error("SINAL NAO INICIADO | banca=%s | ativo=%s | motivo=falha_thread | tipo=%s", banca, ativo, type(erro).__name__)
+    return iniciadas == 2
 
 # ============================================================
 # SCANNER DE TIMEFRAME
@@ -2565,12 +2602,9 @@ def scanner_timeframe(
                 with estado_lock:
 
                     existe_banca_livre = any(
-                        not estado_frentes[
-                            banca
-                        ][
-                            "ocupada"
-                        ]
-                        for banca in BANCAS
+                        not estado_frentes[banca_direta]["ocupada"]
+                        and not estado_frentes[banca_inversa]["ocupada"]
+                        for banca_direta, banca_inversa in PARES_BANCAS
                     )
 
                 if not existe_banca_livre:
@@ -2990,7 +3024,7 @@ def home():
 
         "distribuicao":
             (
-                f"{QTD_BANCAS} bancas paralelas; assertividade e progressão de gales independentes por banca; recuperação desativada"
+                f"5 pares de bancas em sentidos opostos; assertividade, gales e recuperação independentes por banca"
             ),
 
         "estatisticas":
@@ -3212,10 +3246,11 @@ log.info(
 
 log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
-    "PROGRESSÃO G0-G6: LOSS avança, WIN/empate mantém, LOSS em G6 retorna a G0; "
-    "ENTRADA BASE USD 0.35; MULTIPLICADOR X2 NOS GALES | "
+    "PARES 1-6, 2-7, 3-8, 4-9, 5-10: primeira banca segue o sinal, segunda entra ao contrário | "
+    "PROGRESSÃO G0-G2: LOSS avança, WIN/empate mantém, LOSS em G2 retorna a G0; "
+    "ENTRADA BASE USD 0.35; MULTIPLICADOR X3 NOS GALES | "
     "ASSERTIVIDADE REAL por banca; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados | "
-    "CICLOS ILIMITADOS | ENTRADA BASE USD 0.35 | RECUPERACAO DESATIVADA | "
+    "CICLOS ILIMITADOS | RECUPERACAO 100% por banca: déficit pendente + USD 0.35 | "
     "MULTIPLICADOR X%g | PRE-STOP LOSS USD %.2f POR BANCA/OPERACAO",
 
     MULTIPLICADOR_GALE,
@@ -3230,7 +3265,7 @@ log.info(
 
 log.info(
     "DISTRIBUIÇÃO = "
-    "M1/M5/M15 -> PRIMEIRA BANCA LIVRE"
+    "cada sinal aprovado vai para um par livre; a segunda banca inverte a direção"
 )
 
 log.info(

@@ -194,7 +194,7 @@ QTD_BANCAS = 10
 
 # Assertividade com resultados reais; as janelas individuais reiniciam juntas a cada 300 sinais gerais encerrados.
 
-# Entrada-base fixa em USD; a progressão de gale é independente da assertividade.
+# Entrada-base fixa em BRL convertida para a moeda da conta Deriv DEMO.
 ENTRADA_BASE_BRL = 20.00
 
 
@@ -581,7 +581,7 @@ def conectar():
             "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             "📈 Entrada fixa de R$ 20, sem gale\n"
-            "🛡 \n"
+            "🎯 Fechamento automático configurado para lucro de R$ 5\n"
             "📊 Assertividade baseada somente em WIN/LOSS reais; todas as janelas reiniciam a cada 300 sinais gerais encerrados\n"
             "💰 Fechamento antecipado ao atingir lucro de R$ 5\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
@@ -1950,7 +1950,7 @@ def calcular_entrada_recuperacao(perda_anterior, payout_liquido, saldo=None):
 
 
 def pre_stop_loss_atingido(perda_confirmada, proxima_entrada=0.0):
-    """Bloqueia a próxima ordem se a perda do sinal alcança USD 100."""
+    """Retorna se o pré-stop estiver habilitado e o limite for atingido."""
     perda_centavos = max(0, em_centavos(perda_confirmada))
     proxima_centavos = max(0, em_centavos(proxima_entrada))
     if PRE_STOP_LOSS_USD <= 0:
@@ -2062,11 +2062,7 @@ def snapshot_gestao_global():
             },
             "multiplicador_gale": MULTIPLICADOR_GALE,
             "pre_stop_loss_usd": PRE_STOP_LOSS_USD,
-            "regra_pre_stop_loss": (
-                "Por banca/operação: bloqueia a próxima ordem se a perda "
-                "confirmada mais a próxima entrada ultrapassar USD 100; "
-                "reinicia somente a gestão da banca."
-            ),
+            "regra_pre_stop_loss": "Desativado",
             "multiplicadores_por_gales": {str(nivel): valor for nivel, valor in MULTIPLICADORES_POR_GALES.items()},
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "envio_indeterminado": dict(next(iter(envios_indeterminados.values()))) if envios_indeterminados else None,
@@ -2431,9 +2427,9 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         valores = valores_do_ciclo(
             contexto["entrada"], gales, MULTIPLICADOR_GALE
         )
-        log.info("GESTÃO DA BANCA | %s | operação=%s | assertividade=%.2f%% | gale_atual=G%s | gales_restantes=%s | base=%.2f | entrada=%.2f | X%s | recuperação=100%% por banca",
-                 banca, contexto["numero"], contexto["assertividade_banca"], contexto["posicao"], gales,
-                 contexto["base"], contexto["entrada"], f"{MULTIPLICADOR_GALE:g}")
+        log.info("GESTÃO FIXA | banca=%s | operação=%s | assertividade=%.2f%% | entrada=%s %.2f | meta_lucro=BRL 5 | gale=desativado | recuperação=desativada",
+                 banca, contexto["numero"], contexto["assertividade_banca"],
+                 getattr(api, "currency", "USD"), contexto["entrada"])
         with estado_lock:
             estado_frentes[banca]["ultimo_sinal"] = {
                 "ativo": ativo, "direcao": direcao, "score": score,
@@ -2454,7 +2450,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                  f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n🔥 Score: {score}/100\n"
                  f"🔢 Operação da {banca}: {contexto['numero']} / assertividade {contexto['assertividade_banca']:.2f}%\n"
                  f"🛡 Sem gale | entrada fixa R$ 20\n💰 {sequencia}\n"
-                 "♻️ Recuperação 100% por banca\n🧪 Deriv DEMO")
+                 "🎯 Sem gale nem recuperação; meta R$ 5\n🧪 Deriv DEMO")
 
         for nivel in range(gales + 1):
             if nivel > 0:

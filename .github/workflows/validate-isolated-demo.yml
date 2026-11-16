@@ -23,6 +23,6 @@ jobs:
       - name: Install project dependencies
         run: pip install -r requirements.txt
       - name: Compile trading code
-        run: python -m py_compile robo.py deriv_client.py
+        run: python -m py_compile robo.py deriv_client.py iq_option_client.py
       - name: Run DEMO policy and isolation checks
         run: python -m unittest discover -s deriv-demo -p 'test_*.py' -v

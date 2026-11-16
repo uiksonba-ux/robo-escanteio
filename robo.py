@@ -11,14 +11,14 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, request
-from deriv_client import DerivOptionsClient
+from iq_option_client import IQOptionClient
 
 
 # ============================================================
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-OPPOSITE-PAIRS-GALE2-X3-RECOVERY100-PRESTOP100"
+VERSAO = "BASKARAIDO-IQ-PRACTICE-DIGITAL-10B-GALE2-X3-RECOVERY100-PRESTOP100"
 
 app = Flask(__name__)
 
@@ -107,9 +107,8 @@ def env_bool(nome, padrao=False):
 # CONFIGURAÇÕES
 # ============================================================
 
-DERIV_APP_ID = os.getenv("DERIV_APP_ID", "").strip()
-DERIV_TOKEN = os.getenv("DERIV_TOKEN", "").strip()
-DERIV_DEMO_ACCOUNT_ID = os.getenv("DERIV_DEMO_ACCOUNT_ID", "").strip()
+IQ_EMAIL = os.getenv("IQ_EMAIL", "").strip()
+IQ_PASSWORD = os.getenv("IQ_PASSWORD", "").strip()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -175,7 +174,7 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_MINIMA = 0.35
+ENTRADA_MINIMA = 2.00
 
 MULTIPLICADOR_GALE = 3.0
 MULTIPLICADORES_POR_GALES = {0: 3.0, 1: 3.0, 2: 3.0}
@@ -186,6 +185,7 @@ MAX_GALES = 2
 
 RECUPERACAO_PERCENTUAL = 1.0
 PRE_STOP_LOSS_USD = 100.0
+PRE_STOP_LOSS_BRL = None
 
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
@@ -194,8 +194,8 @@ QTD_BANCAS = 10
 
 # Assertividade com resultados reais; as janelas individuais reiniciam juntas a cada 300 sinais gerais encerrados.
 
-# Entrada-base fixa em USD; a progressão de gale é independente da assertividade.
-ENTRADA_BASE_USD = 0.35
+# Entrada-base fixa em BRL; a progressão de gale é independente da assertividade.
+ENTRADA_BASE_BRL = 2.00
 
 
 
@@ -215,8 +215,8 @@ def agora_brasil():
 # ============================================================
 
 def obter_entrada_base(saldo=None):
-    """Retorna sempre a entrada fixa de USD 0.35 para a conta DEMO."""
-    return float(ENTRADA_BASE_USD)
+    """Retorna a entrada fixa de R$ 2,00 para a conta PRACTICE."""
+    return float(ENTRADA_BASE_BRL)
 
 
 # ============================================================
@@ -262,7 +262,7 @@ DIRECAO_OPPOSTA = {"call": "put", "put": "call"}
 # ATIVOS
 # ============================================================
 
-# Catálogo dinâmico dos ativos disponíveis pela API Deriv Options.\nATIVOS = []
+# Catálogo dinâmico dos ativos disponíveis pela API IQ Option.\nATIVOS = []
 
 
 # ============================================================
@@ -445,7 +445,7 @@ def chamada_api_limitada(chave, funcao, timeout=5.0, cliente=None):
                     chamada["valor"] = funcao()
                     chamada["estado"] = "ok"
                 except Exception as erro:
-                    # DerivAPIError.code é sanitizado pelo adapter; não registrar mensagens upstream.
+                    # IQOptionError.code é sanitizado pelo adapter; não registrar mensagens upstream.
                     codigo = getattr(erro, "code", None)
                     chamada["valor"] = codigo if isinstance(codigo, str) else type(erro).__name__
                     chamada["estado"] = "erro"
@@ -472,13 +472,13 @@ def conectado():
 
 def _confirmar_practice_sincrono(cliente):
     # O adapter só abre o endpoint de opções DEMO e valida o account_id configurado.
-    return cliente.get_balance_mode() == "DEMO"
+    return cliente.get_balance_mode() == "PRACTICE"
 
 
 def _confirmar_practice(cliente):
     confirmado = cliente is not None and cliente.check_connect() and _confirmar_practice_sincrono(cliente)
     if not confirmado:
-        log.error("CONTA DERIV DEMO NAO CONFIRMADA")
+        log.error("CONTA IQ OPTION PRACTICE NAO CONFIRMADA")
     return confirmado
 
 
@@ -505,28 +505,26 @@ def _saldo_practice_sincrono(cliente, exigir_atual=True):
 
 
 def conectar():
-    global api, ultimo_saldo_demo, saldo_inicial_demo, _cliente_conectando, ATIVOS
-    if not DERIV_APP_ID or not DERIV_TOKEN or not DERIV_DEMO_ACCOUNT_ID:
-        log.error("DERIV_APP_ID, DERIV_TOKEN ou DERIV_DEMO_ACCOUNT_ID ausente.")
+    global api, ultimo_saldo_demo, saldo_inicial_demo, _cliente_conectando, ATIVOS, PRE_STOP_LOSS_BRL
+    if not IQ_EMAIL or not IQ_PASSWORD:
+        log.error("IQ_EMAIL ou IQ_PASSWORD ausente.")
         return False
     if not connect_lock.acquire(timeout=1):
-        log.warning("CONEXAO DERIV EM ANDAMENTO | nova tentativa adiada")
+        log.warning("CONEXAO IQ OPTION EM ANDAMENTO | nova tentativa adiada")
         return False
     try:
         if conectado():
             return True
         if _cliente_conectando is None:
-            _cliente_conectando = DerivOptionsClient(
-                DERIV_APP_ID, DERIV_TOKEN, DERIV_DEMO_ACCOUNT_ID,
-                base_stake_amount=ENTRADA_BASE_USD,
-                base_stake_currency="USD",
+            _cliente_conectando = IQOptionClient(
+                IQ_EMAIL, IQ_PASSWORD, base_stake_amount=ENTRADA_BASE_BRL
             )
         nova = _cliente_conectando
         estado, resposta = chamada_api_limitada(
             "connect", lambda: _conectar_na_sessao(nova), 30.0, nova
         )
         if estado != "ok":
-            log.error("CONEXAO DERIV INDISPONIVEL | estado=%s", estado)
+            log.error("CONEXAO IQ OPTION INDISPONIVEL | estado=%s", estado)
             if estado != "timeout":
                 _cliente_conectando = None
             return False
@@ -544,11 +542,11 @@ def conectar():
             return False
 
         estado, simbolos = chamada_api_limitada(
-            "active_symbols", lambda: nova.get_active_symbols(refresh=True),
+            "iq_active_symbols", lambda: nova.get_active_symbols(refresh=True),
             PRAZO_CONSULTA_API, nova
         )
         if estado != "ok" or not isinstance(simbolos, dict) or not simbolos:
-            log.error("CATALOGO DERIV INDISPONIVEL | nenhuma ordem será iniciada")
+            log.error("CATALOGO IQ OPTION INDISPONIVEL | nenhuma ordem será iniciada")
             return False
         ativos = sorted(simbolos)
         if not _sessao_lock.acquire(timeout=PRAZO_CONSULTA_API):
@@ -566,24 +564,25 @@ def conectar():
 
         entrada = obter_entrada_base(saldo)
         moeda = nova.currency
-        log.info("DERIV CONECTADA | conta=DEMO confirmada | moeda=%s | ativos=%s", moeda, len(ativos))
+        PRE_STOP_LOSS_BRL = round(PRE_STOP_LOSS_USD * nova.usd_to_brl, 2)
+        log.info("IQ OPTION CONECTADA | PRACTICE confirmada | moeda=%s | ativos=%s | stop_brl=%.2f", moeda, len(ativos), PRE_STOP_LOSS_BRL)
         telegram(
             "🤖 Baskaraido Trader PRO ONLINE\n"
-            "🧪 Corretora: Deriv | Conta: DEMO confirmada\n"
-            f"💰 Saldo DEMO: {saldo:.2f} {moeda}\n"
-            f"💵 Entrada-base: USD {entrada:.2f}\n"
+            "🧪 Corretora: IQ Option | Conta: PRACTICE confirmada\n"
+            f"💰 Saldo PRACTICE: R$ {saldo:.2f}\n"
+            f"💵 Entrada-base: R$ {entrada:.2f}\n"
             f"🏦 {QTD_BANCAS} bancas | gestão individual\n"
             "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            "📈 Base USD 0.35; gales G0–G2 com multiplicador X3\n"
+            "📈 Base R$ 2,00; gales G0–G2 com multiplicador X3\n"
             "🛡 LOSS avança; WIN/empate mantém; LOSS no G2 volta ao G0\n"
             "📊 Assertividade baseada somente em WIN/LOSS reais; todas as janelas reiniciam a cada 300 sinais gerais encerrados\n"
-            "💰 Recuperação 100% por banca: déficit pendente + entrada-base USD 0.35\n"
+            "💰 Recuperação 100% por banca: déficit pendente + entrada-base R$ 2,00\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
         return True
     except Exception as erro:
-        log.error("ERRO CONEXAO DERIV | tipo=%s", type(erro).__name__)
+        log.error("ERRO CONEXAO IQ OPTION | tipo=%s", type(erro).__name__)
         return False
     finally:
         connect_lock.release()
@@ -1245,7 +1244,7 @@ _disponibilidade_lock = threading.Lock()
 _disponibilidade_cache = {"dados": None, "ate": 0.0, "consultando": False, "tentar_apos": 0.0}
 
 def listar_ativos_otc():
-    """Retorna os símbolos abertos autorizados pelo catálogo Deriv Options."""
+    """Retorna os símbolos abertos autorizados pelo catálogo IQ Option."""
     cliente = api
     if cliente is None:
         return list(ATIVOS)
@@ -1292,7 +1291,7 @@ def obter_payout_digital(ativo, expiracao):
         payout = float(payout)
     except (TypeError, ValueError, OverflowError):
         return None
-    # Deriv adapter returns net profit per stake as a ratio (e.g. 0.82), not percent.
+    # IQ Option adapter returns net profit per stake as a ratio (e.g. 0.82), not percent.
     if not math.isfinite(payout) or payout <= 0:
         return None
     _payout_cache[chave] = {"payout": payout, "ate": time.monotonic() + 15}
@@ -1566,7 +1565,7 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao):
         log.warning("DISPONIBILIDADE DIGITAL INDISPONIVEL | tipo=%s", type(erro).__name__)
         return recusar("disponibilidade_digital_nao_confirmada")
     if disponibilidade is False:
-        bloquear(ativo, expiracao, "instrumento Options fechado na Deriv")
+        bloquear(ativo, expiracao, "instrumento digital fechado na IQ Option")
         return recusar("instrumento_digital_fechado")
     if disponibilidade is not True:
         return recusar("disponibilidade_digital_nao_confirmada")
@@ -1945,10 +1944,10 @@ def calcular_entrada_recuperacao(perda_anterior, payout_liquido, saldo=None):
 
 
 def pre_stop_loss_atingido(perda_confirmada, proxima_entrada=0.0):
-    """Bloqueia a próxima ordem se a perda do sinal alcança USD 100."""
+    """Bloqueia a próxima ordem se a perda em BRL alcança o equivalente a USD 100."""
     perda_centavos = max(0, em_centavos(perda_confirmada))
     proxima_centavos = max(0, em_centavos(proxima_entrada))
-    limite_centavos = em_centavos(PRE_STOP_LOSS_USD)
+    limite_centavos = em_centavos(PRE_STOP_LOSS_BRL or 0)
     return (
         perda_centavos >= limite_centavos
         or perda_centavos + proxima_centavos > limite_centavos
@@ -1959,7 +1958,7 @@ def reiniciar_gestao_banca_apos_pre_stop(banca, perda_operacao):
     """Reinicia somente a gestão desta banca e preserva placar, histórico e P&L."""
     with estado_lock:
         dados = estado_frentes[banca]
-        dados["entrada_atual"] = ENTRADA_BASE_USD
+        dados["entrada_atual"] = ENTRADA_BASE_BRL
         dados["recuperacao_pendente"] = 0.0
         dados["entradas_recuperacao_restantes"] = 0
         dados["recuperacao_estendida"] = False
@@ -1970,15 +1969,15 @@ def reiniciar_gestao_banca_apos_pre_stop(banca, perda_operacao):
         dados["pre_stop_loss_count"] += 1
         dados["pre_stop_loss_ultima_perda"] = round(float(perda_operacao), 2)
     log.warning(
-        "PRE-STOP LOSS | banca=%s | perda_operacao=USD %.2f/%.2f | "
-        "gestao_reiniciada=true | historico_e_pnl_preservados=true | conta=DEMO",
-        banca, perda_operacao, PRE_STOP_LOSS_USD
+        "PRE-STOP LOSS | banca=%s | perda_operacao=R$ %.2f/%.2f | "
+        "gestao_reiniciada=true | historico_e_pnl_preservados=true | conta=PRACTICE",
+        banca, perda_operacao, PRE_STOP_LOSS_BRL
     )
     telegram(
         f"🛑 PRÉ STOP-LOSS | {banca}\n"
-        f"Perda acumulada da operação: USD {perda_operacao:.2f} | "
-        f"limite: USD {PRE_STOP_LOSS_USD:.2f}\n"
-        "Gestão desta banca reiniciada; P&L e histórico preservados. Deriv DEMO"
+        f"Perda acumulada da operação: R$ {perda_operacao:.2f} | "
+        f"limite: R$ {PRE_STOP_LOSS_BRL:.2f} (equivalente a USD {PRE_STOP_LOSS_USD:.2f})\n"
+        "Gestão desta banca reiniciada; P&L e histórico preservados. IQ Option PRACTICE"
     )
     return True
 
@@ -2055,9 +2054,10 @@ def snapshot_gestao_global():
             },
             "multiplicador_gale": MULTIPLICADOR_GALE,
             "pre_stop_loss_usd": PRE_STOP_LOSS_USD,
+            "pre_stop_loss_brl": PRE_STOP_LOSS_BRL,
             "regra_pre_stop_loss": (
                 "Por banca/operação: bloqueia a próxima ordem se a perda "
-                "confirmada mais a próxima entrada ultrapassar USD 100; "
+                "confirmada mais a próxima entrada ultrapassar o equivalente a USD 100; "
                 "reinicia somente a gestão da banca."
             ),
             "multiplicadores_por_gales": {str(nivel): valor for nivel, valor in MULTIPLICADORES_POR_GALES.items()},
@@ -2067,8 +2067,8 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Por banca: inicia em G0; LOSS avança um nível; WIN/empate mantém; LOSS em G2 volta a G0; entrada-base USD 0.35 com multiplicador 3x nos gales.",
-            "regra_recuperacao": "100% por banca: próxima entrada é USD 0.35 mais o déficit ainda não recuperado.",
+            "regra_gales": "Por banca: inicia em G0; LOSS avança um nível; WIN/empate mantém; LOSS em G2 volta a G0; entrada-base R$ 2,00 com multiplicador 3x nos gales.",
+            "regra_recuperacao": "100% por banca: próxima entrada é R$ 2,00 mais o déficit ainda não recuperado.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }
@@ -2186,9 +2186,9 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             if pre_stop_loss_atingido(perda_confirmada, valor):
                 log.warning(
                     "PRE-STOP PREVENTIVO | banca=%s | ativo=%s | "
-                    "perda_confirmada=USD %.2f | proxima_entrada=USD %.2f | "
-                    "limite=USD %.2f | conta=DEMO",
-                    banca, ativo, perda_confirmada, valor, PRE_STOP_LOSS_USD
+                    "perda_confirmada=R$ %.2f | proxima_entrada=R$ %.2f | "
+                    "limite=R$ %.2f | conta=DEMO",
+                    banca, ativo, perda_confirmada, valor, PRE_STOP_LOSS_BRL
                 )
                 return False, "pre_stop_loss", operacoes_ativas.get(banca)
             if valor > disponivel or valor < ENTRADA_MINIMA:
@@ -2444,7 +2444,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                  f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n🔥 Score: {score}/100\n"
                  f"🔢 Operação da {banca}: {contexto['numero']} / assertividade {contexto['assertividade_banca']:.2f}%\n"
                  f"🛡 Gale atual: G{contexto['posicao']} | até G{MAX_GALES} | X{MULTIPLICADOR_GALE:g}\n💰 {sequencia}\n"
-                 "♻️ Recuperação 100% por banca\n🧪 Deriv DEMO")
+                 "♻️ Recuperação 100% por banca\n🧪 IQ Option PRACTICE")
 
         for nivel in range(gales + 1):
             if nivel > 0:
@@ -2484,14 +2484,14 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                 "draw"
             )
             gestao = finalizar_operacao_global(banca)
-            telegram(f"🤖 Deriv DEMO | {'✅ WIN' if resultado_sinal == 'win' else '❌ LOSS COMPLETO' if resultado_sinal == 'loss' else '➖ EMPATE'}\n"
+            telegram(f"🤖 IQ Option PRACTICE | {'✅ WIN' if resultado_sinal == 'win' else '❌ LOSS COMPLETO' if resultado_sinal == 'loss' else '➖ EMPATE'}\n"
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                      f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                     "♻️ Recuperação 100% por banca; base USD 0.35\n"
+                     "♻️ Recuperação 100% por banca; base R$ 2,00\n"
                      f"🛡 Próximo nível desta banca: G{estado_frentes[banca]['gale_progression_level']}\n"
                      f"📊 Total geral: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                      f"🎯 Assertividade da {banca}: {taxa_banca_real(banca)}%\n"
-                     f"💰 Saldo Deriv DEMO: {texto_saldo()} {getattr(api, 'currency', '')}")
+                     f"💰 Saldo IQ Option PRACTICE: {texto_saldo()} {getattr(api, 'currency', '')}")
             return
     finally:
         # Se existe ordem incerta, não libera posições nem a recuperação.
@@ -3006,7 +3006,7 @@ def home():
         "status":
             "online",
 
-        "deriv_conectada":
+        "iq_option_conectada":
             conectado(),
 
         "conta":
@@ -3096,7 +3096,7 @@ def app_service_worker():
 
 # ============================================================
 # API DE MONITORAMENTO - SOMENTE LEITURA / DEMO
-# Não habilita ordens e não expõe credenciais da Deriv/Telegram.
+# Não habilita ordens e não expõe credenciais IQ Option/Telegram.
 # Token deve ser configurado em MONITOR_API_TOKEN no servidor.
 # ============================================================
 
@@ -3269,21 +3269,22 @@ log.info(
 )
 
 log.info(
-    "ENTRADA BASE FIXA = USD %.2f",
-    ENTRADA_BASE_USD
+    "ENTRADA BASE FIXA = R$ %.2f",
+    ENTRADA_BASE_BRL
 )
 
 log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
     "PARES 1-6, 2-7, 3-8, 4-9, 5-10: primeira banca segue o sinal, segunda entra ao contrário | "
     "PROGRESSÃO G0-G2: LOSS avança, WIN/empate mantém, LOSS em G2 retorna a G0; "
-    "ENTRADA BASE USD 0.35; MULTIPLICADOR X3 NOS GALES | "
+    "ENTRADA BASE R$ 2,00; MULTIPLICADOR X3 NOS GALES | "
     "ASSERTIVIDADE REAL por banca; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados | "
-    "CICLOS ILIMITADOS | RECUPERACAO 100% por banca: déficit pendente + USD 0.35 | "
-    "MULTIPLICADOR X%g | PRE-STOP LOSS USD %.2f POR BANCA/OPERACAO",
+    "CICLOS ILIMITADOS | RECUPERACAO 100% por banca: déficit pendente + R$ 2,00 | "
+    "MULTIPLICADOR X%g | PRE-STOP LOSS USD %.2f (R$ %.2f) POR BANCA/OPERACAO",
 
     MULTIPLICADOR_GALE,
-    PRE_STOP_LOSS_USD
+    PRE_STOP_LOSS_USD,
+    PRE_STOP_LOSS_BRL
 )
 
 log.info(

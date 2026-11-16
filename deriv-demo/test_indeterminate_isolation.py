@@ -139,17 +139,17 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(len(robo._extrato_corresponde_ao_envio(rows, envio)), 2)
 
     def test_recovery_entry_covers_loss_and_base_profit_at_payout(self):
-        with mock.patch.object(robo, "obter_entrada_base", return_value=0.35):
+        with mock.patch.object(robo, "obter_entrada_base", return_value=2.0):
             alvo = robo.calcular_alvo_recuperacao(4.55)
             self.assertEqual(alvo, 4.55)
-            self.assertEqual(robo.calcular_entrada_recuperacao(alvo, 0.89), 5.51)
+            self.assertEqual(robo.calcular_entrada_recuperacao(alvo, 0.89), 7.36)
 
     def test_requested_base_gale_and_recovery_settings(self):
         self.assertEqual(robo.QTD_BANCAS, 10)
         self.assertEqual(len(robo.BANCAS), 10)
         self.assertEqual(robo.BANCAS, [f"BANCA {i}" for i in range(1, 11)])
         self.assertEqual(set(robo.estado_frentes), set(robo.BANCAS))
-        self.assertEqual(robo.ENTRADA_BASE_USD, 0.35)
+        self.assertEqual(robo.ENTRADA_BASE_BRL, 2.0)
         self.assertEqual(robo.PARES_BANCAS, tuple((robo.BANCAS[i], robo.BANCAS[i + 5]) for i in range(5)))
         self.assertEqual(robo.DIRECAO_OPPOSTA, {"call": "put", "put": "call"})
         self.assertEqual(robo.MULTIPLICADOR_GALE, 3.0)
@@ -162,10 +162,11 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.MAX_GALES, 2)
         self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
         self.assertEqual(robo.PRE_STOP_LOSS_USD, 100.0)
-        self.assertFalse(robo.pre_stop_loss_atingido(99.65, 0.35))
-        self.assertTrue(robo.pre_stop_loss_atingido(99.66, 0.35))
-        self.assertFalse(robo.pre_stop_loss_atingido(99.99, 0.0))
-        self.assertTrue(robo.pre_stop_loss_atingido(100.0, 0.0))
+        with mock.patch.object(robo, "PRE_STOP_LOSS_BRL", 560.0):
+            self.assertFalse(robo.pre_stop_loss_atingido(559.65, 0.35))
+            self.assertTrue(robo.pre_stop_loss_atingido(559.66, 0.35))
+            self.assertFalse(robo.pre_stop_loss_atingido(559.99, 0.0))
+            self.assertTrue(robo.pre_stop_loss_atingido(560.0, 0.0))
         self.assertEqual(
             robo.valores_do_ciclo(
                 0.35, quantidade_gales=2,

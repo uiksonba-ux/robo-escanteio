@@ -100,7 +100,15 @@ class IQOptionClient:
                 return False
 
     def get_balance_mode(self):
-        return "PRACTICE" if self.check_connect() else "DISCONNECTED"
+        # Confirm the broker's selected balance, not just our local intent.
+        with self._lock:
+            if not self.check_connect():
+                return "DISCONNECTED"
+            try:
+                mode = self.api.get_balance_mode()
+            except Exception:
+                return "UNKNOWN"
+        return mode if mode in ("PRACTICE", "REAL", "TOURNAMENT") else "UNKNOWN"
 
     def change_balance(self, mode):
         if str(mode).upper() != "PRACTICE":

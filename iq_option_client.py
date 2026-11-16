@@ -147,6 +147,43 @@ class IQOptionClient:
             raise IQOptionError("InvalidBalance")
         return amount
 
+    def get_portfolio(self):
+        """Read open digital positions for the startup safety gate."""
+        with self._lock:
+            if not self.check_connect():
+                raise IQOptionError("Disconnected")
+            result = self.api.get_positions("digital-option")
+
+        if isinstance(result, (tuple, list)):
+            if len(result) < 2 or result[0] is not True:
+                raise IQOptionError("PortfolioUnavailable")
+            positions = result[1]
+        else:
+            positions = result
+
+        if isinstance(positions, dict):
+            positions = positions.get("positions")
+        if not isinstance(positions, list):
+            raise IQOptionError("PortfolioUnavailable")
+
+        portfolio = []
+        for position in positions:
+            if not isinstance(position, dict):
+                portfolio.append({})
+                continue
+            expiry = None
+            for key in ("expiry_time", "expiration_time", "expiration", "exp"):
+                value = position.get(key)
+                try:
+                    candidate = int(value)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if candidate > 0:
+                    expiry = candidate // 1000 if candidate > 10_000_000_000 else candidate
+                    break
+            portfolio.append({"expiry_time": expiry} if expiry is not None else {})
+        return portfolio
+
     @staticmethod
     def _read_usd_to_brl():
         """Read the latest BCB PTAX sell quote with one bounded request."""

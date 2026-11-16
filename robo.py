@@ -3279,7 +3279,7 @@ log.info(
     "PROGRESSÃO G0-G2: LOSS avança, WIN/empate mantém, LOSS em G2 retorna a G0; "
     "ENTRADA BASE R$ 2,00; MULTIPLICADOR X3 NOS GALES | "
     "ASSERTIVIDADE REAL por banca; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados | "
-    "CICLOS ILIMITADOS | RECUPERACAO 100% por banca: déficit pendente + R$ 2,00 | "
+    "CICLOS ILIMITADOS | RECUPERACAO 100%% por banca: déficit pendente + R$ 2,00 | "
     "MULTIPLICADOR X%g | PRE-STOP LOSS USD %.2f (R$ %.2f) POR BANCA/OPERACAO",
 
     MULTIPLICADOR_GALE,

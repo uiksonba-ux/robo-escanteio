@@ -19,7 +19,30 @@ class IQOptionError(RuntimeError):
     pass
 
 
+# Fiat currency codes used to recognize FX pairs without accepting crypto symbols
+# such as BTCUSD as currency pairs.
+_FIAT_CODES = frozenset({
+    "AED", "ARS", "AUD", "BRL", "CAD", "CHF", "CLP", "CNY", "CNH",
+    "COP", "CZK", "DKK", "EGP", "EUR", "GBP", "HKD", "HUF", "IDR",
+    "ILS", "INR", "JPY", "KRW", "MXN", "MYR", "NOK", "NZD", "PHP",
+    "PLN", "QAR", "RON", "RUB", "SAR", "SEK", "SGD", "THB", "TRY",
+    "TWD", "UAH", "USD", "VND", "ZAR",
+})
+
+
 class IQOptionClient:
+    @staticmethod
+    def _is_currency_pair(symbol):
+        normalized = str(symbol or "").upper()
+        if normalized.endswith("-OTC"):
+            normalized = normalized[:-4]
+        return (
+            len(normalized) == 6
+            and normalized[:3] in _FIAT_CODES
+            and normalized[3:] in _FIAT_CODES
+            and normalized[:3] != normalized[3:]
+        )
+
     def __init__(self, email, password, *, base_stake_amount=2.0):
         self.email = str(email or "").strip()
         self.password = str(password or "").strip()
@@ -139,7 +162,7 @@ class IQOptionClient:
         for symbol, status in digital.items():
             if not isinstance(symbol, str) or not isinstance(status, dict):
                 continue
-            if status.get("open") is True:
+            if status.get("open") is True and self._is_currency_pair(symbol):
                 symbols[symbol.upper()] = {"market": "digital", "open": True}
         self._symbols_cache = symbols
         self._symbols_cache_at = now

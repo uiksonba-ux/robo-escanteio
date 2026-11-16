@@ -180,6 +180,21 @@ class IQOptionClient:
                     return rate
         except Exception:
             pass
+
+        # Fallback reference-rate provider when the BCB PTAX endpoint is
+        # unreachable from the hosting region. The USD 100 pre-stop remains
+        # fail-closed if neither source returns a valid quote.
+        try:
+            response = requests.get(
+                "https://api.frankfurter.dev/v2/rate/usd/brl",
+                timeout=(2, 4),
+            )
+            response.raise_for_status()
+            rate = float(response.json().get("rate"))
+            if math.isfinite(rate) and rate > 0:
+                return rate
+        except Exception:
+            pass
         raise IQOptionError("UsdBrlRateUnavailable")
 
     def get_active_symbols(self, refresh=False):

@@ -524,7 +524,14 @@ def conectar():
             "connect", lambda: _conectar_na_sessao(nova), 30.0, nova
         )
         if estado != "ok":
-            log.error("CONEXAO IQ OPTION INDISPONIVEL | estado=%s", estado)
+            codigo = (
+                resposta
+                if isinstance(resposta, str)
+                and resposta.isascii()
+                and resposta.replace("_", "").isalnum()
+                else "indisponivel"
+            )
+            log.error("CONEXAO IQ OPTION INDISPONIVEL | estado=%s | codigo=%s", estado, codigo)
             if estado != "timeout":
                 _cliente_conectando = None
             return False

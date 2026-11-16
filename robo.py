@@ -196,6 +196,7 @@ QTD_BANCAS = 10
 
 # Entrada-base fixa em BRL convertida para a moeda da conta Deriv DEMO.
 ENTRADA_BASE_BRL = 20.00
+META_LUCRO_BRL = 5.00
 
 
 
@@ -522,6 +523,7 @@ def conectar():
                 DERIV_APP_ID, DERIV_TOKEN, DERIV_DEMO_ACCOUNT_ID,
                 base_stake_amount=ENTRADA_BASE_BRL,
                 base_stake_currency="BRL",
+                profit_target_brl=META_LUCRO_BRL,
             )
         nova = _cliente_conectando
         estado, resposta = chamada_api_limitada(

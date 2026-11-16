@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-OPPOSITE-PAIRS-GALE2-X3-RECOVERY100-PRESTOP100"
+VERSAO = "BASKARAIDO-DERIV-DEMO-BRL20-TAKEPROFIT5-FIXED-NOGALET"
 
 app = Flask(__name__)
 
@@ -2028,6 +2028,8 @@ def snapshot_gestao_global():
         }
         return {
             "entrada_base": obter_entrada_base(),
+            "entrada_base_brl": ENTRADA_BASE_BRL,
+            "meta_lucro_brl": META_LUCRO_BRL,
             "entrada_percentual": None,
             "entrada_minima": ENTRADA_MINIMA,
             "saldo_practice_referencia": ultimo_saldo_demo,

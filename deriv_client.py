@@ -35,7 +35,7 @@ class DerivOptionsClient:
 
     def __init__(self, app_id, token, account_id, base_stake_brl=2.0,
                  *, base_stake_amount=None, base_stake_currency=None,
-                 profit_target_brl=5.0):
+                 profit_target_brl=0.0):
         self.app_id = str(app_id or "").strip()
         self.token = str(token or "").strip()
         self.account_id = str(account_id or "").strip()

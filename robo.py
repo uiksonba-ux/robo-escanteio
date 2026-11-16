@@ -3273,6 +3273,12 @@ log.info(
     ENTRADA_BASE_BRL
 )
 
+pre_stop_loss_brl_log = (
+    f"R$ {PRE_STOP_LOSS_BRL:.2f}"
+    if PRE_STOP_LOSS_BRL is not None
+    else "aguardando cotação USD/BRL"
+)
+
 log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
     "PARES 1-6, 2-7, 3-8, 4-9, 5-10: primeira banca segue o sinal, segunda entra ao contrário | "
@@ -3280,11 +3286,11 @@ log.info(
     "ENTRADA BASE R$ 2,00; MULTIPLICADOR X3 NOS GALES | "
     "ASSERTIVIDADE REAL por banca; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados | "
     "CICLOS ILIMITADOS | RECUPERACAO 100%% por banca: déficit pendente + R$ 2,00 | "
-    "MULTIPLICADOR X%g | PRE-STOP LOSS USD %.2f (R$ %.2f) POR BANCA/OPERACAO",
+    "MULTIPLICADOR X%g | PRE-STOP LOSS USD %.2f (%s) POR BANCA/OPERACAO",
 
     MULTIPLICADOR_GALE,
     PRE_STOP_LOSS_USD,
-    PRE_STOP_LOSS_BRL
+    pre_stop_loss_brl_log
 )
 
 log.info(

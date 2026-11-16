@@ -89,6 +89,9 @@ class IQOptionClient:
                     raise IQOptionError("PracticeConnectionFailed")
                 self.api = client
                 self._connected = True
+                self._payout_subscriptions.clear()
+                self._symbols_cache = {}
+                self._symbols_cache_at = 0.0
                 self.usd_to_brl = self._read_usd_to_brl()
                 return True, "PRACTICE"
             except IQOptionError:
@@ -112,11 +115,12 @@ class IQOptionClient:
                     pass
 
     def check_connect(self):
-        with self._lock:
-            try:
-                return bool(self._connected and self.api is not None and self.api.check_connect())
-            except Exception:
-                return False
+        # This SDK check reads local websocket state. Keep it lock-free so a
+        # slow quote/candle request cannot make other scanners start reconnects.
+        try:
+            return bool(self._connected and self.api is not None and self.api.check_connect())
+        except Exception:
+            return False
 
     def get_balance_mode(self):
         # Confirm the broker's selected balance, not just our local intent.
@@ -294,22 +298,24 @@ class IQOptionClient:
             except Exception:
                 return None
 
-            # Quotes arrive asynchronously. A pair is considered tradable only
-            # after the broker supplies a valid digital payout.
-            deadline = time.monotonic() + 2.5
-            raw = None
-            while time.monotonic() < deadline:
+        # Never hold the session lock while waiting for the asynchronous quote.
+        # This lets health checks and other scanners share the same connection.
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline:
+            with self._lock:
+                if not self.check_connect():
+                    return None
                 try:
                     raw = self.api.get_digital_current_profit(symbol, duration)
                 except Exception:
                     raw = None
-                try:
-                    value = float(raw)
-                except (TypeError, ValueError, OverflowError):
-                    value = 0.0
-                if math.isfinite(value) and value > 0:
-                    return value / 100.0 if value > 1 else value
-                time.sleep(0.1)
+            try:
+                value = float(raw)
+            except (TypeError, ValueError, OverflowError):
+                value = 0.0
+            if math.isfinite(value) and value > 0:
+                return value / 100.0 if value > 1 else value
+            time.sleep(0.1)
         return None
 
     def is_contract_available(self, symbol, contract_type, duration):

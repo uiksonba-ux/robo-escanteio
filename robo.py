@@ -174,7 +174,7 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_MINIMA = 0.35
+ENTRADA_MINIMA = 2.00
 
 MULTIPLICADOR_GALE = 3.0
 MULTIPLICADORES_POR_GALES = {0: 3.0, 1: 3.0, 2: 3.0}
@@ -194,7 +194,7 @@ QTD_BANCAS = 10
 
 # Assertividade com resultados reais; as janelas individuais reiniciam juntas a cada 300 sinais gerais encerrados.
 
-# Entrada-base fixa em USD; a progressão de gale é independente da assertividade.
+# Entrada-base fixa em BRL; a progressão de gale é independente da assertividade.
 ENTRADA_BASE_BRL = 2.00
 
 
@@ -568,9 +568,9 @@ def conectar():
         log.info("IQ OPTION CONECTADA | PRACTICE confirmada | moeda=%s | ativos=%s | stop_brl=%.2f", moeda, len(ativos), PRE_STOP_LOSS_BRL)
         telegram(
             "🤖 Baskaraido Trader PRO ONLINE\n"
-            "🧪 Corretora: Deriv | Conta: PRACTICE confirmada\n"
-            f"💰 Saldo DEMO: {saldo:.2f} {moeda}\n"
-            f"💵 Entrada-base: USD {entrada:.2f}\n"
+            "🧪 Corretora: IQ Option | Conta: PRACTICE confirmada\n"
+            f"💰 Saldo PRACTICE: R$ {saldo:.2f}\n"
+            f"💵 Entrada-base: R$ {entrada:.2f}\n"
             f"🏦 {QTD_BANCAS} bancas | gestão individual\n"
             "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
@@ -582,7 +582,7 @@ def conectar():
         )
         return True
     except Exception as erro:
-        log.error("ERRO CONEXAO DERIV | tipo=%s", type(erro).__name__)
+        log.error("ERRO CONEXAO IQ OPTION | tipo=%s", type(erro).__name__)
         return False
     finally:
         connect_lock.release()
@@ -1944,7 +1944,7 @@ def calcular_entrada_recuperacao(perda_anterior, payout_liquido, saldo=None):
 
 
 def pre_stop_loss_atingido(perda_confirmada, proxima_entrada=0.0):
-    """Bloqueia a próxima ordem se a perda do sinal alcança USD 100."""
+    """Bloqueia a próxima ordem se a perda em BRL alcança o equivalente a USD 100."""
     perda_centavos = max(0, em_centavos(perda_confirmada))
     proxima_centavos = max(0, em_centavos(proxima_entrada))
     limite_centavos = em_centavos(PRE_STOP_LOSS_BRL or 0)
@@ -1970,13 +1970,13 @@ def reiniciar_gestao_banca_apos_pre_stop(banca, perda_operacao):
         dados["pre_stop_loss_ultima_perda"] = round(float(perda_operacao), 2)
     log.warning(
         "PRE-STOP LOSS | banca=%s | perda_operacao=R$ %.2f/%.2f | "
-        "gestao_reiniciada=true | historico_e_pnl_preservados=true | conta=DEMO",
-        banca, perda_operacao, PRE_STOP_LOSS_USD
+        "gestao_reiniciada=true | historico_e_pnl_preservados=true | conta=PRACTICE",
+        banca, perda_operacao, PRE_STOP_LOSS_BRL
     )
     telegram(
         f"🛑 PRÉ STOP-LOSS | {banca}\n"
-        f"Perda acumulada da operação: USD {perda_operacao:.2f} | "
-        f"limite: USD {PRE_STOP_LOSS_USD:.2f}\n"
+        f"Perda acumulada da operação: R$ {perda_operacao:.2f} | "
+        f"limite: R$ {PRE_STOP_LOSS_BRL:.2f} (equivalente a USD {PRE_STOP_LOSS_USD:.2f})\n"
         "Gestão desta banca reiniciada; P&L e histórico preservados. IQ Option PRACTICE"
     )
     return True
@@ -2057,7 +2057,7 @@ def snapshot_gestao_global():
             "pre_stop_loss_brl": PRE_STOP_LOSS_BRL,
             "regra_pre_stop_loss": (
                 "Por banca/operação: bloqueia a próxima ordem se a perda "
-                "confirmada mais a próxima entrada ultrapassar USD 100; "
+                "confirmada mais a próxima entrada ultrapassar o equivalente a USD 100; "
                 "reinicia somente a gestão da banca."
             ),
             "multiplicadores_por_gales": {str(nivel): valor for nivel, valor in MULTIPLICADORES_POR_GALES.items()},
@@ -3280,10 +3280,11 @@ log.info(
     "ENTRADA BASE R$ 2,00; MULTIPLICADOR X3 NOS GALES | "
     "ASSERTIVIDADE REAL por banca; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados | "
     "CICLOS ILIMITADOS | RECUPERACAO 100% por banca: déficit pendente + R$ 2,00 | "
-    "MULTIPLICADOR X%g | PRE-STOP LOSS USD %.2f POR BANCA/OPERACAO",
+    "MULTIPLICADOR X%g | PRE-STOP LOSS USD %.2f (R$ %.2f) POR BANCA/OPERACAO",
 
     MULTIPLICADOR_GALE,
-    PRE_STOP_LOSS_USD
+    PRE_STOP_LOSS_USD,
+    PRE_STOP_LOSS_BRL
 )
 
 log.info(

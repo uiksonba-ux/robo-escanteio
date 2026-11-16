@@ -16,7 +16,11 @@ log = logging.getLogger("baskaraido-iq")
 
 
 class IQOptionError(RuntimeError):
-    pass
+    """Broker/adapter failure with a sanitized, stable diagnostic code."""
+
+    def __init__(self, code):
+        self.code = str(code)
+        super().__init__(self.code)
 
 
 # Fiat currency codes used to recognize FX pairs without accepting crypto symbols
@@ -69,7 +73,17 @@ class IQOptionClient:
                 result = client.connect()
                 ok = bool(result[0]) if isinstance(result, (tuple, list)) else bool(result)
                 if not ok:
-                    raise IQOptionError("LoginFailed")
+                    reason = result[1] if isinstance(result, (tuple, list)) and len(result) > 1 else None
+                    reason_text = str(reason or "").strip().lower()
+                    if "2fa" in reason_text or "two factor" in reason_text:
+                        code = "TwoFactorRequired"
+                    elif "captcha" in reason_text:
+                        code = "CaptchaRequired"
+                    elif "password" in reason_text or "credential" in reason_text:
+                        code = "CredentialsRejected"
+                    else:
+                        code = "LoginFailed"
+                    raise IQOptionError(code)
                 client.change_balance("PRACTICE")
                 if not client.check_connect():
                     raise IQOptionError("PracticeConnectionFailed")
@@ -77,10 +91,14 @@ class IQOptionClient:
                 self._connected = True
                 self.usd_to_brl = self._read_usd_to_brl()
                 return True, "PRACTICE"
+            except IQOptionError:
+                self.api = None
+                self._connected = False
+                raise
             except Exception as exc:
                 self.api = None
                 self._connected = False
-                # Avoid logging vendor exception text; it may contain account data.
+                # Keep upstream messages out of logs; only expose a stable error class.
                 raise IQOptionError(type(exc).__name__) from None
 
     def close(self):

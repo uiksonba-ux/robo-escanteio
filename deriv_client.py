@@ -34,7 +34,8 @@ class DerivOptionsClient:
     """One serialized WebSocket owner bound to exactly one active DEMO account."""
 
     def __init__(self, app_id, token, account_id, base_stake_brl=2.0,
-                 *, base_stake_amount=None, base_stake_currency=None):
+                 *, base_stake_amount=None, base_stake_currency=None,
+                 profit_target_brl=0.0):
         self.app_id = str(app_id or "").strip()
         self.token = str(token or "").strip()
         self.account_id = str(account_id or "").strip()
@@ -53,8 +54,14 @@ class DerivOptionsClient:
         if (not self.base_stake_amount.is_finite() or self.base_stake_amount <= 0
                 or self.base_stake_currency not in {"BRL", "USD"}):
             raise ValueError("Entrada-base ou moeda inválida")
+        self.profit_target_brl = Decimal(str(profit_target_brl))
+        if not self.profit_target_brl.is_finite() or self.profit_target_brl < 0:
+            raise ValueError("Meta de lucro inválida")
+        if self.base_stake_currency != "BRL" and self.profit_target_brl > 0:
+            raise ValueError("A meta em BRL exige entrada-base em BRL")
         self.currency = None
         self.base_stake = None
+        self.profit_target = None
         self._exchange_rate = None
         self._exchange_rate_at = 0.0
         self._ws = None
@@ -65,6 +72,7 @@ class DerivOptionsClient:
         self._active_symbols = {}
         self._active_symbols_at = 0.0
         self._contracts_cache = {}
+        self._sell_requested = set()
 
     def _headers(self):
         return {
@@ -137,6 +145,9 @@ class DerivOptionsClient:
         self._exchange_rate = rate
         self._exchange_rate_at = time.monotonic()
         self.base_stake = float((self.base_stake_amount * rate).quantize(
+            Decimal("0.01"), rounding=ROUND_UP
+        ))
+        self.profit_target = float((self.profit_target_brl * rate).quantize(
             Decimal("0.01"), rounding=ROUND_UP
         ))
         if not math.isfinite(self.base_stake) or self.base_stake <= 0:
@@ -466,9 +477,28 @@ class DerivOptionsClient:
         if not isinstance(contract, dict):
             return False, None
         status = contract.get("status")
+        raw_profit = contract.get("profit", "0")
+        try:
+            profit = float(raw_profit)
+        except (TypeError, ValueError, OverflowError):
+            raise DerivAPIError("ValidationError") from None
+        if not math.isfinite(profit):
+            raise DerivAPIError("ValidationError")
+        if status == "open":
+            can_sell = contract.get("is_valid_to_sell") == 1
+            if (can_sell and self.profit_target is not None
+                    and profit >= self.profit_target
+                    and contract_id not in self._sell_requested):
+                self._sell_requested.add(contract_id)
+                try:
+                    self._request({"sell": contract_id, "price": 0})
+                except Exception:
+                    self._sell_requested.discard(contract_id)
+                    raise
+            return False, None
         if status not in ("won", "lost", "sold", "cancelled"):
             return False, None
-        raw_profit = contract.get("profit", "0")
+        self._sell_requested.discard(contract_id)
         try:
             profit = float(raw_profit)
         except (TypeError, ValueError, OverflowError):

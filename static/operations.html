@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#f5f7fb"><meta name="description" content="Acompanhe suas operações Deriv DEMO em reais.">
+<meta name="theme-color" content="#f5f7fb"><meta name="description" content="Acompanhe suas operações IQ Option PRACTICE em reais.">
 <link rel="manifest" href="/static/operations.webmanifest">
 <title>Operações · Baskaraido Trader PRO</title>
 <style>
@@ -25,9 +25,9 @@ h1{font-size:24px;letter-spacing:-.5px;margin:0}h2{font-size:17px;margin:23px 3p
 </style>
 </head>
 <body><main>
-<header><div><div class="brand">Operações</div><p class="sub">Acompanhe suas operações em tempo real.</p></div><span class="demo">DERIV · DEMO</span></header>
+<header><div><div class="brand">Operações</div><p class="sub">Acompanhe suas operações em tempo real.</p></div><span class="demo">IQ OPTION · PRACTICE</span></header>
 <div id="status" class="status"><div><strong>Conectando ao robô</strong><small>Leitura somente de conta demo</small></div><span id="robotBadge" class="badge">AGUARDANDO</span></div>
-<div id="tokenPanel" class="token-panel"><div class="token-row"><input id="token" type="password" autocomplete="off" placeholder="Token MONITOR_API_TOKEN" aria-label="Token de monitoramento"><button id="connect" class="btn">Conectar</button></div><div class="hint">O token fica apenas na sessão deste navegador. Não use o token da Deriv.</div></div>
+<div id="tokenPanel" class="token-panel"><div class="token-row"><input id="token" type="password" autocomplete="off" placeholder="Token MONITOR_API_TOKEN" aria-label="Token de monitoramento"><button id="connect" class="btn">Conectar</button></div><div class="hint">O token fica apenas na sessão deste navegador. Não use sua senha da IQ Option neste campo.</div></div>
 <div id="error" class="notice hide"></div>
 <div class="summary"><div class="label">Saldo inicial</div><div id="startBalance" class="money">—</div><div id="startHint" class="under">Saldo na primeira conexão desta sessão</div></div>
 <div class="summary"><div class="label">Saldo atual da conta demo</div><div class="balance-line"><div id="balance" class="money">—</div><span id="pnl" class="change">—</span></div><div id="balanceHint" class="under">Resultado líquido desta sessão</div></div>
@@ -38,7 +38,7 @@ h1{font-size:24px;letter-spacing:-.5px;margin:0}h2{font-size:17px;margin:23px 3p
 <section id="chart" class="chart-card" aria-label="Gráfico do resultado líquido acumulado"><div class="empty">O gráfico aparecerá quando houver operações encerradas.</div></section>
 <h2>Operações recentes</h2><nav class="filters" aria-label="Filtrar operações"><button class="filter active" data-filter="ALL">Todas</button><button class="filter" data-filter="WIN">WIN</button><button class="filter" data-filter="LOSS">LOSS</button><button class="filter" data-filter="EMPATE">Empate</button></nav>
 <section id="history" class="operation-list"><div class="empty">As operações encerradas aparecerão aqui.</div></section>
-<footer class="foot">Valores convertidos para reais pela cotação de referência diária. São aproximados e podem diferir da conversão da Deriv.<br>O histórico mostrado é temporário e reinicia quando o robô reinicia.</footer>
+<footer class="foot">Valores convertidos para reais pela cotação de referência diária. São aproximados e podem diferir da conversão exibida na IQ Option.<br>O histórico mostrado é temporário e reinicia quando o robô reinicia.</footer>
 </main>
 <script>
 const $=id=>document.getElementById(id),fmtNum=n=>(n===null||n===undefined||n==="")?"—":Number.isFinite(Number(n))?new Intl.NumberFormat("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(n)):"—";

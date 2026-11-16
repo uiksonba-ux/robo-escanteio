@@ -1565,7 +1565,7 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao):
         log.warning("DISPONIBILIDADE DIGITAL INDISPONIVEL | tipo=%s", type(erro).__name__)
         return recusar("disponibilidade_digital_nao_confirmada")
     if disponibilidade is False:
-        bloquear(ativo, expiracao, "instrumento Options fechado na Deriv")
+        bloquear(ativo, expiracao, "instrumento digital fechado na IQ Option")
         return recusar("instrumento_digital_fechado")
     if disponibilidade is not True:
         return recusar("disponibilidade_digital_nao_confirmada")
@@ -2188,7 +2188,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                     "PRE-STOP PREVENTIVO | banca=%s | ativo=%s | "
                     "perda_confirmada=R$ %.2f | proxima_entrada=R$ %.2f | "
                     "limite=R$ %.2f | conta=DEMO",
-                    banca, ativo, perda_confirmada, valor, PRE_STOP_LOSS_USD
+                    banca, ativo, perda_confirmada, valor, PRE_STOP_LOSS_BRL
                 )
                 return False, "pre_stop_loss", operacoes_ativas.get(banca)
             if valor > disponivel or valor < ENTRADA_MINIMA:
@@ -3096,7 +3096,7 @@ def app_service_worker():
 
 # ============================================================
 # API DE MONITORAMENTO - SOMENTE LEITURA / DEMO
-# Não habilita ordens e não expõe credenciais da Deriv/Telegram.
+# Não habilita ordens e não expõe credenciais IQ Option/Telegram.
 # Token deve ser configurado em MONITOR_API_TOKEN no servidor.
 # ============================================================
 

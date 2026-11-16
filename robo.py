@@ -11,14 +11,14 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, request
-from deriv_client import DerivOptionsClient
+from iq_option_client import IQOptionClient
 
 
 # ============================================================
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-OPPOSITE-PAIRS-GALE2-X3-RECOVERY100-PRESTOP100"
+VERSAO = "BASKARAIDO-IQ-PRACTICE-DIGITAL-10B-GALE2-X3-RECOVERY100-PRESTOP100"
 
 app = Flask(__name__)
 
@@ -107,9 +107,8 @@ def env_bool(nome, padrao=False):
 # CONFIGURAÇÕES
 # ============================================================
 
-DERIV_APP_ID = os.getenv("DERIV_APP_ID", "").strip()
-DERIV_TOKEN = os.getenv("DERIV_TOKEN", "").strip()
-DERIV_DEMO_ACCOUNT_ID = os.getenv("DERIV_DEMO_ACCOUNT_ID", "").strip()
+IQ_EMAIL = os.getenv("IQ_EMAIL", "").strip()
+IQ_PASSWORD = os.getenv("IQ_PASSWORD", "").strip()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -186,6 +185,7 @@ MAX_GALES = 2
 
 RECUPERACAO_PERCENTUAL = 1.0
 PRE_STOP_LOSS_USD = 100.0
+PRE_STOP_LOSS_BRL = None
 
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
@@ -195,7 +195,7 @@ QTD_BANCAS = 10
 # Assertividade com resultados reais; as janelas individuais reiniciam juntas a cada 300 sinais gerais encerrados.
 
 # Entrada-base fixa em USD; a progressão de gale é independente da assertividade.
-ENTRADA_BASE_USD = 0.35
+ENTRADA_BASE_BRL = 2.00
 
 
 
@@ -215,8 +215,8 @@ def agora_brasil():
 # ============================================================
 
 def obter_entrada_base(saldo=None):
-    """Retorna sempre a entrada fixa de USD 0.35 para a conta DEMO."""
-    return float(ENTRADA_BASE_USD)
+    """Retorna a entrada fixa de R$ 2,00 para a conta PRACTICE."""
+    return float(ENTRADA_BASE_BRL)
 
 
 # ============================================================
@@ -472,13 +472,13 @@ def conectado():
 
 def _confirmar_practice_sincrono(cliente):
     # O adapter só abre o endpoint de opções DEMO e valida o account_id configurado.
-    return cliente.get_balance_mode() == "DEMO"
+    return cliente.get_balance_mode() == "PRACTICE"
 
 
 def _confirmar_practice(cliente):
     confirmado = cliente is not None and cliente.check_connect() and _confirmar_practice_sincrono(cliente)
     if not confirmado:
-        log.error("CONTA DERIV DEMO NAO CONFIRMADA")
+        log.error("CONTA IQ OPTION PRACTICE NAO CONFIRMADA")
     return confirmado
 
 
@@ -505,28 +505,26 @@ def _saldo_practice_sincrono(cliente, exigir_atual=True):
 
 
 def conectar():
-    global api, ultimo_saldo_demo, saldo_inicial_demo, _cliente_conectando, ATIVOS
-    if not DERIV_APP_ID or not DERIV_TOKEN or not DERIV_DEMO_ACCOUNT_ID:
-        log.error("DERIV_APP_ID, DERIV_TOKEN ou DERIV_DEMO_ACCOUNT_ID ausente.")
+    global api, ultimo_saldo_demo, saldo_inicial_demo, _cliente_conectando, ATIVOS, PRE_STOP_LOSS_BRL
+    if not IQ_EMAIL or not IQ_PASSWORD:
+        log.error("IQ_EMAIL ou IQ_PASSWORD ausente.")
         return False
     if not connect_lock.acquire(timeout=1):
-        log.warning("CONEXAO DERIV EM ANDAMENTO | nova tentativa adiada")
+        log.warning("CONEXAO IQ OPTION EM ANDAMENTO | nova tentativa adiada")
         return False
     try:
         if conectado():
             return True
         if _cliente_conectando is None:
-            _cliente_conectando = DerivOptionsClient(
-                DERIV_APP_ID, DERIV_TOKEN, DERIV_DEMO_ACCOUNT_ID,
-                base_stake_amount=ENTRADA_BASE_USD,
-                base_stake_currency="USD",
+            _cliente_conectando = IQOptionClient(
+                IQ_EMAIL, IQ_PASSWORD, base_stake_amount=ENTRADA_BASE_BRL
             )
         nova = _cliente_conectando
         estado, resposta = chamada_api_limitada(
             "connect", lambda: _conectar_na_sessao(nova), 30.0, nova
         )
         if estado != "ok":
-            log.error("CONEXAO DERIV INDISPONIVEL | estado=%s", estado)
+            log.error("CONEXAO IQ OPTION INDISPONIVEL | estado=%s", estado)
             if estado != "timeout":
                 _cliente_conectando = None
             return False
@@ -544,11 +542,11 @@ def conectar():
             return False
 
         estado, simbolos = chamada_api_limitada(
-            "active_symbols", lambda: nova.get_active_symbols(refresh=True),
+            "iq_active_symbols", lambda: nova.get_active_symbols(refresh=True),
             PRAZO_CONSULTA_API, nova
         )
         if estado != "ok" or not isinstance(simbolos, dict) or not simbolos:
-            log.error("CATALOGO DERIV INDISPONIVEL | nenhuma ordem será iniciada")
+            log.error("CATALOGO IQ OPTION INDISPONIVEL | nenhuma ordem será iniciada")
             return False
         ativos = sorted(simbolos)
         if not _sessao_lock.acquire(timeout=PRAZO_CONSULTA_API):
@@ -566,7 +564,8 @@ def conectar():
 
         entrada = obter_entrada_base(saldo)
         moeda = nova.currency
-        log.info("DERIV CONECTADA | conta=DEMO confirmada | moeda=%s | ativos=%s", moeda, len(ativos))
+        PRE_STOP_LOSS_BRL = round(PRE_STOP_LOSS_USD * nova.usd_to_brl, 2)
+        log.info("IQ OPTION CONECTADA | PRACTICE confirmada | moeda=%s | ativos=%s | stop_brl=%.2f", moeda, len(ativos), PRE_STOP_LOSS_BRL)
         telegram(
             "🤖 Baskaraido Trader PRO ONLINE\n"
             "🧪 Corretora: Deriv | Conta: DEMO confirmada\n"

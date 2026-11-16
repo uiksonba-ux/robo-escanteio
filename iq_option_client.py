@@ -55,6 +55,7 @@ class IQOptionClient:
         self._trade_lock = threading.Lock()
         self._symbols_cache = {}
         self._symbols_cache_at = 0.0
+        self._payout_subscriptions = set()
         self.usd_to_brl = None
         if not self.email or not self.password:
             raise ValueError("Configure IQ_EMAIL e IQ_PASSWORD")
@@ -130,48 +131,65 @@ class IQOptionClient:
 
     @staticmethod
     def _read_usd_to_brl():
-        """Use the latest BCB PTAX sell quote, falling back to a recent quote."""
-        today = datetime.now().date()
-        for days_back in range(0, 8):
-            day = today - timedelta(days=days_back)
-            date_text = day.strftime("%m-%d-%Y")
-            url = (
-                "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/"
-                "CotacaoDolarDia(dataCotacao=@dataCotacao)"
+        """Read the latest BCB PTAX sell quote with one bounded request."""
+        hoje = datetime.now().date()
+        data_inicial = (hoje - timedelta(days=14)).strftime("%m-%d-%Y")
+        data_final = hoje.strftime("%m-%d-%Y")
+        url = (
+            "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/"
+            "CotacaoDolarPeriodo(dataInicial=@dataInicial,dataFinalCotacao=@dataFinalCotacao)"
+        )
+        try:
+            response = requests.get(
+                url,
+                params={
+                    "@dataInicial": "'" + data_inicial + "'",
+                    "@dataFinalCotacao": "'" + data_final + "'",
+                    "$top": "20",
+                    "$orderby": "dataHoraCotacao desc",
+                    "$format": "json",
+                },
+                timeout=(2, 4),
             )
-            try:
-                response = requests.get(
-                    url,
-                    params={"@dataCotacao": "'" + date_text + "'", "$format": "json"},
-                    timeout=5,
-                )
-                response.raise_for_status()
-                rows = response.json().get("value", [])
-                rates = [float(row["cotacaoVenda"]) for row in rows
-                         if isinstance(row, dict) and row.get("cotacaoVenda")]
-                if rates and math.isfinite(rates[-1]) and rates[-1] > 0:
-                    return rates[-1]
-            except Exception:
-                continue
+            response.raise_for_status()
+            rows = response.json().get("value", [])
+            for row in rows if isinstance(rows, list) else []:
+                try:
+                    rate = float(row["cotacaoVenda"])
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    continue
+                if math.isfinite(rate) and rate > 0:
+                    return rate
+        except Exception:
+            pass
         raise IQOptionError("UsdBrlRateUnavailable")
 
     def get_active_symbols(self, refresh=False):
+        """Return currency-pair candidates; payout is checked before any order.
+
+        The community SDK's get_all_open_time() waits 30 seconds for the
+        digital-underlying feed and can time out indefinitely when that feed
+        is unavailable. Its active-name map is local and non-blocking; live
+        digital availability is enforced separately by get_digital_payout().
+        """
         now = time.monotonic()
-        if not refresh and self._symbols_cache and now - self._symbols_cache_at < 30:
+        if not refresh and self._symbols_cache and now - self._symbols_cache_at < 300:
             return dict(self._symbols_cache)
         with self._lock:
             if not self.check_connect():
                 raise IQOptionError("Disconnected")
-            raw = self.api.get_all_open_time()
-        digital = raw.get("digital", {}) if isinstance(raw, dict) else {}
-        if not isinstance(digital, dict):
+            try:
+                active_map = self.api.get_all_ACTIVES_OPCODE()
+            except Exception:
+                raise IQOptionError("DigitalCatalogUnavailable") from None
+        if not isinstance(active_map, dict):
             raise IQOptionError("DigitalCatalogUnavailable")
         symbols = {}
-        for symbol, status in digital.items():
-            if not isinstance(symbol, str) or not isinstance(status, dict):
-                continue
-            if status.get("open") is True and self._is_currency_pair(symbol):
-                symbols[symbol.upper()] = {"market": "digital", "open": True}
+        for symbol in active_map:
+            if isinstance(symbol, str) and self._is_currency_pair(symbol):
+                symbols[symbol.upper()] = {"market": "digital", "candidate": True}
+        if not symbols:
+            raise IQOptionError("DigitalCatalogUnavailable")
         self._symbols_cache = symbols
         self._symbols_cache_at = now
         return dict(symbols)
@@ -191,19 +209,38 @@ class IQOptionClient:
         return rows if isinstance(rows, list) else []
 
     def get_digital_payout(self, symbol, duration):
-        if int(duration) not in (1, 5, 15) or not self.is_symbol_tradeable(symbol):
+        duration = int(duration)
+        symbol = str(symbol or "").upper()
+        if duration not in (1, 5, 15) or not self.is_symbol_tradeable(symbol):
             return None
         with self._lock:
             if not self.check_connect():
                 return None
-            raw = self.api.get_digital_current_profit(symbol, int(duration))
-        try:
-            value = float(raw)
-        except (TypeError, ValueError, OverflowError):
-            return None
-        if not math.isfinite(value) or value <= 0:
-            return None
-        return value / 100.0 if value > 1 else value
+            key = (symbol, duration)
+            try:
+                if key not in self._payout_subscriptions:
+                    self.api.subscribe_strike_list(symbol, duration)
+                    self._payout_subscriptions.add(key)
+            except Exception:
+                return None
+
+            # Quotes arrive asynchronously. A pair is considered tradable only
+            # after the broker supplies a valid digital payout.
+            deadline = time.monotonic() + 2.5
+            raw = None
+            while time.monotonic() < deadline:
+                try:
+                    raw = self.api.get_digital_current_profit(symbol, duration)
+                except Exception:
+                    raw = None
+                try:
+                    value = float(raw)
+                except (TypeError, ValueError, OverflowError):
+                    value = 0.0
+                if math.isfinite(value) and value > 0:
+                    return value / 100.0 if value > 1 else value
+                time.sleep(0.1)
+        return None
 
     def is_contract_available(self, symbol, contract_type, duration):
         return (str(contract_type).upper() in ("CALL", "PUT")

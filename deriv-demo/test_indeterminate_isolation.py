@@ -162,11 +162,10 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.MAX_GALES, 0)
         self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 0.0)
         self.assertEqual(robo.PRE_STOP_LOSS_USD, 0.0)
-        with mock.patch.object(robo, "PRE_STOP_LOSS_BRL", 560.0):
-            self.assertFalse(robo.pre_stop_loss_atingido(559.65, 0.35))
-            self.assertFalse(robo.pre_stop_loss_atingido(559.66, 0.35))
-            self.assertFalse(robo.pre_stop_loss_atingido(559.99, 0.0))
-            self.assertFalse(robo.pre_stop_loss_atingido(560.0, 0.0))
+        self.assertFalse(robo.pre_stop_loss_atingido(559.65, 0.35))
+        self.assertFalse(robo.pre_stop_loss_atingido(559.66, 0.35))
+        self.assertFalse(robo.pre_stop_loss_atingido(559.99, 0.0))
+        self.assertFalse(robo.pre_stop_loss_atingido(560.0, 0.0))
         self.assertEqual(
             robo.valores_do_ciclo(robo.ENTRADA_BASE_BRL),
             [20.0],

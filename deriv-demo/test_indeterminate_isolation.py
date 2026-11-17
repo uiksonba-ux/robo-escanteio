@@ -138,13 +138,11 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
 
         self.assertEqual(len(robo._extrato_corresponde_ao_envio(rows, envio)), 2)
 
-    def test_recovery_entry_covers_full_loss_plus_base_profit(self):
-        with mock.patch.object(robo, "obter_entrada_base", return_value=2.0):
-            alvo = robo.calcular_alvo_recuperacao(4.55)
-            self.assertEqual(alvo, 4.55)
-            self.assertEqual(robo.calcular_entrada_recuperacao(alvo, 0.89), 7.36)
+    def test_recovery_is_disabled_and_all_entries_use_base(self):
+        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 0.0)
+        self.assertEqual(robo.valores_do_ciclo(robo.ENTRADA_BASE_BRL), [20.0])
 
-    def test_requested_base_gale_and_recovery_settings(self):
+    def test_requested_base_gale_and_no_recovery_settings(self):
         self.assertEqual(robo.QTD_BANCAS, 10)
         self.assertEqual(len(robo.BANCAS), 10)
         self.assertEqual(robo.BANCAS, [f"BANCA {i}" for i in range(1, 11)])
@@ -158,7 +156,8 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         )
         self.assertEqual(robo.GALES_POR_CICLO, 0)
         self.assertEqual(robo.MAX_GALES, 0)
-        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
+        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 0.0)
+        self.assertEqual(set(robo.TIMEFRAMES), {5, 15})
         self.assertEqual(robo.PRE_STOP_LOSS_BRL, 100.0)
         with mock.patch.object(robo, "obter_limite_pre_stop_loss_conta", return_value=100.0):
             self.assertFalse(robo.pre_stop_loss_atingido(99.64, 0.35))
@@ -169,7 +168,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             [20.0],
         )
 
-    def test_successful_recovery_clears_only_that_bank_pending_loss(self):
+    def test_finalized_win_clears_bank_deficit_without_recovery(self):
         banca_a, banca_b = robo.BANCAS[:2]
         with robo.estado_lock:
             robo.operacoes_ativas.clear()
@@ -183,7 +182,6 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
                     prejuizo_acumulado=0.0,
                     envio_indeterminado=False,
                 )
-            robo.estado_frentes[banca_a]["recuperacao_pendente"] = 0.35
             robo.estado_frentes[banca_a]["resultado_liquido"] = -0.35
             robo.operacoes_ativas[banca_a] = {
                 "primeira_ordem": "TEST-RECOVERY-WIN",
@@ -194,7 +192,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.0)
         self.assertEqual(robo.prejuizo_banca_atual(banca_b), 0.0)
 
-    def test_new_loss_is_added_to_pending_recovery_debt(self):
+    def test_new_loss_updates_bank_deficit_without_recovery_debt(self):
         banca_a, banca_b = robo.BANCAS[:2]
         with robo.estado_lock:
             robo.operacoes_ativas.clear()
@@ -208,16 +206,15 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
                     prejuizo_acumulado=0.0,
                     envio_indeterminado=False,
                 )
-            robo.estado_frentes[banca_a]["recuperacao_pendente"] = 0.35
             robo.estado_frentes[banca_a]["resultado_liquido"] = -0.35
             robo.operacoes_ativas[banca_a] = {
                 "primeira_ordem": "TEST-DEFERRED-LOSS",
                 "resultado_centavos": -35,
                 "prejuizo_alocado": 0.0,
-                "recuperacao_diferida": True,
             }
         robo.finalizar_operacao_global(banca_a)
-        self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.70)
+        self.assertEqual(robo.estado_frentes[banca_a]["prejuizo_acumulado"], 0.70)
+        self.assertEqual(robo.estado_frentes[banca_a]["recuperacao_pendente"], 0.0)
         self.assertEqual(robo.prejuizo_banca_atual(banca_b), 0.0)
 
     def test_single_bank_reservation_preserves_signal_direction_and_rotates(self):
@@ -230,7 +227,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
                     timeframe=None, expiracao=None, envio_indeterminado=False,
                 )
             robo.proxima_banca_indice = 0
-        primeira = robo.reservar_banca("R_50", "call", 82, 1, 1)
+        primeira = robo.reservar_banca("R_50", "call", 82, 5, 5)
         segunda = robo.reservar_banca("BOOM100", "put", 78, 5, 5)
         self.assertEqual((primeira, segunda), ("BANCA 1", "BANCA 2"))
         self.assertEqual(robo.estado_frentes["BANCA 1"]["direcao"], "call")
@@ -331,7 +328,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             with self.subTest(accuracy=accuracy):
                 self.assertEqual(robo.gales_por_assertividade(accuracy), expected_gales)
 
-    def test_loss_with_positive_bank_net_does_not_trigger_recovery(self):
+    def test_loss_with_positive_bank_net_does_not_create_recovery_debt(self):
         banca_a, banca_b = robo.BANCAS[:2]
         with robo.estado_lock:
             robo.operacoes_ativas.clear()
@@ -372,7 +369,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         )
 
         with robo.estado_lock:
-            # A banca vinha lucrativa, mas uma perda nova gera recuperação própria.
+            # A perda reduz o lucro líquido, sem gerar entrada de recuperação.
             robo.estado_frentes[banca_a]["resultado_liquido"] = 0.62
             robo.operacoes_ativas[banca_a] = {
                 "primeira_ordem": "TEST-LOSS-A",
@@ -386,17 +383,8 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.prejuizo_global_atual(), 0.0)
         self.assertAlmostEqual(robo.estado_frentes[banca_a]["resultado_liquido"], 0.27)
 
-        with mock.patch.object(robo, "obter_entrada_base", return_value=0.35):
-            entrada_a = robo.calcular_entrada_recuperacao(
-                robo.calcular_alvo_recuperacao(robo.prejuizo_banca_atual(banca_a)),
-                0.89,
-            )
-            entrada_b = robo.calcular_entrada_recuperacao(
-                robo.calcular_alvo_recuperacao(robo.prejuizo_banca_atual(banca_b)),
-                0.89,
-            )
-        self.assertEqual(entrada_a, 0.40)
-        self.assertEqual(entrada_b, 0.40)
+        self.assertEqual(robo.estado_frentes[banca_a]["recuperacao_pendente"], 0.0)
+        self.assertEqual(robo.estado_frentes[banca_b]["recuperacao_pendente"], 0.0)
 
 class FinalizedSignalScoreboardTests(unittest.TestCase):
     def test_loss_is_counted_when_cycle_closes_after_gale_send_failure(self):

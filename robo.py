@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-BRL20-TAKEPROFIT5-REC100-1BANK-M5M15"
+VERSAO = "BASKARAIDO-DERIV-DEMO-BRL20-TAKEPROFIT5-REC100-1BANK-M1M5M15"
 
 app = Flask(__name__)
 
@@ -227,6 +227,11 @@ def obter_entrada_base(saldo=None):
 # ============================================================
 
 TIMEFRAMES = {
+
+    1: {
+        "segundos": 60,
+        "expiracao": 1,
+    },
 
     5: {
         "segundos": 300,
@@ -574,7 +579,7 @@ def conectar():
             f"💰 Saldo DEMO: {saldo:.2f} {moeda}\n"
             f"💵 Entrada-base: {entrada:.2f} {moeda} (R$ {ENTRADA_BASE_BRL:.2f})\n"
             f"🏦 {QTD_BANCAS} banca ativa | gestão individual\n"
-            "⏱ M5 + M15 | Opções digitais CALL/PUT\n"
+            "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             "📈 Entrada-base de R$ 20, sem gale; recuperação de 100% por banca\n"
             "🎯 Meta líquida de R$ 5; a recuperação cobre o déficit + R$ 5\n"
@@ -3037,6 +3042,9 @@ def home():
 
         "timeframes": {
 
+            "M1":
+                "Digital M1",
+
             "M5":
                 "Digital M5",
 
@@ -3214,6 +3222,7 @@ def health():
 
         "timeframes":
             [
+                "M1",
                 "M5",
                 "M15"
             ],
@@ -3248,7 +3257,7 @@ log.info(
 )
 
 log.info(
-    "TIMEFRAMES = M5 + M15"
+    "TIMEFRAMES = M1 + M5 + M15"
 )
 
 log.info(
@@ -3270,7 +3279,7 @@ log.info(
     "GESTÃO INDIVIDUAL | 1 BANCA ATIVA | cada sinal abre uma operação na direção do sinal | "
     "SEM GALE; RECUPERACAO 100% DO DEFICIT LIQUIDO; PRE-STOP LOSS BRL 100 | "
     "ENTRADA BASE BRL 20.00; META DE LUCRO BRL 5.00 | "
-    "TIMEFRAMES ATIVOS: M5 E M15 | "
+    "TIMEFRAMES ATIVOS: M1, M5 E M15 | "
     "ASSERTIVIDADE REAL; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados"
 )
 

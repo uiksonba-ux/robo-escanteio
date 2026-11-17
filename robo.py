@@ -2361,16 +2361,13 @@ def finalizar_operacao_global(banca):
             dados["resultado_liquido"] = local / 100
             dados["prejuizo_acumulado"] = max(0, -local) / 100
 
-            # Não acumula dívida de recuperação quando a recuperação está desativada.
+            # Recupera somente se o resultado acumulado desta banca ficou negativo.
             if RECUPERACAO_PERCENTUAL <= 0:
                 dados["recuperacao_pendente"] = 0.0
             else:
-                pendente = max(0.0, float(dados.get("recuperacao_pendente", 0.0)))
-                if resultado_operacao < 0:
-                    pendente += abs(resultado_operacao) / 100
-                elif resultado_operacao > 0:
-                    pendente = max(0.0, pendente - (resultado_operacao / 100))
-                dados["recuperacao_pendente"] = round(pendente, 2)
+                dados["recuperacao_pendente"] = round(
+                    dados["prejuizo_acumulado"] * RECUPERACAO_PERCENTUAL, 2
+                )
             historico_operacoes.append({
                 "data": agora_brasil().isoformat(),
                 "data_sinal": (dados.get("ultimo_sinal") or {}).get("data"),

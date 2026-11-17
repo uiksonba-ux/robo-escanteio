@@ -73,6 +73,7 @@ class DerivOptionsClient:
         self._active_symbols_at = 0.0
         self._contracts_cache = {}
         self._sell_requested = set()
+        self._profit_targets = {}
 
     def _headers(self):
         return {
@@ -443,10 +444,20 @@ class DerivOptionsClient:
             ratios.append(ratio)
         return min(ratios) if ratios else None
 
-    def buy_digital_spot_v2(self, symbol, amount, direction, duration):
+    def buy_digital_spot_v2(self, symbol, amount, direction, duration, *, profit_target=None):
         contract_type = {"call": "CALL", "put": "PUT"}.get(str(direction).lower())
         if contract_type is None:
             raise DerivAPIError("ValidationError")
+        target = self.profit_target if profit_target is None else profit_target
+        if target is not None:
+            try:
+                target = float(target)
+            except (TypeError, ValueError, OverflowError):
+                raise DerivAPIError("ValidationError") from None
+            if not math.isfinite(target) or target < 0:
+                raise DerivAPIError("ValidationError")
+            if target <= 0:
+                target = None
         with self._trade_lock:
             self._ensure_connected()
             generation = self._generation
@@ -461,6 +472,8 @@ class DerivOptionsClient:
             contract_id = result.get("contract_id") if isinstance(result, dict) else None
             if isinstance(contract_id, bool) or not isinstance(contract_id, int) or contract_id <= 0:
                 raise DerivAPIError("ValidationError")
+            if target is not None:
+                self._profit_targets[contract_id] = target
             return True, contract_id
 
     def check_win_digital_v2(self, contract_id):
@@ -486,8 +499,9 @@ class DerivOptionsClient:
             raise DerivAPIError("ValidationError")
         if status == "open":
             can_sell = contract.get("is_valid_to_sell") == 1
-            if (can_sell and self.profit_target is not None
-                    and profit >= self.profit_target
+            target = self._profit_targets.get(contract_id, self.profit_target)
+            if (can_sell and target is not None and target > 0
+                    and profit >= target
                     and contract_id not in self._sell_requested):
                 self._sell_requested.add(contract_id)
                 try:
@@ -499,6 +513,7 @@ class DerivOptionsClient:
         if status not in ("won", "lost", "sold", "cancelled"):
             return False, None
         self._sell_requested.discard(contract_id)
+        self._profit_targets.pop(contract_id, None)
         try:
             profit = float(raw_profit)
         except (TypeError, ValueError, OverflowError):

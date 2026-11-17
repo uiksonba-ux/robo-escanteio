@@ -261,6 +261,58 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.taxa_banca_real(banca), 0.0)
         self.assertEqual(robo.gales_por_assertividade(0.0), 4)
 
+    def test_pre_stop_resets_bank_financial_management_and_unpauses(self):
+        banca = robo.BANCAS[0]
+        fields = (
+            "pre_stop_loss_ativo", "pre_stop_loss_count",
+            "pre_stop_loss_ultima_perda", "resultado_liquido",
+            "prejuizo_acumulado", "recuperacao_pendente",
+            "em_recuperacao", "gale_progression_level", "gale_atual",
+            "gales_reativos", "entradas_recuperacao_restantes",
+            "recuperacao_estendida", "ocupada", "ativo",
+        )
+        with robo.estado_lock:
+            dados = robo.estado_frentes[banca]
+            saved = {field: dados[field] for field in fields}
+            dados.update(
+                pre_stop_loss_ativo=True,
+                pre_stop_loss_count=2,
+                pre_stop_loss_ultima_perda=0.0,
+                resultado_liquido=-100.25,
+                prejuizo_acumulado=100.25,
+                recuperacao_pendente=100.25,
+                em_recuperacao=True,
+                gale_progression_level=3,
+                gale_atual=3,
+                gales_reativos=3,
+                entradas_recuperacao_restantes=1,
+                recuperacao_estendida=True,
+                ocupada=False,
+                ativo=None,
+            )
+            recuperacao_antes = robo.recuperacao_pendente_total()
+
+        try:
+            with mock.patch.object(robo, "telegram"):
+                self.assertTrue(robo.reiniciar_gestao_banca_apos_pre_stop(banca, 100.25))
+            dados = robo.estado_frentes[banca]
+            self.assertFalse(dados["pre_stop_loss_ativo"])
+            self.assertEqual(dados["pre_stop_loss_count"], 3)
+            self.assertEqual(dados["pre_stop_loss_ultima_perda"], 100.25)
+            self.assertEqual(dados["resultado_liquido"], 0.0)
+            self.assertEqual(dados["prejuizo_acumulado"], 0.0)
+            self.assertEqual(dados["recuperacao_pendente"], 0.0)
+            self.assertFalse(dados["em_recuperacao"])
+            self.assertEqual(dados["gale_progression_level"], 0)
+            self.assertEqual(dados["gales_reativos"], 0)
+            self.assertEqual(dados["entradas_recuperacao_restantes"], 0)
+            self.assertFalse(dados["recuperacao_estendida"])
+            self.assertEqual(robo.recuperacao_pendente_total(), 0.0)
+            self.assertEqual(recuperacao_antes, 100.25)
+        finally:
+            with robo.estado_lock:
+                robo.estado_frentes[banca].update(saved)
+
     def test_bank_window_restarts_after_300_global_closed_signals(self):
         banca = robo.BANCAS[0]
         fields = ("wins", "losses", "wins_base_janela", "losses_base_janela")

@@ -1951,7 +1951,10 @@ def calcular_entrada_recuperacao(perda_anterior, payout_liquido, saldo=None, luc
     """Dimensiona a entrada para recuperar 100% da dívida e atingir o alvo líquido."""
     perda = Decimal(str(perda_anterior))
     payout = Decimal(str(payout_liquido))
-    lucro = Decimal(str(obter_meta_lucro_conta() if lucro_alvo is None else lucro_alvo))
+    lucro_padrao = obter_meta_lucro_conta()
+    if lucro_padrao <= 0:
+        lucro_padrao = obter_entrada_base(saldo)
+    lucro = Decimal(str(lucro_padrao if lucro_alvo is None else lucro_alvo))
     if (not perda.is_finite() or not payout.is_finite() or payout <= 0
             or not lucro.is_finite() or lucro <= 0):
         raise ValueError("Perda, alvo ou payout de recuperação inválido")

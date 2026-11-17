@@ -2091,7 +2091,7 @@ def snapshot_gestao_global():
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
             "regra_gales": "Desativado; todas as operações usam a entrada-base ou o valor calculado de recuperação.",
-            "regra_recuperacao": "100% por banca: recupera a perda acumulada e busca lucro líquido adicional de R$ 5.",
+            "regra_recuperacao": "Só recupera se o P&L acumulado da banca ficar negativo; cobre o déficit e busca mais R$ 5 líquidos.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }
@@ -2223,7 +2223,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 return False, "saldo_insuficiente", operacoes_ativas.get(banca)
             if nivel == 0 and contexto["prejuizo_alocado"] > 0:
                 recuperacoes_em_curso.add(banca)
-                log.info("RECUPERACAO DIMENSIONADA | banca=%s | ativo=%s | perda_operacao_anterior=%.2f | entrada_com_recuperacao=%.2f | alvo=%.0f%% | conta=DEMO", banca, ativo, contexto["prejuizo_alocado"], valor, RECUPERACAO_PERCENTUAL * 100)
+                log.info("RECUPERACAO DIMENSIONADA | banca=%s | ativo=%s | deficit_liquido_banca=%.2f | entrada_com_recuperacao=%.2f | alvo=%.0f%% | conta=DEMO", banca, ativo, contexto["prejuizo_alocado"], valor, RECUPERACAO_PERCENTUAL * 100)
             reservas_pendentes[banca] = valor
             log.info("SALDO RESERVADO | banca=%s | ativo=%s | nivel=%s | valor=%.2f | saldo=%.2f | disponivel=%.2f | recuperacao=%.2f | conta=DEMO", banca, ativo, nivel, valor, saldo, disponivel, contexto["prejuizo_alocado"])
 
@@ -2361,16 +2361,13 @@ def finalizar_operacao_global(banca):
             dados["resultado_liquido"] = local / 100
             dados["prejuizo_acumulado"] = max(0, -local) / 100
 
-            # Não acumula dívida de recuperação quando a recuperação está desativada.
+            # Recupera somente se o resultado acumulado desta banca ficou negativo.
             if RECUPERACAO_PERCENTUAL <= 0:
                 dados["recuperacao_pendente"] = 0.0
             else:
-                pendente = max(0.0, float(dados.get("recuperacao_pendente", 0.0)))
-                if resultado_operacao < 0:
-                    pendente += abs(resultado_operacao) / 100
-                elif resultado_operacao > 0:
-                    pendente = max(0.0, pendente - (resultado_operacao / 100))
-                dados["recuperacao_pendente"] = round(pendente, 2)
+                dados["recuperacao_pendente"] = round(
+                    dados["prejuizo_acumulado"] * RECUPERACAO_PERCENTUAL, 2
+                )
             historico_operacoes.append({
                 "data": agora_brasil().isoformat(),
                 "data_sinal": (dados.get("ultimo_sinal") or {}).get("data"),
@@ -3311,7 +3308,7 @@ log.info(
 log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
     "PARES 1-6, 2-7, 3-8, 4-9, 5-10: primeira banca segue o sinal, segunda entra ao contrário | "
-    "SEM GALE; RECUPERACAO DE 100% DO PREJUIZO POR BANCA; PRE-STOP LOSS DESATIVADO | "
+    "SEM GALE; RECUPERACAO DE 100% SOMENTE COM BANCA LIQUIDA NEGATIVA; PRE-STOP LOSS DESATIVADO | "
     "ENTRADA BASE BRL 20.00; ENTRADA DE RECUPERACAO CALCULADA PELO PAYOUT | "
     "ASSERTIVIDADE REAL por banca; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados | "
     "META BASE EM BRL 5.00; NA RECUPERACAO, ALVO = PERDA PENDENTE + BRL 5.00"

@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-BRL20-TAKEPROFIT5-FIXED-NOGALET"
+VERSAO = "BASKARAIDO-DERIV-DEMO-BRL20-TAKEPROFIT5-REC100-NOGALET"
 
 app = Flask(__name__)
 
@@ -180,11 +180,11 @@ ENTRADA_MINIMA = 0.01
 MULTIPLICADOR_GALE = 1.0
 MULTIPLICADORES_POR_GALES = {0: 1.0}
 
-# Entrada fixa, sem gale nem recuperação.
+# Entrada-base de R$20; perdas recuperadas integralmente por banca, sem gale.
 GALES_POR_CICLO = 0
 MAX_GALES = 0
 
-RECUPERACAO_PERCENTUAL = 0.0
+RECUPERACAO_PERCENTUAL = 1.0
 PRE_STOP_LOSS_USD = 0.0
 
 # Expired portfolio rows are ignored after a settlement grace period.
@@ -1498,7 +1498,7 @@ def consultar_confirmacao_envio(banca):
     return ok, resultado
 
 
-def _preparar_envio_v2(cliente, ativo, valor, direcao, expiracao):
+def _preparar_envio_v2(cliente, ativo, valor, direcao, expiracao, profit_target=None):
     baixo = getattr(cliente, "api", None)
     # Protocolo v2 verificado no SDK. Acesso direto evita o while/pass sem
     # timeout de buy_digital_spot_v2; não muda produto nem reenvia a ordem.
@@ -1526,10 +1526,13 @@ def _preparar_envio_v2(cliente, ativo, valor, direcao, expiracao):
     if not callable(metodo):
         return None, "biblioteca_sem_buy_digital_spot_v2"
     # Compatibilidade com versões sem o canal v2 público: worker single-flight.
+    if isinstance(cliente, DerivOptionsClient):
+        return {"modo": "wrapper_v2", "funcao": lambda: metodo(
+            ativo, valor, direcao, expiracao, profit_target=profit_target)}, None
     return {"modo": "wrapper_v2", "funcao": lambda: metodo(ativo, valor, direcao, expiracao)}, None
 
 
-def executar_ordem(banca, ativo, valor, direcao, expiracao):
+def executar_ordem(banca, ativo, valor, direcao, expiracao, profit_target=None):
     def recusar(motivo):
         log.warning("ORDEM NAO ENVIADA | banca=%s | ativo=%s | motivo=%s", banca, ativo, motivo)
         return False, motivo
@@ -1587,7 +1590,7 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao):
     if payout <= 0:
         return recusar("payout_digital_indisponivel")
     try:
-        envio, motivo = _preparar_envio_v2(cliente, ativo, valor, direcao, expiracao)
+        envio, motivo = _preparar_envio_v2(cliente, ativo, valor, direcao, expiracao, profit_target)
     except Exception as erro:
         log.warning("PREFLIGHT DIGITAL FALHOU | tipo=%s", type(erro).__name__)
         return recusar("instrumento_ou_sessao_invalido")
@@ -1935,16 +1938,26 @@ def calcular_alvo_recuperacao(prejuizo):
     return float(max(Decimal("0"), valor) * percentual)
 
 
-def calcular_entrada_recuperacao(perda_anterior, payout_liquido, saldo=None):
-    """Dimensiona a entrada para recuperar a dívida e obter o lucro-base líquido."""
+def obter_meta_lucro_conta():
+    """Retorna a meta do contrato na moeda da conta Deriv."""
+    try:
+        valor = float(getattr(api, "profit_target", 0.0))
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return valor if math.isfinite(valor) and valor > 0 else 0.0
+
+
+def calcular_entrada_recuperacao(perda_anterior, payout_liquido, saldo=None, lucro_alvo=None):
+    """Dimensiona a entrada para recuperar 100% da dívida e atingir o alvo líquido."""
     perda = Decimal(str(perda_anterior))
     payout = Decimal(str(payout_liquido))
-    if not perda.is_finite() or not payout.is_finite() or payout <= 0:
-        raise ValueError("Perda ou payout de recuperação inválido")
+    lucro = Decimal(str(obter_meta_lucro_conta() if lucro_alvo is None else lucro_alvo))
+    if (not perda.is_finite() or not payout.is_finite() or payout <= 0
+            or not lucro.is_finite() or lucro <= 0):
+        raise ValueError("Perda, alvo ou payout de recuperação inválido")
     perda = max(Decimal("0"), perda)
     alvo_liquido = (
-        Decimal(str(obter_entrada_base(saldo)))
-        + perda * Decimal(str(RECUPERACAO_PERCENTUAL))
+        lucro + perda * Decimal(str(RECUPERACAO_PERCENTUAL))
     )
     entrada = (alvo_liquido / payout).quantize(
         Decimal("0.01"), rounding=ROUND_UP)
@@ -2075,7 +2088,7 @@ def snapshot_gestao_global():
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
             "regra_gales": "Desativado; todas as operações usam entrada fixa.",
-            "regra_recuperacao": "Desativada.",
+            "regra_recuperacao": "100% por banca: recupera a perda acumulada e busca lucro líquido adicional de R$ 5.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }
@@ -2133,6 +2146,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             obter_payout_digital(ativo, expiracao)
             if precisa_recuperacao else None
         )
+        meta_lucro_base = obter_meta_lucro_conta()
 
         with estado_lock:
             ultimo_saldo_demo = saldo
@@ -2142,11 +2156,13 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 perda_anterior = estado_frentes[banca]["recuperacao_pendente"]
                 alvo = calcular_alvo_recuperacao(perda_anterior)
                 base = obter_entrada_base(saldo)
+                if meta_lucro_base <= 0:
+                    return False, "meta_lucro_indisponivel", operacoes_ativas.get(banca)
                 if alvo > 0:
                     if payout_recuperacao is None or payout_recuperacao <= 0:
                         return False, "payout_recuperacao_indisponivel", operacoes_ativas.get(banca)
                     entrada_base_gale = calcular_entrada_recuperacao(
-                        alvo, payout_recuperacao, saldo)
+                        alvo, payout_recuperacao, saldo, lucro_alvo=meta_lucro_base)
                 else:
                     entrada_base_gale = base
                 # A recuperação substitui a entrada do nível atual; o x3 vale para os gales seguintes.
@@ -2163,6 +2179,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                             "base": base,
                             "entrada": entrada_inicial,
                             "prejuizo_alocado": alvo,
+                            "meta_lucro_contrato": round(meta_lucro_base + alvo, 2),
                             "recuperacao_diferida": False,
                             "resultado_centavos": 0,
                             "primeira_ordem": None,
@@ -2208,7 +2225,10 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             log.info("SALDO RESERVADO | banca=%s | ativo=%s | nivel=%s | valor=%.2f | saldo=%.2f | disponivel=%.2f | recuperacao=%.2f | conta=DEMO", banca, ativo, nivel, valor, saldo, disponivel, contexto["prejuizo_alocado"])
 
         try:
-            ok, order_id = executar_ordem(banca, ativo, valor, direcao, expiracao)
+            ok, order_id = executar_ordem(
+                banca, ativo, valor, direcao, expiracao,
+                profit_target=contexto.get("meta_lucro_contrato", obter_meta_lucro_conta())
+            )
         except Exception as erro:
             ok, order_id = None, type(erro).__name__
 
@@ -2431,9 +2451,11 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         valores = valores_do_ciclo(
             contexto["entrada"], gales, MULTIPLICADOR_GALE
         )
-        log.info("GESTÃO FIXA | banca=%s | operação=%s | assertividade=%.2f%% | entrada=%s %.2f | meta_lucro=BRL 5 | gale=desativado | recuperação=desativada",
+        log.info("GESTAO | banca=%s | operação=%s | assertividade=%.2f%% | entrada=%s %.2f | meta_contrato=%s %.2f | gale=desativado | recuperação=%.0f%%",
                  banca, contexto["numero"], contexto["assertividade_banca"],
-                 getattr(api, "currency", "USD"), contexto["entrada"])
+                 getattr(api, "currency", "USD"), contexto["entrada"],
+                 getattr(api, "currency", "USD"), contexto["meta_lucro_contrato"],
+                 RECUPERACAO_PERCENTUAL * 100)
         with estado_lock:
             estado_frentes[banca]["ultimo_sinal"] = {
                 "ativo": ativo, "direcao": direcao, "score": score,
@@ -2453,8 +2475,8 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                  f"🏦 {banca}\n💱 {ativo}\n🎯 {direcao.upper()}\n"
                  f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n🔥 Score: {score}/100\n"
                  f"🔢 Operação da {banca}: {contexto['numero']} / assertividade {contexto['assertividade_banca']:.2f}%\n"
-                 f"🛡 Sem gale | entrada fixa R$ 20\n💰 {sequencia}\n"
-                 "🎯 Sem gale nem recuperação; meta R$ 5\n🧪 Deriv DEMO")
+                 f"🛡 Sem gale | entrada-base R$ 20 | recuperação {RECUPERACAO_PERCENTUAL:.0%} por banca\n💰 {sequencia}\n"
+                 "🎯 Alvo base R$ 5; na recuperação, prejuízo pendente + R$ 5\n🧪 Deriv DEMO")
 
         for nivel in range(gales + 1):
             if nivel > 0:

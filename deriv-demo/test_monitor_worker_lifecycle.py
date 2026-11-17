@@ -39,6 +39,21 @@ class MonitorWorkerLifecycleTests(unittest.TestCase):
         self.assertEqual(first.name, "worker-deriv-demo")
         info.assert_called_once()
 
+    def test_worker_starts_scanners_for_each_enabled_timeframe(self):
+        with (
+            mock.patch.object(robo, "conectar", return_value=True),
+            mock.patch.object(robo, "aguardar_portfolio_demo_sem_posicoes"),
+            mock.patch.object(robo, "iniciar_scanner") as start_scanner,
+            mock.patch.object(robo.threading, "Thread") as thread_class,
+        ):
+            robo.worker()
+
+        self.assertEqual(
+            start_scanner.call_args_list,
+            [mock.call(1, 0), mock.call(5, 2), mock.call(15, 4)],
+        )
+        thread_class.assert_called_once()
+
     def test_import_does_not_start_trading_worker(self):
         self.assertIsNone(self.original_thread)
 

@@ -46,7 +46,7 @@ class MonitorWorkerLifecycleTests(unittest.TestCase):
             mock.patch.object(robo, "iniciar_scanner") as start_scanner,
             mock.patch.object(robo.threading, "Thread") as thread_class,
         ):
-            robo.worker()
+            self.original_worker()
 
         self.assertEqual(
             start_scanner.call_args_list,

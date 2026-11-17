@@ -185,7 +185,7 @@ GALES_POR_CICLO = 0
 MAX_GALES = 0
 
 RECUPERACAO_PERCENTUAL = 1.0
-PRE_STOP_LOSS_USD = 0.0
+PRE_STOP_LOSS_BRL = 100.00
 
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
@@ -257,8 +257,6 @@ BANCAS = [
     )
 ]
 
-PARES_BANCAS = tuple((BANCAS[i], BANCAS[i + 5]) for i in range(5))
-DIRECAO_OPPOSTA = {"call": "put", "put": "call"}
 
 
 # ============================================================
@@ -279,7 +277,7 @@ connect_lock = threading.Lock()
 estado_lock = threading.RLock()
 
 ativos_em_uso = set()
-proximo_par_banca = 0
+proxima_banca_indice = 0
 bloqueados = {}
 ativos_validos = set()
 contador_sinais = 0
@@ -372,6 +370,7 @@ estado_frentes = {
 
         "prejuizo_acumulado": 0.0,
         "pre_stop_loss_count": 0,
+        "pre_stop_loss_ativo": False,
         "pre_stop_loss_ultima_perda": 0.0,
         "recuperacao_pendente": 0.0,
         "entradas_recuperacao_restantes": 0,
@@ -1967,43 +1966,40 @@ def calcular_entrada_recuperacao(perda_anterior, payout_liquido, saldo=None, luc
     return float(entrada)
 
 
+def obter_limite_pre_stop_loss_conta():
+    """Converte o limite de R$100 usando a conversão da entrada-base da Deriv."""
+    cliente = api or _cliente_conectando
+    entrada_conta = getattr(cliente, "base_stake", None) if cliente is not None else None
+    if entrada_conta is None:
+        return ENTRADA_BASE_BRL * (PRE_STOP_LOSS_BRL / ENTRADA_BASE_BRL)
+    return float(entrada_conta) * (PRE_STOP_LOSS_BRL / ENTRADA_BASE_BRL)
+
+
 def pre_stop_loss_atingido(perda_confirmada, proxima_entrada=0.0):
-    """Retorna se o pré-stop estiver habilitado e o limite for atingido."""
+    """Aciona o limite por banca antes de exceder R$100 de prejuízo líquido."""
     perda_centavos = max(0, em_centavos(perda_confirmada))
     proxima_centavos = max(0, em_centavos(proxima_entrada))
-    if PRE_STOP_LOSS_USD <= 0:
-        return False
-    limite_centavos = em_centavos(PRE_STOP_LOSS_USD)
-    return (
-        perda_centavos >= limite_centavos
-        or perda_centavos + proxima_centavos > limite_centavos
-    )
+    limite_centavos = em_centavos(obter_limite_pre_stop_loss_conta())
+    return perda_centavos >= limite_centavos or perda_centavos + proxima_centavos > limite_centavos
 
 
 def reiniciar_gestao_banca_apos_pre_stop(banca, perda_operacao):
-    """Reinicia somente a gestão desta banca e preserva placar, histórico e P&L."""
+    """Pausa somente esta banca e preserva o histórico e o déficit de recuperação."""
     with estado_lock:
         dados = estado_frentes[banca]
-        dados["entrada_atual"] = obter_entrada_base()
-        dados["recuperacao_pendente"] = 0.0
-        dados["entradas_recuperacao_restantes"] = 0
-        dados["recuperacao_estendida"] = False
-        dados["em_recuperacao"] = False
-        dados["gale_atual"] = 0
-        dados["gale_progression_level"] = 0
-        dados["gales_reativos"] = 0
+        dados["pre_stop_loss_ativo"] = True
         dados["pre_stop_loss_count"] += 1
         dados["pre_stop_loss_ultima_perda"] = round(float(perda_operacao), 2)
     log.warning(
-        "PRE-STOP LOSS | banca=%s | perda_operacao=USD %.2f/%.2f | "
-        "gestao_reiniciada=true | historico_e_pnl_preservados=true | conta=DEMO",
-        banca, perda_operacao, PRE_STOP_LOSS_USD
+        "PRE-STOP LOSS | banca=%s | perda_conta=%.2f | limite_brl=%.2f | "
+        "banca_pausada=true | deficit_recuperacao_preservado=true | conta=DEMO",
+        banca, perda_operacao, PRE_STOP_LOSS_BRL
     )
     telegram(
         f"🛑 PRÉ STOP-LOSS | {banca}\n"
-        f"Perda acumulada da operação: USD {perda_operacao:.2f} | "
-        f"limite: USD {PRE_STOP_LOSS_USD:.2f}\n"
-        "Gestão desta banca reiniciada; P&L e histórico preservados. Deriv DEMO"
+        f"Prejuízo líquido: {perda_operacao:.2f} na moeda da conta "
+        f"(limite R$ {PRE_STOP_LOSS_BRL:.2f}).\n"
+        "Banca pausada; recuperação pendente preservada. Deriv DEMO"
     )
     return True
 
@@ -2021,8 +2017,9 @@ def processar_pre_stop_loss(banca, ativo):
             )
             return False
         perda = (
-            max(0, -contexto["resultado_centavos"]) / 100
-            if contexto else 0.0
+            max(0, -em_centavos(estado_frentes[banca]["resultado_liquido"])
+                - int(contexto["resultado_centavos"])) / 100
+            if contexto else max(0, -em_centavos(estado_frentes[banca]["resultado_liquido"])) / 100
         )
     if contexto is not None:
         # O finalizador registra P&L, histórico e placar de forma idempotente.
@@ -2081,8 +2078,9 @@ def snapshot_gestao_global():
                 for nivel in range(MAX_GALES + 1)
             },
             "multiplicador_gale": MULTIPLICADOR_GALE,
-            "pre_stop_loss_usd": PRE_STOP_LOSS_USD,
-            "regra_pre_stop_loss": "Desativado",
+            "pre_stop_loss_brl": PRE_STOP_LOSS_BRL,
+            "pre_stop_loss_conta": obter_limite_pre_stop_loss_conta(),
+            "regra_pre_stop_loss": "Pausa a banca antes de exceder R$ 100 de prejuízo líquido.",
             "multiplicadores_por_gales": {str(nivel): valor for nivel, valor in MULTIPLICADORES_POR_GALES.items()},
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "envio_indeterminado": dict(next(iter(envios_indeterminados.values()))) if envios_indeterminados else None,
@@ -2208,14 +2206,15 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 valor = contexto["entrada"]
             # resultado_centavos já está em centavos; não passar de novo por em_centavos.
             perda_confirmada = max(
-                0, -int(contexto.get("resultado_centavos", 0))
+                0, -em_centavos(estado_frentes[banca]["resultado_liquido"])
+                    - int(contexto.get("resultado_centavos", 0))
             ) / 100
             if pre_stop_loss_atingido(perda_confirmada, valor):
                 log.warning(
                     "PRE-STOP PREVENTIVO | banca=%s | ativo=%s | "
-                    "perda_confirmada=USD %.2f | proxima_entrada=USD %.2f | "
-                    "limite=USD %.2f | conta=DEMO",
-                    banca, ativo, perda_confirmada, valor, PRE_STOP_LOSS_USD
+                    "perda_confirmada=%.2f | proxima_entrada=%.2f | "
+                    "limite_brl=%.2f | conta=DEMO",
+                    banca, ativo, perda_confirmada, valor, PRE_STOP_LOSS_BRL
                 )
                 return False, "pre_stop_loss", operacoes_ativas.get(banca)
             if valor > disponivel or valor < ENTRADA_MINIMA:
@@ -2498,7 +2497,8 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             atualizar_progressao_gale(banca, nivel_absoluto, resultado)
             with estado_lock:
                 perda_operacao = max(
-                    0, -operacoes_ativas[banca]["resultado_centavos"]
+                    0, -em_centavos(estado_frentes[banca]["resultado_liquido"])
+                        - operacoes_ativas[banca]["resultado_centavos"]
                 ) / 100
             if pre_stop_loss_atingido(perda_operacao):
                 processar_pre_stop_loss(banca, ativo)
@@ -2536,76 +2536,52 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
 # ============================================================
 
 def reservar_banca(ativo, direcao, score, timeframe, expiracao):
+    """Reserva uma banca livre para um único sinal, em sua direção original."""
+    global proxima_banca_indice
     ativo = str(ativo).strip().upper()
+    direcao = str(direcao).strip().lower()
+    if direcao not in ("call", "put"):
+        return None
     with estado_lock:
         if envios_indeterminados:
             log.warning("SINAL SEM RESERVA | ativo=%s | motivo=conciliacao_de_ordem_pendente", ativo)
             return None
         if ativo in ativos_em_uso:
-            motivo = "ativo_em_uso"
-            log.warning("SINAL SEM RESERVA | ativo=%s | M%s | motivo=%s", ativo, timeframe, motivo)
+            log.warning("SINAL SEM RESERVA | ativo=%s | M%s | motivo=ativo_em_uso", ativo, timeframe)
             return None
-        for banca in BANCAS:
+        for offset in range(len(BANCAS)):
+            indice = (proxima_banca_indice + offset) % len(BANCAS)
+            banca = BANCAS[indice]
             dados = estado_frentes[banca]
-            if dados["ocupada"]:
+            if dados["ocupada"] or dados.get("pre_stop_loss_ativo", False):
                 continue
             dados.update({"ocupada": True, "ativo": ativo, "direcao": direcao,
                           "score": score, "timeframe": timeframe, "expiracao": expiracao})
             ativos_em_uso.add(ativo)
+            proxima_banca_indice = (indice + 1) % len(BANCAS)
             return banca
         log.warning("SINAL SEM RESERVA | ativo=%s | M%s | motivo=sem_banca_livre", ativo, timeframe)
-    return None
-
-def reservar_par_bancas(ativo, direcao, score, timeframe, expiracao):
-    """Reserva duas bancas livres para o mesmo sinal em direções opostas."""
-    global proximo_par_banca
-    ativo = str(ativo).strip().upper()
-    direcao = str(direcao).strip().lower()
-    if direcao not in DIRECAO_OPPOSTA:
-        return None
-    with estado_lock:
-        if envios_indeterminados or ativo in ativos_em_uso:
-            return None
-        for offset in range(len(PARES_BANCAS)):
-            indice = (proximo_par_banca + offset) % len(PARES_BANCAS)
-            banca_direta, banca_inversa = PARES_BANCAS[indice]
-            if estado_frentes[banca_direta]["ocupada"] or estado_frentes[banca_inversa]["ocupada"]:
-                continue
-            for banca, lado in (
-                (banca_direta, direcao),
-                (banca_inversa, DIRECAO_OPPOSTA[direcao]),
-            ):
-                estado_frentes[banca].update({
-                    "ocupada": True, "ativo": ativo, "direcao": lado,
-                    "score": score, "timeframe": timeframe, "expiracao": expiracao,
-                })
-            ativos_em_uso.add(ativo)
-            proximo_par_banca = (indice + 1) % len(PARES_BANCAS)
-            return indice, banca_direta, banca_inversa
     return None
 
 
 def disparar_sinal(ativo, direcao, score, timeframe, expiracao):
     ativo = str(ativo).strip().upper()
+    direcao = str(direcao).strip().lower()
     log.info("SINAL APROVADO | ativo=%s | direcao=%s | M%s | expiracao=%s | score=%s", ativo, direcao, timeframe, expiracao, score)
-    par = reservar_par_bancas(ativo, direcao, score, timeframe, expiracao)
-    if par is None:
-        log.warning("SINAL SEM PAR LIVRE | ativo=%s | M%s", ativo, timeframe)
+    banca = reservar_banca(ativo, direcao, score, timeframe, expiracao)
+    if banca is None:
+        log.warning("SINAL SEM BANCA LIVRE | ativo=%s | M%s", ativo, timeframe)
         return False
-    indice, banca_direta, banca_inversa = par
-    direcoes = ((banca_direta, direcao), (banca_inversa, DIRECAO_OPPOSTA[direcao]))
-    log.info("SINAL DISTRIBUÍDO EM PAR | par=%s | bancas=%s/%s | ativo=%s | direções=%s/%s | M%s | expiração=%s",
-             indice + 1, banca_direta, banca_inversa, ativo, direcoes[0][1], direcoes[1][1], timeframe, expiracao)
-    iniciadas = 0
-    for banca, lado in direcoes:
-        try:
-            threading.Thread(target=ciclo, args=(banca, ativo, lado, score, timeframe, expiracao),
-                             daemon=True, name=f"operacao-{banca}-M{timeframe}-{ativo}").start()
-            iniciadas += 1
-        except Exception as erro:
-            liberar_banca(banca, ativo)
-            log.error("SINAL NAO INICIADO | banca=%s | ativo=%s | motivo=falha_thread | tipo=%s", banca, ativo, type(erro).__name__)
-    return iniciadas == 2
+    log.info("SINAL DISTRIBUÍDO | banca=%s | ativo=%s | direção=%s | M%s | expiração=%s",
+             banca, ativo, direcao.upper(), timeframe, expiracao)
+    try:
+        threading.Thread(target=ciclo, args=(banca, ativo, direcao, score, timeframe, expiracao),
+                         daemon=True, name=f"operacao-{banca}-M{timeframe}-{ativo}").start()
+        return True
+    except Exception as erro:
+        liberar_banca(banca, ativo)
+        log.error("SINAL NAO INICIADO | banca=%s | ativo=%s | motivo=falha_thread | tipo=%s", banca, ativo, type(erro).__name__)
+        return False
 
 # ============================================================
 # SCANNER DE TIMEFRAME
@@ -2663,9 +2639,8 @@ def scanner_timeframe(
                 with estado_lock:
 
                     existe_banca_livre = any(
-                        not estado_frentes[banca_direta]["ocupada"]
-                        and not estado_frentes[banca_inversa]["ocupada"]
-                        for banca_direta, banca_inversa in PARES_BANCAS
+                        not estado_frentes[banca]["ocupada"]
+                        for banca in BANCAS
                     )
 
                 if not existe_banca_livre:
@@ -3085,7 +3060,7 @@ def home():
 
         "distribuicao":
             (
-                f"5 pares de bancas em sentidos opostos; assertividade, gales e recuperação independentes por banca"
+                f"10 bancas alternadas; um sinal por banca na direção original, com gestão independente"
             ),
 
         "estatisticas":
@@ -3160,6 +3135,7 @@ def monitor_practice():
                 "gale_atual": int(dados.get("gale_progression_level", 0)),
                 "prejuizo_acumulado": float(dados.get("prejuizo_acumulado", 0.0)),
                 "pre_stop_loss_disparos": int(dados.get("pre_stop_loss_count", 0)),
+                "pre_stop_loss_ativo": bool(dados.get("pre_stop_loss_ativo", False)),
                 "pre_stop_loss_ultima_perda": float(
                     dados.get("pre_stop_loss_ultima_perda", 0.0)
                 ),
@@ -3306,8 +3282,7 @@ log.info(
 )
 
 log.info(
-    "GESTÃO INDIVIDUAL POR BANCA | "
-    "PARES 1-6, 2-7, 3-8, 4-9, 5-10: primeira banca segue o sinal, segunda entra ao contrário | "
+    "GESTÃO INDIVIDUAL POR BANCA | cada sinal abre uma única operação na direção do sinal | "
     "SEM GALE; RECUPERACAO DE 100% SOMENTE COM BANCA LIQUIDA NEGATIVA; PRE-STOP LOSS DESATIVADO | "
     "ENTRADA BASE BRL 20.00; ENTRADA DE RECUPERACAO CALCULADA PELO PAYOUT | "
     "ASSERTIVIDADE REAL por banca; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados | "
@@ -3322,7 +3297,7 @@ log.info(
 
 log.info(
     "DISTRIBUIÇÃO = "
-    "cada sinal aprovado vai para um par livre; a segunda banca inverte a direção"
+    "cada sinal aprovado vai para uma banca livre; a direção do sinal é mantida"
 )
 
 log.info(

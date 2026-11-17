@@ -1984,22 +1984,32 @@ def pre_stop_loss_atingido(perda_confirmada, proxima_entrada=0.0):
 
 
 def reiniciar_gestao_banca_apos_pre_stop(banca, perda_operacao):
-    """Pausa somente esta banca e preserva o histórico e o prejuízo acumulado."""
+    """Zera o ciclo financeiro desta banca e libera uma nova rodada."""
     with estado_lock:
         dados = estado_frentes[banca]
-        dados["pre_stop_loss_ativo"] = True
+        dados["pre_stop_loss_ativo"] = False
         dados["pre_stop_loss_count"] += 1
         dados["pre_stop_loss_ultima_perda"] = round(float(perda_operacao), 2)
+        dados["resultado_liquido"] = 0.0
+        dados["prejuizo_acumulado"] = 0.0
+        dados["recuperacao_pendente"] = 0.0
+        dados["em_recuperacao"] = False
+        dados["gale_progression_level"] = 0
+        dados["gale_atual"] = 0
+        dados["gales_reativos"] = 0
+        dados["entradas_recuperacao_restantes"] = 0
+        dados["recuperacao_estendida"] = False
+        recuperacoes_em_curso.discard(banca)
     log.warning(
         "PRE-STOP LOSS | banca=%s | perda_conta=%.2f | limite_brl=%.2f | "
-        "banca_pausada=true | resultado_preservado=true | conta=DEMO",
+        "banca_reiniciada=true | recuperacao_zerada=true | historico_global_preservado=true | conta=DEMO",
         banca, perda_operacao, PRE_STOP_LOSS_BRL
     )
     telegram(
         f"🛑 PRÉ STOP-LOSS | {banca}\n"
-        f"Prejuízo líquido: {perda_operacao:.2f} na moeda da conta "
-        f"(limite R$ {PRE_STOP_LOSS_BRL:.2f}).\n"
-        "Banca pausada; resultado líquido preservado. Deriv DEMO"
+        f"Limite de R$ {PRE_STOP_LOSS_BRL:.2f} atingido. "
+        "Gestão da banca reiniciada e recuperação zerada; o histórico global foi mantido. "
+        "A banca voltará a operar pela entrada-base. Deriv DEMO"
     )
     return True
 
@@ -2916,15 +2926,11 @@ def worker():
 
     aguardar_portfolio_demo_sem_posicoes()
 
-    iniciar_scanner(
-        5,
-        0
-    )
-
-    iniciar_scanner(
-        15,
-        2
-    )
+    for indice, timeframe in enumerate(sorted(TIMEFRAMES)):
+        iniciar_scanner(
+            timeframe,
+            indice * 2
+        )
 
     threading.Thread(
         target=supervisor,

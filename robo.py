@@ -582,10 +582,10 @@ def conectar():
             f"🏦 {QTD_BANCAS} bancas | gestão individual\n"
             "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            "📈 Entrada fixa de R$ 20, sem gale\n"
-            "🎯 Fechamento automático configurado para lucro de R$ 5\n"
+            "📈 Entrada-base de R$ 20, sem gale; recuperação de 100% por banca\n"
+            "🎯 Meta base de R$ 5; na recuperação, perda pendente + R$ 5\n"
             "📊 Assertividade baseada somente em WIN/LOSS reais; todas as janelas reiniciam a cada 300 sinais gerais encerrados\n"
-            "💰 Fechamento antecipado ao atingir lucro de R$ 5\n"
+            "💰 Fechamento antecipado na meta do sinal ou da recuperação\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
         return True
@@ -2090,7 +2090,7 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Desativado; todas as operações usam entrada fixa.",
+            "regra_gales": "Desativado; todas as operações usam a entrada-base ou o valor calculado de recuperação.",
             "regra_recuperacao": "100% por banca: recupera a perda acumulada e busca lucro líquido adicional de R$ 5.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
@@ -2522,7 +2522,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             telegram(f"🤖 Deriv DEMO | {'✅ WIN' if resultado_sinal == 'win' else '❌ LOSS COMPLETO' if resultado_sinal == 'loss' else '➖ EMPATE'}\n"
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                      f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                     "🎯 Entrada fixa R$ 20; meta de fechamento R$ 5\n"
+                     "🎯 Entrada-base R$ 20; na recuperação, prejuízo pendente + meta líquida de R$ 5\n"
                      f"🛡 Próximo nível desta banca: G{estado_frentes[banca]['gale_progression_level']}\n"
                      f"📊 Total geral: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                      f"🎯 Assertividade da {banca}: {taxa_banca_real(banca)}%\n"
@@ -3311,11 +3311,10 @@ log.info(
 log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
     "PARES 1-6, 2-7, 3-8, 4-9, 5-10: primeira banca segue o sinal, segunda entra ao contrário | "
-    "GESTAO FIXA: sem gale, sem recuperação e sem pré-stop loss; "
-    "ENTRADA BASE BRL 20.00; SEM GALE E SEM RECUPERACAO | "
+    "SEM GALE; RECUPERACAO DE 100% DO PREJUIZO POR BANCA; PRE-STOP LOSS DESATIVADO | "
+    "ENTRADA BASE BRL 20.00; ENTRADA DE RECUPERACAO CALCULADA PELO PAYOUT | "
     "ASSERTIVIDADE REAL por banca; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados | "
-    "ENTRADA FIXA EM TODAS AS OPERACOES; TAKE PROFIT EM BRL 5.00 | "
-    "SEM GALE | SEM RECUPERACAO | TAKE PROFIT R$ 5"
+    "META BASE EM BRL 5.00; NA RECUPERACAO, ALVO = PERDA PENDENTE + BRL 5.00"
 )
 
 log.info(

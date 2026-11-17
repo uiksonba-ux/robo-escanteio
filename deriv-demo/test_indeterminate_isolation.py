@@ -150,8 +150,6 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.BANCAS, [f"BANCA {i}" for i in range(1, 11)])
         self.assertEqual(set(robo.estado_frentes), set(robo.BANCAS))
         self.assertEqual(robo.ENTRADA_BASE_BRL, 20.0)
-        self.assertEqual(robo.PARES_BANCAS, tuple((robo.BANCAS[i], robo.BANCAS[i + 5]) for i in range(5)))
-        self.assertEqual(robo.DIRECAO_OPPOSTA, {"call": "put", "put": "call"})
         self.assertEqual(robo.MULTIPLICADOR_GALE, 1.0)
         self.assertEqual(robo.MULTIPLICADORES_POR_GALES, {0: 1.0})
         self.assertEqual(
@@ -222,7 +220,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.70)
         self.assertEqual(robo.prejuizo_banca_atual(banca_b), 0.0)
 
-    def test_opposite_pair_reservation_uses_matching_signal_and_inverse_side(self):
+    def test_single_bank_reservation_preserves_signal_direction_and_rotates(self):
         with robo.estado_lock:
             robo.envios_indeterminados.clear()
             robo.ativos_em_uso.clear()
@@ -231,13 +229,14 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
                     ocupada=False, ativo=None, direcao=None, score=None,
                     timeframe=None, expiracao=None, envio_indeterminado=False,
                 )
-            robo.proximo_par_banca = 0
-        par = robo.reservar_par_bancas("R_50", "call", 82, 1, 1)
-        self.assertEqual(par, (0, "BANCA 1", "BANCA 6"))
+            robo.proxima_banca_indice = 0
+        primeira = robo.reservar_banca("R_50", "call", 82, 1, 1)
+        segunda = robo.reservar_banca("BOOM100", "put", 78, 5, 5)
+        self.assertEqual((primeira, segunda), ("BANCA 1", "BANCA 2"))
         self.assertEqual(robo.estado_frentes["BANCA 1"]["direcao"], "call")
-        self.assertEqual(robo.estado_frentes["BANCA 6"]["direcao"], "put")
-        self.assertEqual(robo.estado_frentes["BANCA 1"]["ativo"],
-                         robo.estado_frentes["BANCA 6"]["ativo"])
+        self.assertEqual(robo.estado_frentes["BANCA 2"]["direcao"], "put")
+        self.assertEqual(robo.estado_frentes["BANCA 1"]["ativo"], "R_50")
+        self.assertEqual(robo.estado_frentes["BANCA 2"]["ativo"], "BOOM100")
 
     def test_accuracy_uses_only_real_results(self):
         banca = robo.BANCAS[0]

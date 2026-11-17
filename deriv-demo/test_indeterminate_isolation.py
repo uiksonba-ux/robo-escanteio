@@ -181,9 +181,12 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             for banca in robo.BANCAS:
                 robo.estado_frentes[banca].update(
                     recuperacao_pendente=0.0,
+                    resultado_liquido=0.0,
+                    prejuizo_acumulado=0.0,
                     envio_indeterminado=False,
                 )
             robo.estado_frentes[banca_a]["recuperacao_pendente"] = 0.35
+            robo.estado_frentes[banca_a]["resultado_liquido"] = -0.35
             robo.operacoes_ativas[banca_a] = {
                 "primeira_ordem": "TEST-RECOVERY-WIN",
                 "resultado_centavos": 50,
@@ -203,6 +206,8 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             for banca in robo.BANCAS:
                 robo.estado_frentes[banca].update(
                     recuperacao_pendente=0.0,
+                    resultado_liquido=0.0,
+                    prejuizo_acumulado=0.0,
                     envio_indeterminado=False,
                 )
             robo.estado_frentes[banca_a]["recuperacao_pendente"] = 0.35

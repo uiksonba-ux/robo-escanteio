@@ -400,6 +400,9 @@ class DerivOptionsClient:
         return False
 
     def _proposal(self, symbol, contract_type, amount, duration):
+        barrier = {"CALL": "-0.100", "PUT": "+0.100"}.get(contract_type)
+        if barrier is None:
+            raise DerivAPIError("ValidationError")
         if contract_type not in ("CALL", "PUT") or duration not in _ALLOWED_MINUTES:
             raise DerivAPIError("ValidationError")
         if not self.is_contract_available(symbol, contract_type, duration):
@@ -411,6 +414,7 @@ class DerivOptionsClient:
             "proposal": 1,
             "amount": stake,
             "basis": "stake",
+            "barrier": barrier,
             "contract_type": contract_type,
             "currency": self.currency,
             "duration": duration,

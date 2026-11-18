@@ -581,7 +581,7 @@ def conectar():
             f"🏦 {QTD_BANCAS} banca ativa | gestão individual\n"
             "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            "📈 Entrada-base de R$ 20, sem gale; todo LOSS gera recuperação de 100% na próxima entrada\n"
+            "📈 Entrada-base de R$ 20, sem gale; recuperação de 100% se a banca ficar líquida negativa\n"
             "🎯 Meta líquida de R$ 5; a recuperação cobre o déficit + R$ 5\n"
             "📊 Assertividade baseada somente em WIN/LOSS reais; todas as janelas reiniciam a cada 300 sinais gerais encerrados\n"
             "💰 Fechamento antecipado na meta do sinal ou da recuperação\n"
@@ -2099,7 +2099,7 @@ def snapshot_gestao_global():
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
             "regra_gales": "Desativado; todas as operações usam a entrada-base.",
-            "regra_recuperacao": "Cada LOSS acrescenta recuperação de 100% do prejuízo à banca; WINs reduzem o saldo pendente e a entrada busca mais R$ 5.",
+            "regra_recuperacao": "Recupera 100% do déficit líquido da banca e busca mais R$ 5; sem recuperação quando a banca estiver positiva.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }
@@ -2370,19 +2370,10 @@ def finalizar_operacao_global(banca):
             dados["resultado_liquido"] = local / 100
             dados["prejuizo_acumulado"] = max(0, -local) / 100
 
-            # Cada LOSS acrescenta 100% do seu prejuízo à recuperação pendente.
-            # WINs reduzem a dívida pendente; empate não altera o saldo de recuperação.
-            recuperacao_centavos = em_centavos(dados["recuperacao_pendente"])
-            if resultado_operacao < 0:
-                perda_nova = calcular_alvo_recuperacao(
-                    (-resultado_operacao) / 100
-                )
-                recuperacao_centavos += em_centavos(perda_nova)
-            elif resultado_operacao > 0:
-                recuperacao_centavos = max(
-                    0, recuperacao_centavos - resultado_operacao
-                )
-            dados["recuperacao_pendente"] = recuperacao_centavos / 100
+            # Mantém recuperação de 100% somente sobre o déficit líquido acumulado.
+            dados["recuperacao_pendente"] = round(
+                dados["prejuizo_acumulado"] * RECUPERACAO_PERCENTUAL, 2
+            )
             dados["em_recuperacao"] = False
             recuperacoes_em_curso.discard(banca)
             historico_operacoes.append({
@@ -2537,7 +2528,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             telegram(f"🤖 Deriv DEMO | {'✅ WIN' if resultado_sinal == 'win' else '❌ LOSS COMPLETO' if resultado_sinal == 'loss' else '➖ EMPATE'}\n"
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                      f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                     "🎯 Todo LOSS gera recuperação de 100% na próxima entrada; WIN reduz o saldo pendente\n"
+                     "🎯 Recuperação de 100% quando a banca ficar líquida negativa\n"
                      f"🛡 Próximo nível desta banca: G{estado_frentes[banca]['gale_progression_level']}\n"
                      f"📊 Total geral: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                      f"🎯 Assertividade da {banca}: {taxa_banca_real(banca)}%\n"

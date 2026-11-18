@@ -137,7 +137,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
 
         self.assertEqual(len(robo._extrato_corresponde_ao_envio(rows, envio)), 2)
 
-    def test_recovery_is_100_percent_of_each_loss(self):
+    def test_recovery_is_100_percent_of_bank_deficit(self):
         self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
         with mock.patch.object(robo, "obter_meta_lucro_conta", return_value=2.0):
             alvo = robo.calcular_alvo_recuperacao(4.55)
@@ -378,7 +378,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             with self.subTest(accuracy=accuracy):
                 self.assertEqual(robo.gales_por_assertividade(accuracy), expected_gales)
 
-    def test_loss_with_positive_bank_net_creates_recovery_debt(self):
+    def test_loss_with_positive_bank_net_does_not_create_recovery_debt(self):
         banca = robo.BANCAS[0]
         with robo.estado_lock:
             robo.operacoes_ativas.clear()
@@ -410,7 +410,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.gales_por_assertividade(robo.taxa_banca_real(banca)), 3)
 
         with robo.estado_lock:
-            # Mesmo com P&L positivo, cada perda gera recuperação própria.
+            # A perda reduz o P&L, mas não cria dívida enquanto o saldo líquido segue positivo.
             robo.operacoes_ativas[banca] = {
                 "primeira_ordem": "TEST-LOSS-POSITIVE-BANK",
                 "resultado_centavos": -35,
@@ -418,9 +418,9 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             }
 
         robo.finalizar_operacao_global(banca)
-        self.assertEqual(robo.prejuizo_banca_atual(banca), 0.35)
-        self.assertEqual(robo.prejuizo_global_atual(), 0.35)
-        self.assertEqual(robo.estado_frentes[banca]["recuperacao_pendente"], 0.35)
+        self.assertEqual(robo.prejuizo_banca_atual(banca), 0.0)
+        self.assertEqual(robo.prejuizo_global_atual(), 0.0)
+        self.assertEqual(robo.estado_frentes[banca]["recuperacao_pendente"], 0.0)
         self.assertAlmostEqual(robo.estado_frentes[banca]["resultado_liquido"], 0.27)
 
 class FinalizedSignalScoreboardTests(unittest.TestCase):

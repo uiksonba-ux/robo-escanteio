@@ -110,5 +110,22 @@ class TestDerivOptionsClientReadOnly(unittest.TestCase):
         )
 
 
+    def test_directional_relative_barriers_are_used_for_demo_quotes(self):
+        client = DerivOptionsClient.__new__(DerivOptionsClient)
+        client.base_stake = 2.0
+        client.currency = "USD"
+        client.is_contract_available = Mock(return_value=True)
+        client._request = Mock(side_effect=[
+            {"proposal": {"id": "call", "ask_price": 2.0, "payout": 3.0}},
+            {"proposal": {"id": "put", "ask_price": 2.0, "payout": 2.5}},
+        ])
+
+        self.assertEqual(client.get_digital_payout("R_100", 5), 0.25)
+        requests = [call.args[0] for call in client._request.call_args_list]
+        self.assertEqual(requests[0]["contract_type"], "CALL")
+        self.assertEqual(requests[0]["barrier"], "-0.100")
+        self.assertEqual(requests[1]["contract_type"], "PUT")
+        self.assertEqual(requests[1]["barrier"], "+0.100")
+
 if __name__ == "__main__":
     unittest.main()

@@ -122,9 +122,9 @@ class TestDerivOptionsClientReadOnly(unittest.TestCase):
 
         self.assertEqual(client.get_digital_payout("R_100", 5), 0.25)
         requests = [call.args[0] for call in client._request.call_args_list]
-        self.assertEqual(requests[0]["contract_type"], "CALL")
+        self.assertEqual(requests[0]["contract_type"], "HIGHER")
         self.assertEqual(requests[0]["barrier"], "-0.100")
-        self.assertEqual(requests[1]["contract_type"], "PUT")
+        self.assertEqual(requests[1]["contract_type"], "LOWER")
         self.assertEqual(requests[1]["barrier"], "+0.100")
 
 if __name__ == "__main__":

@@ -292,7 +292,7 @@ class DerivOptionsClient:
             return dict(self._active_symbols)
         response = self._request({
             "active_symbols": "brief",
-            "contract_type": ["CALL", "PUT"],
+            "contract_type": ["HIGHER", "LOWER"],
         })
         rows = response.get("active_symbols")
         if not isinstance(rows, list):
@@ -380,7 +380,7 @@ class DerivOptionsClient:
         return available
 
     def is_contract_available(self, symbol, contract_type, duration):
-        if contract_type not in ("CALL", "PUT") or duration not in _ALLOWED_MINUTES:
+        if contract_type not in ("HIGHER", "LOWER") or duration not in _ALLOWED_MINUTES:
             return False
         if not self.is_symbol_tradeable(symbol):
             return False
@@ -400,10 +400,10 @@ class DerivOptionsClient:
         return False
 
     def _proposal(self, symbol, contract_type, amount, duration):
-        barrier = {"CALL": "-0.100", "PUT": "+0.100"}.get(contract_type)
+        barrier = {"HIGHER": "-0.100", "LOWER": "+0.100"}.get(contract_type)
         if barrier is None:
             raise DerivAPIError("ValidationError")
-        if contract_type not in ("CALL", "PUT") or duration not in _ALLOWED_MINUTES:
+        if contract_type not in ("HIGHER", "LOWER") or duration not in _ALLOWED_MINUTES:
             raise DerivAPIError("ValidationError")
         if not self.is_contract_available(symbol, contract_type, duration):
             raise DerivAPIError("ContractNotFound")
@@ -437,7 +437,7 @@ class DerivOptionsClient:
 
     def get_digital_payout(self, symbol, duration):
         ratios = []
-        for contract_type in ("CALL", "PUT"):
+        for contract_type in ("HIGHER", "LOWER"):
             try:
                 _, ask_price, payout = self._proposal(symbol, contract_type, self.base_stake, duration)
             except DerivAPIError:
@@ -449,7 +449,7 @@ class DerivOptionsClient:
         return min(ratios) if ratios else None
 
     def buy_digital_spot_v2(self, symbol, amount, direction, duration, *, profit_target=None):
-        contract_type = {"call": "CALL", "put": "PUT"}.get(str(direction).lower())
+        contract_type = {"call": "HIGHER", "put": "LOWER"}.get(str(direction).lower())
         if contract_type is None:
             raise DerivAPIError("ValidationError")
         target = self.profit_target if profit_target is None else profit_target

@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-BRL20-TAKEPROFIT5-REC100-1BANK-M5"
+VERSAO = "BASKARAIDO-DERIV-DEMO-BRL20-TAKEPROFIT5-REC100-1BANK-M5M30"
 
 app = Flask(__name__)
 
@@ -230,6 +230,10 @@ TIMEFRAMES = {
     5: {
         "segundos": 300,
         "expiracao": 5,
+    },
+    30: {
+        "segundos": 1800,
+        "expiracao": 30,
     },
 }
 
@@ -568,7 +572,7 @@ def conectar():
             f"💰 Saldo DEMO: {saldo:.2f} {moeda}\n"
             f"💵 Entrada-base: {entrada:.2f} {moeda} (R$ {ENTRADA_BASE_BRL:.2f})\n"
             f"🏦 {QTD_BANCAS} banca ativa | gestão individual\n"
-            "⏱ Somente M5 | Opções digitais CALL/PUT\n"
+            "⏱ M5 + M30 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             "📈 Entrada-base de R$ 20, sem gale; recuperação de 100% se a banca ficar líquida negativa\n"
             "🎯 Meta líquida de R$ 5; a recuperação cobre o déficit + R$ 5\n"
@@ -1541,7 +1545,7 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao, profit_target=None):
         return recusar("valor_ou_saldo_invalido")
     if direcao not in ("call", "put"):
         return recusar("direcao_invalida")
-    if expiracao not in (1, 5, 15):
+    if expiracao not in (5, 30):
         return recusar("expiracao_digital_invalida")
     if esta_bloqueado(ativo, expiracao):
         return recusar("ativo_bloqueado")
@@ -3037,6 +3041,7 @@ def home():
 
         "timeframes": {
             "M5": "Digital M5",
+            "M30": "Digital M30",
         },
 
         "distribuicao":
@@ -3209,7 +3214,8 @@ def health():
 
         "timeframes":
             [
-                "M5"
+                "M5",
+                "M30"
             ],
 
         "bancas":
@@ -3242,7 +3248,7 @@ log.info(
 )
 
 log.info(
-    "TIMEFRAMES = M5"
+    "TIMEFRAMES = M5 + M30"
 )
 
 log.info(
@@ -3264,7 +3270,7 @@ log.info(
     "GESTÃO INDIVIDUAL | 1 BANCA ATIVA | cada sinal abre uma operação na direção do sinal | "
     "SEM GALE; RECUPERACAO 100% DO DEFICIT LIQUIDO; PRE-STOP LOSS BRL 100 | "
     "ENTRADA BASE BRL 20.00; META DE LUCRO BRL 5.00 | "
-    "TIMEFRAMES ATIVOS: SOMENTE M5 | "
+    "TIMEFRAMES ATIVOS: M5 E M30 | "
     "ASSERTIVIDADE REAL; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados"
 )
 

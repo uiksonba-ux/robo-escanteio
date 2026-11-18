@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_UP
 import math
 from typing import Any
 
-ALLOWED_DURATION_MINUTES = frozenset({1, 5, 15})
+ALLOWED_DURATION_MINUTES = frozenset({5, 30})
 # Only contracts with binary-style rise/fall payoff. Verify against contracts_for
 # for the selected underlying before quoting; this is not a blanket guarantee.
 ALLOWED_CONTRACT_TYPES = frozenset({"CALL", "PUT"})
@@ -92,7 +92,7 @@ def validate_candidate(candidate: TradeCandidate, available_contract_types: set[
     if candidate.contract_type not in available_contract_types:
         raise ValueError("Contrato não disponível para o ativo")
     if candidate.duration_unit != "m" or candidate.duration not in ALLOWED_DURATION_MINUTES:
-        raise ValueError("Duração permitida: 1, 5 ou 15 minutos")
+        raise ValueError("Duração permitida: 5 ou 30 minutos")
     if candidate.is_trading_suspended or not candidate.exchange_is_open:
         raise ValueError("Mercado fechado ou negociação suspensa")
 

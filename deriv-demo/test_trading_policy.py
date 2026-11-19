@@ -6,17 +6,15 @@ class TestTradingPolicy(unittest.TestCase):
 
 
     def test_brl_entry_converts_to_demo_account_currency(self):
-        self.assertEqual(brl_to_account_currency(2, 0.18), 0.36)
+        self.assertEqual(brl_to_account_currency(10, 0.18), 1.8)
         for args in ((0, 0.18), (2, 0), (2, float("nan"))):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 brl_to_account_currency(*args)
 
-    def test_accuracy_bands_choose_zero_to_four_gales(self):
-        cases = ((0, 4), (49.99, 4), (50, 3), (59.99, 3), (60, 2),
-                 (69.99, 2), (70, 1), (79.99, 1), (80, 0), (100, 0))
-        for accuracy, expected in cases:
+    def test_accuracy_no_longer_changes_initial_gale_count(self):
+        for accuracy in (0, 49.99, 50, 79.99, 80, 100):
             with self.subTest(accuracy=accuracy):
-                self.assertEqual(gales_for_accuracy(accuracy), expected)
+                self.assertEqual(gales_for_accuracy(accuracy), 5)
 
     def test_invalid_accuracy_is_blocked(self):
         for accuracy in (-0.01, 100.01, float("nan"), float("inf")):
@@ -24,14 +22,14 @@ class TestTradingPolicy(unittest.TestCase):
                 gales_for_accuracy(accuracy)
 
     def test_x2_stake_progression_is_limited_by_accuracy_band(self):
-        self.assertEqual([stake_for_gale(2, level, 4) for level in range(5)],
-                         [2, 4, 8, 16, 32])
+        self.assertEqual([stake_for_gale(10, level, 5) for level in range(6)],
+                         [10, 20, 40, 80, 160, 320])
         with self.assertRaises(ValueError):
-            stake_for_gale(2, 4, 3)
+            stake_for_gale(10, 5, 3)
 
-    def test_full_recovery_stake_uses_confirmed_profit_ratio(self):
-        self.assertEqual(stake_for_full_recovery(2, 10, 0.8), 14.5)
-        self.assertEqual(stake_for_full_recovery(2, 0, 0), 2)
+    def test_recovery_multiplier_is_disabled(self):
+        self.assertEqual(stake_for_full_recovery(10, 10, 0.8), 10.0)
+        self.assertEqual(stake_for_full_recovery(10, 0, 0), 10.0)
         for args in ((2, 10, 0), (0, 10, 0.8), (2, -1, 0.8)):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 stake_for_full_recovery(*args)
@@ -43,12 +41,12 @@ class TestTradingPolicy(unittest.TestCase):
         return TradeCandidate(**fields)
 
     def test_allowed_durations(self):
-        for duration in range(1, 11):
+        for duration in (1, 5, 15):
             with self.subTest(duration=duration):
                 validate_candidate(self.candidate(duration=duration), {"CALL", "PUT"})
 
     def test_other_durations_blocked(self):
-        for duration in (0, 11, 15, 30, 60):
+        for duration in (0, 2, 10, 14, 30, 60):
             with self.subTest(duration=duration), self.assertRaises(ValueError):
                 validate_candidate(self.candidate(duration=duration), {"CALL"})
 

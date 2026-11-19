@@ -13,7 +13,7 @@ import websocket
 
 REST_BASE = "https://api.derivws.com"
 DEMO_WS_PATH = "/trading/v1/options/ws/demo"
-_ALLOWED_MINUTES = frozenset(range(1, 11))
+_ALLOWED_MINUTES = frozenset({1, 5, 15})
 _ALLOWED_CANDLE_GRANULARITIES = frozenset({
     60, 120, 180, 300, 600, 900, 1800, 3600, 7200, 14400, 28800, 86400,
 })
@@ -295,7 +295,7 @@ class DerivOptionsClient:
             return dict(self._active_symbols)
         response = self._request({
             "active_symbols": "brief",
-            "contract_type": ["HIGHER", "LOWER"],
+            "contract_type": ["CALL", "PUT"],
         })
         rows = response.get("active_symbols")
         if not isinstance(rows, list):
@@ -387,7 +387,7 @@ class DerivOptionsClient:
         return available
 
     def is_contract_available(self, symbol, contract_type, duration):
-        if contract_type not in ("HIGHER", "LOWER") or duration not in _ALLOWED_MINUTES:
+        if contract_type not in ("CALL", "PUT") or duration not in _ALLOWED_MINUTES:
             return False
         if not self.is_symbol_tradeable(symbol):
             return False
@@ -407,10 +407,7 @@ class DerivOptionsClient:
         return False
 
     def _proposal(self, symbol, contract_type, amount, duration):
-        barrier = {"HIGHER": "-0.100", "LOWER": "+0.100"}.get(contract_type)
-        if barrier is None:
-            raise DerivAPIError("ValidationError")
-        if contract_type not in ("HIGHER", "LOWER") or duration not in _ALLOWED_MINUTES:
+        if contract_type not in ("CALL", "PUT") or duration not in _ALLOWED_MINUTES:
             raise DerivAPIError("ValidationError")
         if not self.is_contract_available(symbol, contract_type, duration):
             raise DerivAPIError("ContractNotFound")
@@ -421,7 +418,6 @@ class DerivOptionsClient:
             "proposal": 1,
             "amount": stake,
             "basis": "stake",
-            "barrier": barrier,
             "contract_type": contract_type,
             "currency": self.currency,
             "duration": duration,
@@ -442,21 +438,29 @@ class DerivOptionsClient:
             raise DerivAPIError("ValidationError")
         return proposal_id, float(ask_price), float(payout)
 
-    def get_digital_payout(self, symbol, duration):
+    def get_digital_payout(self, symbol, duration, direction=None):
+        contract_types = ("CALL", "PUT")
+        if direction is not None:
+            mapped = {"call": "CALL", "put": "PUT"}.get(str(direction).lower())
+            if mapped is None:
+                raise DerivAPIError("ValidationError")
+            contract_types = (mapped,)
         ratios = []
-        for contract_type in ("HIGHER", "LOWER"):
+        for contract_type in contract_types:
             try:
-                _, ask_price, payout = self._proposal(symbol, contract_type, self.base_stake, duration)
+                _, ask_price, payout = self._proposal(
+                    symbol, contract_type, self.base_stake, duration
+                )
             except DerivAPIError:
                 return None
             ratio = (payout - ask_price) / ask_price
             if not math.isfinite(ratio) or ratio <= 0:
                 return None
             ratios.append(ratio)
-        return min(ratios) if ratios else None
+        return ratios[0] if direction is not None else min(ratios)
 
     def buy_digital_spot_v2(self, symbol, amount, direction, duration, *, profit_target=None):
-        contract_type = {"call": "HIGHER", "put": "LOWER"}.get(str(direction).lower())
+        contract_type = {"call": "CALL", "put": "PUT"}.get(str(direction).lower())
         if contract_type is None:
             raise DerivAPIError("ValidationError")
         target = self.profit_target if profit_target is None else profit_target

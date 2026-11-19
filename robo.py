@@ -3339,7 +3339,7 @@ log.info(
 )
 
 log.info(
-    "DISTRIBUIÇÃO = uma única banca pode operar M1, M5 e M15; a direção do sinal é mantida"
+    "DISTRIBUIÇÃO = 10 bancas independentes, cada uma pode operar M1, M5 e M15"
 )
 
 log.info(

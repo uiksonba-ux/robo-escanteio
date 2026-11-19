@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-BRL20-TAKEPROFIT5-REC100-3BANK-M1M5M15"
+VERSAO = "BASKARAIDO-DERIV-DEMO-BRL20-TAKEPROFIT5-REC100-10BANK-M1M10"
 
 app = Flask(__name__)
 
@@ -190,7 +190,7 @@ PRE_STOP_LOSS_BRL = 100.00
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
 
-QTD_BANCAS = 3
+QTD_BANCAS = 10
 
 # Assertividade com resultados reais; as janelas individuais reiniciam juntas a cada 300 sinais gerais encerrados.
 
@@ -226,19 +226,24 @@ def obter_entrada_base(saldo=None):
 # TIMEFRAMES
 # ============================================================
 
+# M4 and M6-M9 are aggregated from complete M1 candles because Deriv
+# does not offer those candle granularities directly.
+_TIMEFRAMES_NATIVOS = {1, 2, 3, 5, 10}
 TIMEFRAMES = {
-    1: {
-        "segundos": 60,
-        "expiracao": 1,
-    },
-    5: {
-        "segundos": 300,
-        "expiracao": 5,
-    },
-    15: {
-        "segundos": 900,
-        "expiracao": 15,
-    },
+    timeframe: {
+        "segundos": timeframe * 60,
+        "expiracao": timeframe,
+        "granularidade_candles": (
+            timeframe * 60 if timeframe in _TIMEFRAMES_NATIVOS else 60
+        ),
+        "quantidade_candles": (
+            100 if timeframe in _TIMEFRAMES_NATIVOS else timeframe * 61
+        ),
+        "agrupar_minutos": (
+            1 if timeframe in _TIMEFRAMES_NATIVOS else timeframe
+        ),
+    }
+    for timeframe in range(1, 11)
 }
 
 
@@ -255,9 +260,8 @@ BANCAS = [
 ]
 
 TIMEFRAME_POR_BANCA = {
-    "BANCA 1": 1,
-    "BANCA 2": 5,
-    "BANCA 3": 15,
+    f"BANCA {indice}": indice
+    for indice in range(1, QTD_BANCAS + 1)
 }
 
 
@@ -967,6 +971,43 @@ def macd(valores):
     return (
         e12 - e26
     )
+
+
+def agrupar_candles(candles, minutos):
+    """Monta candles M4/M6-M9 a partir de candles M1 completos e contíguos."""
+    largura = int(minutos) * 60
+    if largura <= 60 or largura % 60:
+        return candles
+
+    por_inicio = {}
+    for candle in sorted(candles, key=lambda item: int(item["from"])):
+        inicio = int(candle["from"])
+        inicio = inicio - inicio % 60
+        por_inicio[inicio] = candle
+
+    intervalos = sorted({inicio - inicio % largura for inicio in por_inicio})
+    agregados = []
+    for intervalo in intervalos:
+        inicios = range(intervalo, intervalo + largura, 60)
+        partes = [por_inicio.get(inicio) for inicio in inicios]
+        if any(parte is None for parte in partes):
+            continue
+        agregados.append({
+            "from": intervalo,
+            "open": float(partes[0]["open"]),
+            "close": float(partes[-1]["close"]),
+            "max": max(float(parte["max"]) for parte in partes),
+            "min": min(float(parte["min"]) for parte in partes),
+        })
+
+    # Keep only the newest uninterrupted run to avoid treating a missing
+    # minute as if it were an ordinary candle.
+    trecho = []
+    for candle in agregados:
+        if trecho and candle["from"] != trecho[-1]["from"] + largura:
+            trecho = []
+        trecho.append(candle)
+    return trecho
 
 
 # ============================================================
@@ -2686,9 +2727,13 @@ def scanner_timeframe(
 
                 candles = obter_candles(
                     ativo,
-                    segundos,
-                    100
+                    cfg["granularidade_candles"],
+                    cfg["quantidade_candles"],
                 )
+                if cfg["agrupar_minutos"] > 1:
+                    candles = agrupar_candles(
+                        candles, cfg["agrupar_minutos"]
+                    )
 
                 if len(candles) < 60:
 
@@ -3064,15 +3109,17 @@ def home():
             "DIGITAL",
 
         "timeframes": {
-            "M1": "Digital M1",
-            "M5": "Digital M5",
-            "M15": "Digital M15",
+            f"M{timeframe}": f"Digital M{timeframe}"
+            for timeframe in sorted(TIMEFRAMES)
         },
 
         "distribuicao":
             (
-                "3 bancas independentes por timeframe: "
-                "BANCA 1 = M1; BANCA 2 = M5; BANCA 3 = M15"
+                f"{QTD_BANCAS} bancas independentes: "
+                + "; ".join(
+                    f"{banca} = M{TIMEFRAME_POR_BANCA[banca]}"
+                    for banca in BANCAS
+                )
             ),
 
         "estatisticas":

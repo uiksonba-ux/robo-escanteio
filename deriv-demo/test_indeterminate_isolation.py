@@ -146,12 +146,15 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.valores_do_ciclo(robo.ENTRADA_BASE_BRL), [20.0])
 
     def test_requested_base_gale_and_recovery_settings(self):
-        self.assertEqual(robo.QTD_BANCAS, 3)
-        self.assertEqual(len(robo.BANCAS), 3)
-        self.assertEqual(robo.BANCAS, ["BANCA 1", "BANCA 2", "BANCA 3"])
+        self.assertEqual(robo.QTD_BANCAS, 10)
+        self.assertEqual(len(robo.BANCAS), 10)
+        self.assertEqual(
+            robo.BANCAS,
+            [f"BANCA {indice}" for indice in range(1, 11)],
+        )
         self.assertEqual(
             robo.TIMEFRAME_POR_BANCA,
-            {"BANCA 1": 1, "BANCA 2": 5, "BANCA 3": 15},
+            {f"BANCA {indice}": indice for indice in range(1, 11)},
         )
         self.assertEqual(set(robo.estado_frentes), set(robo.BANCAS))
         self.assertEqual(robo.ENTRADA_BASE_BRL, 20.0)
@@ -164,7 +167,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.GALES_POR_CICLO, 0)
         self.assertEqual(robo.MAX_GALES, 0)
         self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
-        self.assertEqual(set(robo.TIMEFRAMES), {1, 5, 15})
+        self.assertEqual(set(robo.TIMEFRAMES), set(range(1, 11)))
         self.assertEqual(robo.PRE_STOP_LOSS_BRL, 100.0)
         with mock.patch.object(robo, "obter_limite_pre_stop_loss_conta", return_value=100.0):
             self.assertFalse(robo.pre_stop_loss_atingido(99.64, 0.35))
@@ -226,6 +229,32 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.estado_frentes[banca_a]["recuperacao_pendente"], 0.70)
         self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.70)
 
+    def test_resample_uses_only_complete_contiguous_candles(self):
+        minutos = 4
+        largura = minutos * 60
+        inicio = 1_800_000_000
+        inicio -= inicio % largura
+        m1 = []
+        # Leave the oldest M4 bucket partial; the next 60 buckets are complete.
+        for minuto in range(1, 61 * minutos):
+            abertura = float(minuto)
+            m1.append({
+                "from": inicio + minuto * 60,
+                "open": abertura,
+                "close": abertura + 1,
+                "max": abertura + 2,
+                "min": abertura - 1,
+            })
+
+        candles = robo.agrupar_candles(m1, minutos)
+
+        self.assertEqual(len(candles), 60)
+        self.assertEqual(candles[0]["from"], inicio + largura)
+        self.assertEqual(candles[0]["open"], 4.0)
+        self.assertEqual(candles[0]["close"], 8.0)
+        self.assertEqual(candles[0]["max"], 9.0)
+        self.assertEqual(candles[0]["min"], 3.0)
+
     def test_each_timeframe_reserves_only_its_independent_bank(self):
         with robo.estado_lock:
             robo.envios_indeterminados.clear()
@@ -236,18 +265,22 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
                     timeframe=None, expiracao=None, envio_indeterminado=False,
                 )
             robo.proxima_banca_indice = 0
-        banca_m1 = robo.reservar_banca("R_50", "call", 82, 1, 1)
-        banca_m5 = robo.reservar_banca("BOOM100", "put", 78, 5, 5)
-        banca_m15 = robo.reservar_banca("R_25", "call", 80, 15, 15)
-        repetida_m5 = robo.reservar_banca("R_75", "put", 76, 5, 5)
-        self.assertEqual(banca_m1, "BANCA 1")
-        self.assertEqual(banca_m5, "BANCA 2")
-        self.assertEqual(banca_m15, "BANCA 3")
+        reservas = {
+            timeframe: robo.reservar_banca(
+                f"R_{timeframe}", "put" if timeframe == 5 else "call", 80,
+                timeframe, timeframe,
+            )
+            for timeframe in range(1, 11)
+        }
+        repetida_m5 = robo.reservar_banca("R_50", "put", 76, 5, 5)
+        self.assertEqual(
+            reservas,
+            {timeframe: f"BANCA {timeframe}" for timeframe in range(1, 11)},
+        )
         self.assertIsNone(repetida_m5)
         self.assertEqual(robo.estado_frentes["BANCA 1"]["direcao"], "call")
-        self.assertEqual(robo.estado_frentes["BANCA 1"]["ativo"], "R_50")
-        self.assertEqual(robo.estado_frentes["BANCA 2"]["direcao"], "put")
-        self.assertEqual(robo.estado_frentes["BANCA 3"]["timeframe"], 15)
+        self.assertEqual(robo.estado_frentes["BANCA 5"]["direcao"], "put")
+        self.assertEqual(robo.estado_frentes["BANCA 10"]["timeframe"], 10)
 
     def test_accuracy_uses_only_real_results(self):
         banca = robo.BANCAS[0]

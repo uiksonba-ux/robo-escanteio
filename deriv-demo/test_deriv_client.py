@@ -74,13 +74,36 @@ class TestDerivOptionsClientReadOnly(unittest.TestCase):
             "min": 1.0,
         }])
 
-    def test_only_supported_candle_periods_are_allowed(self):
+    def test_deriv_documented_candle_periods_are_allowed(self):
         client = DerivOptionsClient.__new__(DerivOptionsClient)
         client.is_symbol_tradeable = Mock(return_value=True)
-        for granularity in (30, 120, 600):
+        for granularity in (60, 120, 180, 300, 600, 900, 1800, 3600,
+                            7200, 14400, 28800, 86400):
+            with self.subTest(granularity=granularity):
+                client._request = Mock(return_value={"candles": []})
+                self.assertEqual(
+                    client.get_candles("R_50", granularity, 100, 1_800_000_100),
+                    [],
+                )
+
+    def test_unsupported_candle_periods_are_rejected(self):
+        client = DerivOptionsClient.__new__(DerivOptionsClient)
+        client.is_symbol_tradeable = Mock(return_value=True)
+        for granularity in (30, 240, 420):
             with self.subTest(granularity=granularity):
                 with self.assertRaises(DerivAPIError):
                     client.get_candles("R_50", granularity, 100, 1_800_000_100)
+
+    def test_large_resampling_candle_request_is_bounded_and_allowed(self):
+        client = DerivOptionsClient.__new__(DerivOptionsClient)
+        client.is_symbol_tradeable = Mock(return_value=True)
+        client._request = Mock(return_value={"candles": []})
+        self.assertEqual(
+            client.get_candles("R_50", 60, 549, 1_800_000_100),
+            [],
+        )
+        with self.assertRaises(DerivAPIError):
+            client.get_candles("R_50", 60, 1001, 1_800_000_100)
 
     def test_explicit_usd_base_stake_is_not_fx_converted(self):
         client = DerivOptionsClient(

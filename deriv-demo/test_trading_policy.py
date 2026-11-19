@@ -43,12 +43,12 @@ class TestTradingPolicy(unittest.TestCase):
         return TradeCandidate(**fields)
 
     def test_allowed_durations(self):
-        for duration in (5, 30):
+        for duration in (1, 5, 15):
             with self.subTest(duration=duration):
                 validate_candidate(self.candidate(duration=duration), {"CALL", "PUT"})
 
     def test_other_durations_blocked(self):
-        for duration in (0, 1, 2, 10, 15, 60):
+        for duration in (0, 2, 10, 30, 60):
             with self.subTest(duration=duration), self.assertRaises(ValueError):
                 validate_candidate(self.candidate(duration=duration), {"CALL"})
 

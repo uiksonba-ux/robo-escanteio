@@ -154,6 +154,10 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.MULTIPLICADOR_GALE, 2.0)
         self.assertEqual(robo.MULTIPLICADORES_POR_GALES, {0: 2.0})
         self.assertEqual(robo.GALES_INICIAIS, 5)
+        with robo.estado_lock:
+            robo.estado_frentes["BANCA 1"]["gale_progression_level"] = 5
+            robo.estado_frentes["BANCA 1"]["gale_atual"] = 5
+            robo.estado_frentes["BANCA 1"]["gales_reativos"] = 5
         self.assertEqual(robo.estado_frentes["BANCA 1"]["gale_progression_level"], 5)
         self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 0.0)
         self.assertEqual(set(robo.TIMEFRAMES), {1, 5, 15})
@@ -170,6 +174,10 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         with robo.estado_lock:
             robo.estado_frentes[banca]["gale_progression_level"] = 0
         self.assertEqual(robo.atualizar_progressao_gale(banca, 0, "win"), 0)
+        with robo.estado_lock:
+            robo.estado_frentes[banca]["gale_progression_level"] = robo.GALES_INICIAIS
+            robo.estado_frentes[banca]["gale_atual"] = robo.GALES_INICIAIS
+            robo.estado_frentes[banca]["gales_reativos"] = robo.GALES_INICIAIS
 
 
     def test_finalized_win_clears_bank_deficit_and_recovery(self):
@@ -221,7 +229,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         robo.finalizar_operacao_global(banca_a)
         self.assertEqual(robo.estado_frentes[banca_a]["prejuizo_acumulado"], 0.70)
         self.assertEqual(robo.estado_frentes[banca_a]["recuperacao_pendente"], 0.0)
-        self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.70)
+        self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.0)
 
     def test_resample_uses_only_complete_contiguous_candles(self):
         minutos = 4

@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-2B-USD035-GALE3-REC100-INDEPENDENT-BANKS"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-USD035-GALE3-REC100-INDEPENDENT-BANKS"
 
 app = Flask(__name__)
 
@@ -162,7 +162,7 @@ MAX_GALES = 4
 RECUPERACAO_PERCENTUAL = 1.0
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 
-QTD_BANCAS = 2
+QTD_BANCAS = 10
 
 # A assertividade define a quantidade de gales; entrada-base fixa em USD.
 ENTRADA_BASE_USD = 0.35

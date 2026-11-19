@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-BRL20-TAKEPROFIT5-REC100-1BANK-M5M30"
+VERSAO = "BASKARAIDO-DERIV-DEMO-BRL20-TAKEPROFIT5-REC100-3BANK-M1M5M15"
 
 app = Flask(__name__)
 
@@ -190,7 +190,7 @@ PRE_STOP_LOSS_BRL = 100.00
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
 
-QTD_BANCAS = 1
+QTD_BANCAS = 3
 
 # Assertividade com resultados reais; as janelas individuais reiniciam juntas a cada 300 sinais gerais encerrados.
 
@@ -227,13 +227,17 @@ def obter_entrada_base(saldo=None):
 # ============================================================
 
 TIMEFRAMES = {
+    1: {
+        "segundos": 60,
+        "expiracao": 1,
+    },
     5: {
         "segundos": 300,
         "expiracao": 5,
     },
-    30: {
-        "segundos": 1800,
-        "expiracao": 30,
+    15: {
+        "segundos": 900,
+        "expiracao": 15,
     },
 }
 
@@ -249,6 +253,12 @@ BANCAS = [
         QTD_BANCAS + 1
     )
 ]
+
+TIMEFRAME_POR_BANCA = {
+    "BANCA 1": 1,
+    "BANCA 2": 5,
+    "BANCA 3": 15,
+}
 
 
 
@@ -2379,6 +2389,7 @@ def finalizar_operacao_global(banca):
                 "direcao": dados.get("direcao"),
                 "score": dados.get("score"),
                 "timeframe": dados.get("timeframe"),
+                "timeframe_operacao": TIMEFRAME_POR_BANCA.get(banca),
                 "expiracao": dados.get("expiracao"),
                 "resultado": "WIN" if resultado_operacao > 0 else "LOSS" if resultado_operacao < 0 else "EMPATE",
                 "resultado_liquido": resultado_operacao / 100,
@@ -2554,6 +2565,8 @@ def reservar_banca(ativo, direcao, score, timeframe, expiracao):
         for offset in range(len(BANCAS)):
             indice = (proxima_banca_indice + offset) % len(BANCAS)
             banca = BANCAS[indice]
+            if TIMEFRAME_POR_BANCA.get(banca) != int(timeframe):
+                continue
             dados = estado_frentes[banca]
             if dados["ocupada"] or dados.get("pre_stop_loss_ativo", False):
                 continue
@@ -2640,9 +2653,20 @@ def scanner_timeframe(
 
                 with estado_lock:
 
-                    existe_banca_livre = any(
-                        not estado_frentes[banca]["ocupada"]
-                        for banca in BANCAS
+                    banca_da_faixa = next(
+                        (
+                            banca
+                            for banca in BANCAS
+                            if TIMEFRAME_POR_BANCA.get(banca) == timeframe
+                        ),
+                        None,
+                    )
+                    existe_banca_livre = (
+                        banca_da_faixa is not None
+                        and not estado_frentes[banca_da_faixa]["ocupada"]
+                        and not estado_frentes[banca_da_faixa].get(
+                            "pre_stop_loss_ativo", False
+                        )
                     )
 
                 if not existe_banca_livre:
@@ -3040,13 +3064,15 @@ def home():
             "DIGITAL",
 
         "timeframes": {
+            "M1": "Digital M1",
             "M5": "Digital M5",
-            "M30": "Digital M30",
+            "M15": "Digital M15",
         },
 
         "distribuicao":
             (
-                f"1 banca ativa; cada sinal segue sua direção original com recuperação de 100%"
+                "3 bancas independentes por timeframe: "
+                "BANCA 1 = M1; BANCA 2 = M5; BANCA 3 = M15"
             ),
 
         "estatisticas":
@@ -3132,6 +3158,7 @@ def monitor_practice():
                 "direcao": dados.get("direcao"),
                 "score": dados.get("score"),
                 "timeframe": dados.get("timeframe"),
+                "timeframe_operacao": TIMEFRAME_POR_BANCA.get(nome),
                 "expiracao": dados.get("expiracao"),
                 "operacao": int(dados.get("ciclo_gestao", 0)),
                 "entrada_atual": float(dados.get("entrada_atual", 0.0)),

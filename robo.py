@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-BRL20-TAKEPROFIT5-REC100-10BANK-M1M10"
+VERSAO = "BASKARAIDO-DERIV-DEMO-BRL10-GALE5-X2-1BANK-M1M5M15"
 
 app = Flask(__name__)
 
@@ -177,26 +177,27 @@ TEMPO_BLOQUEIO = env_int(
 
 ENTRADA_MINIMA = 0.01
 
-MULTIPLICADOR_GALE = 1.0
-MULTIPLICADORES_POR_GALES = {0: 1.0}
+MULTIPLICADOR_GALE = 2.0
+MULTIPLICADORES_POR_GALES = {0: 2.0}
 
-# Entrada-base de R$20; sem gale e recuperação integral do déficit líquido da banca.
-GALES_POR_CICLO = 0
-MAX_GALES = 0
+# Gerenciamento único: começa com cinco gales, ajustados após cada operação fechada.
+GALES_INICIAIS = 5
+GALES_POR_CICLO = GALES_INICIAIS
+MAX_GALES = GALES_INICIAIS
 
-RECUPERACAO_PERCENTUAL = 1.0
-PRE_STOP_LOSS_BRL = 100.00
+RECUPERACAO_PERCENTUAL = 0.0
+PRE_STOP_LOSS_BRL = 0.0
 
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
 
-QTD_BANCAS = 10
+QTD_BANCAS = 1
 
 # Assertividade com resultados reais; as janelas individuais reiniciam juntas a cada 300 sinais gerais encerrados.
 
 # Entrada-base fixa em BRL convertida para a moeda da conta Deriv DEMO.
-ENTRADA_BASE_BRL = 20.00
-META_LUCRO_BRL = 5.00
+ENTRADA_BASE_BRL = 10.00
+META_LUCRO_BRL = 0.00
 
 
 
@@ -216,7 +217,7 @@ def agora_brasil():
 # ============================================================
 
 def obter_entrada_base(saldo=None):
-    """Retorna R$ 20 convertido para a moeda da conta Deriv DEMO."""
+    """Retorna R$ 10 convertidos para a moeda da conta Deriv DEMO."""
     cliente = api or _cliente_conectando
     convertido = getattr(cliente, "base_stake", None) if cliente is not None else None
     return float(convertido if convertido is not None else ENTRADA_BASE_BRL)
@@ -228,7 +229,7 @@ def obter_entrada_base(saldo=None):
 
 # M4 and M6-M9 are aggregated from complete M1 candles because Deriv
 # does not offer those candle granularities directly.
-_TIMEFRAMES_NATIVOS = {1, 2, 3, 5, 10}
+_TIMEFRAMES_NATIVOS = {1, 5, 15}
 TIMEFRAMES = {
     timeframe: {
         "segundos": timeframe * 60,
@@ -243,7 +244,7 @@ TIMEFRAMES = {
             1 if timeframe in _TIMEFRAMES_NATIVOS else timeframe
         ),
     }
-    for timeframe in range(1, 11)
+    for timeframe in (1, 5, 15)
 }
 
 
@@ -259,10 +260,7 @@ BANCAS = [
     )
 ]
 
-TIMEFRAME_POR_BANCA = {
-    f"BANCA {indice}": indice
-    for indice in range(1, QTD_BANCAS + 1)
-}
+TIMEFRAME_POR_BANCA = {"BANCA 1": (1, 5, 15)}
 
 
 
@@ -371,9 +369,9 @@ estado_frentes = {
         "ciclo_gestao": 0,
 
         "entrada_atual": ENTRADA_MINIMA,
-        "gale_atual": 0,
-        "gale_progression_level": 0,
-        "gales_reativos": 0,
+        "gale_atual": GALES_INICIAIS,
+        "gale_progression_level": GALES_INICIAIS,
+        "gales_reativos": GALES_INICIAIS,
 
         "prejuizo_acumulado": 0.0,
         "pre_stop_loss_count": 0,
@@ -1323,17 +1321,20 @@ _clientes_por_ordem = {}
 _envios_digitais_lock = threading.Lock()
 
 
-def obter_payout_digital(ativo, expiracao):
+def obter_payout_digital(ativo, expiracao, direcao):
     cliente = api
     if cliente is None:
         return None
-    chave = (id(cliente), ativo, expiracao)
+    direcao = str(direcao).strip().lower()
+    if direcao not in ("call", "put"):
+        return None
+    chave = (id(cliente), ativo, expiracao, direcao)
     registro = _payout_cache.get(chave)
     if registro and time.monotonic() < registro["ate"]:
         return registro["payout"]
     estado, payout = chamada_api_limitada(
-        "payout:" + ativo + ":" + str(expiracao),
-        lambda: cliente.get_digital_payout(ativo, expiracao),
+        "payout:" + ativo + ":" + str(expiracao) + ":" + direcao,
+        lambda: cliente.get_digital_payout(ativo, expiracao, direcao),
         PRAZO_CONSULTA_API, cliente
     )
     if estado != "ok" or isinstance(payout, bool):
@@ -1342,11 +1343,12 @@ def obter_payout_digital(ativo, expiracao):
         payout = float(payout)
     except (TypeError, ValueError, OverflowError):
         return None
-    # Deriv adapter returns net profit per stake as a ratio (e.g. 0.82), not percent.
+    # Ratio neto do payout sobre a entrada; o contrato só paga se fechar win.
     if not math.isfinite(payout) or payout <= 0:
         return None
     _payout_cache[chave] = {"payout": payout, "ate": time.monotonic() + 15}
     return payout
+
 
 def _motivo_recusa_seguro(resposta):
     # Não registrar payload arbitrário, que pode incluir dados da conta/sessão.
@@ -1624,7 +1626,7 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao, profit_target=None):
     if disponibilidade is not True:
         return recusar("disponibilidade_digital_nao_confirmada")
     try:
-        payout = obter_payout_digital(ativo, expiracao)
+        payout = obter_payout_digital(ativo, expiracao, direcao)
     except Exception as erro:
         log.warning("PAYOUT DIGITAL INDISPONIVEL | tipo=%s", type(erro).__name__)
         return recusar("payout_digital_nao_confirmado")
@@ -1804,11 +1806,11 @@ def taxa_banca_real(banca):
 
 
 def registrar_operacao_fechada_assertividade(banca):
-    """Conta sinais encerrados globalmente e reinicia todas as bancas a cada 300."""
+    """Conta operações fechadas e reinicia a progressão para cinco gales a cada 100."""
     global sinais_fechados_janela_global, wins_base_janela_global, losses_base_janela_global
     with estado_lock:
         sinais_fechados_janela_global += 1
-        if sinais_fechados_janela_global < 300:
+        if sinais_fechados_janela_global < 100:
             return False
 
         resumo = []
@@ -1819,6 +1821,9 @@ def registrar_operacao_fechada_assertividade(banca):
             resumo.append(f"{nome}={taxa(wins_janela, losses_janela):.2f}% ({wins_janela}W/{losses_janela}L)")
             dados["wins_base_janela"] = dados["wins"]
             dados["losses_base_janela"] = dados["losses"]
+            dados["gale_progression_level"] = GALES_INICIAIS
+            dados["gale_atual"] = GALES_INICIAIS
+            dados["gales_reativos"] = GALES_INICIAIS
 
         wins_janela_global = max(0, stats["wins"] - wins_base_janela_global)
         losses_janela_global = max(0, stats["losses"] - losses_base_janela_global)
@@ -1826,8 +1831,8 @@ def registrar_operacao_fechada_assertividade(banca):
         losses_base_janela_global = stats["losses"]
         sinais_fechados_janela_global = 0
         log.info(
-            "ASSERTIVIDADE REAL REINICIADA | sinais_gerais=300 | "
-            "bancas=%s | placar_janela_global=%sW/%sL",
+            "GERENCIAMENTO REINICIADO | operacoes=100 | gales=5 | "
+            "bancas=%s | placar_janela=%sW/%sL",
             " ; ".join(resumo), wins_janela_global, losses_janela_global,
         )
         return True
@@ -1889,29 +1894,28 @@ def registrar_loss(
 
 
 def atualizar_progressao_gale(banca, nivel, resultado):
-    """Loss avança; win/empate mantém o nível; loss em G2 reinicia em G0."""
-    nivel = max(0, min(MAX_GALES, int(nivel)))
+    """Loss acrescenta um gale; win remove um gale, até o mínimo zero."""
+    del nivel  # O ajuste é por operação fechada, não por cada tentativa do gale.
     with estado_lock:
+        atual = max(0, int(estado_frentes[banca]["gale_progression_level"]))
         if resultado == "loss":
-            proximo = 0 if nivel >= MAX_GALES else nivel + 1
+            proximo = atual + 1
+        elif resultado == "win":
+            proximo = max(0, atual - 1)
         else:
-            proximo = nivel
+            proximo = atual
         dados = estado_frentes[banca]
         dados["gale_progression_level"] = proximo
         dados["gale_atual"] = proximo
         dados["gales_reativos"] = proximo
-    log.info("PROGRESSAO GALE | banca=%s | resultado=%s | gale_atual=%s | proximo_gale=%s",
-             banca, resultado.upper(), nivel, proximo)
+    log.info("PROGRESSAO GALE | banca=%s | resultado=%s | gales_antes=%s | gales_proxima_operacao=%s",
+             banca, resultado.upper(), atual, proximo)
     return proximo
 
 
-# ============================================================
-# GALE FIXO CONFIGURÁVEL
-# ============================================================
-
 def multiplicador_por_gales(quantidade_gales):
-    quantidade = max(0, min(MAX_GALES, int(quantidade_gales)))
-    return MULTIPLICADORES_POR_GALES.get(quantidade, 1.0)
+    del quantidade_gales
+    return MULTIPLICADOR_GALE
 
 
 def valores_do_ciclo(
@@ -2020,7 +2024,9 @@ def obter_limite_pre_stop_loss_conta():
 
 
 def pre_stop_loss_atingido(perda_confirmada, proxima_entrada=0.0):
-    """Aciona o limite por banca antes de exceder R$100 de prejuízo líquido."""
+    """O pré-stop-loss está desativado nesta estratégia."""
+    if PRE_STOP_LOSS_BRL <= 0:
+        return False
     perda_centavos = max(0, em_centavos(perda_confirmada))
     proxima_centavos = max(0, em_centavos(proxima_entrada))
     limite_centavos = em_centavos(obter_limite_pre_stop_loss_conta())
@@ -2114,8 +2120,8 @@ def snapshot_gestao_global():
             "wins_ciclo_assertividade": placar_global_janela_real()[0],
             "losses_ciclo_assertividade": placar_global_janela_real()[1],
             "sinais_encerrados_no_ciclo_assertividade": sinais_fechados_janela_global,
-            "limite_reset_assertividade_global": 300,
-            "gales_proximos": None,
+            "limite_reset_assertividade_global": 100,
+            "gales_proximos": estado_frentes[BANCAS[0]]["gale_progression_level"],
             "assertividade_por_banca": assertividade_por_banca,
             "gales_por_banca": {
                 banca: estado_frentes[banca]["gale_progression_level"]
@@ -2126,15 +2132,15 @@ def snapshot_gestao_global():
                 for banca in BANCAS
             },
             "prejuizo_por_banca": prejuizo_por_banca,
-            "sequencia_gales": list(range(MAX_GALES + 1)),
+            "sequencia_gales": list(range(GALES_INICIAIS + 1)),
             "entradas_por_gale": {
                 nivel: round(obter_entrada_base() * (MULTIPLICADOR_GALE ** nivel), 2)
-                for nivel in range(MAX_GALES + 1)
+                for nivel in range(GALES_INICIAIS + 1)
             },
             "multiplicador_gale": MULTIPLICADOR_GALE,
-            "pre_stop_loss_brl": PRE_STOP_LOSS_BRL,
+            "pre_stop_loss_brl": 0.0,
             "pre_stop_loss_conta": obter_limite_pre_stop_loss_conta(),
-            "regra_pre_stop_loss": "Pausa a banca antes de exceder R$ 100 de prejuízo líquido.",
+            "regra_pre_stop_loss": "Desativado por configuração.",
             "multiplicadores_por_gales": {str(nivel): valor for nivel, valor in MULTIPLICADORES_POR_GALES.items()},
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "envio_indeterminado": dict(next(iter(envios_indeterminados.values()))) if envios_indeterminados else None,
@@ -2142,8 +2148,8 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Desativado; todas as operações usam a entrada-base.",
-            "regra_recuperacao": "Recupera 100% do déficit líquido da banca e busca mais R$ 5; sem recuperação quando a banca estiver positiva.",
+            "regra_gales": "Começa com 5 gales; loss soma 1; win subtrai 1; reinicia a cada 100 operações.",
+            "regra_recuperacao": "Desativada; sem recuperação de perdas.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }
@@ -2159,16 +2165,16 @@ def marcar_envio_indeterminado(banca, ativo, nivel, valor, motivo):
 
 
 def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
-    """Escolha, envio e confirmação serializados; a recusa não consome posição."""
+    """Calcula a entrada-base x2 por nível e envia exclusivamente à conta DEMO."""
     global entradas_globais_aceitas, ultimo_saldo_demo
     with contador_entrada_lock:
         with estado_lock:
             contexto = operacoes_ativas.get(banca)
             if banca in envios_indeterminados:
-                log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=envio_indeterminado | reconciliação em andamento", banca, ativo)
+                log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=envio_indeterminado", banca, ativo)
                 return False, "banca_com_envio_indeterminado", contexto
             if nivel == 0 and envios_indeterminados:
-                log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=conciliacao_de_ordem_global_pendente", banca, ativo)
+                log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=conciliacao_de_ordem_pendente", banca, ativo)
                 return False, "outra_ordem_em_conciliacao", contexto
             if any(o["banca"] == banca for o in ordens_pendentes.values()):
                 log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=ordem_ja_pendente", banca, ativo)
@@ -2191,114 +2197,73 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             log.warning("SALDO DEMO INDISPONÍVEL | %s", banca)
             return False, "saldo_indisponivel", contexto
 
-        # Consulta o payout conservador antes de dimensionar uma recuperação.
-        with estado_lock:
-            precisa_recuperacao = (
-                nivel == 0
-                and estado_frentes[banca]["recuperacao_pendente"] > 0
-            )
-        payout_recuperacao = (
-            obter_payout_digital(ativo, expiracao)
-            if precisa_recuperacao else None
-        )
-        meta_lucro_base = obter_meta_lucro_conta()
-
         with estado_lock:
             ultimo_saldo_demo = saldo
             if nivel == 0:
                 assertividade_atual = taxa_banca_real(banca)
-                posicao = int(estado_frentes[banca]["gale_progression_level"])
-                perda_anterior = estado_frentes[banca]["recuperacao_pendente"]
-                alvo = calcular_alvo_recuperacao(perda_anterior)
+                quantidade_gales = max(
+                    0, int(estado_frentes[banca]["gale_progression_level"])
+                )
                 base = obter_entrada_base(saldo)
-                if meta_lucro_base <= 0:
-                    return False, "meta_lucro_indisponivel", operacoes_ativas.get(banca)
-                if alvo > 0:
-                    if payout_recuperacao is None or payout_recuperacao <= 0:
-                        return False, "payout_recuperacao_indisponivel", operacoes_ativas.get(banca)
-                    entrada_base_gale = calcular_entrada_recuperacao(
-                        alvo, payout_recuperacao, saldo, lucro_alvo=meta_lucro_base)
-                else:
-                    entrada_base_gale = base
-                # A recuperação substitui a entrada-base quando há déficit; gales estão desativados.
-                entrada_inicial = round(
-                    entrada_base_gale
-                    if alvo > 0
-                    else base * (MULTIPLICADOR_GALE ** posicao),
+                if not math.isfinite(base) or base <= 0:
+                    return False, "entrada_base_indisponivel", operacoes_ativas.get(banca)
+                contexto = {
+                    "posicao": 0,
+                    "numero": estado_frentes[banca]["ciclo_gestao"] + 1,
+                    "gales": quantidade_gales,
+                    "assertividade_banca": assertividade_atual,
+                    "base": base,
+                    "entrada": base,
+                    "prejuizo_alocado": 0.0,
+                    "meta_lucro_contrato": 0.0,
+                    "recuperacao_diferida": False,
+                    "resultado_centavos": 0,
+                    "primeira_ordem": None,
+                    "ultimo_nivel": -1,
+                    "ultimo_nivel_local": -1,
+                    "ativo": ativo,
+                }
+            try:
+                valor = round(
+                    float(contexto["entrada"]) * (MULTIPLICADOR_GALE ** int(nivel)),
                     2,
                 )
-                contexto = {"posicao": posicao,
-                            "numero": estado_frentes[banca]["ciclo_gestao"] + 1,
-                            "gales": MAX_GALES - posicao,
-                            "assertividade_banca": assertividade_atual,
-                            "base": base,
-                            "entrada": entrada_inicial,
-                            "prejuizo_alocado": alvo,
-                            "meta_lucro_contrato": round(meta_lucro_base + alvo, 2),
-                            "recuperacao_diferida": False,
-                            "resultado_centavos": 0,
-                            "primeira_ordem": None,
-                            "ultimo_nivel": posicao - 1,
-                            "ultimo_nivel_local": -1,
-                            "ativo": ativo}
-            valor = valores_do_ciclo(
-                contexto["entrada"], contexto["gales"],
-                multiplicador_por_gales(contexto["gales"])
-            )[nivel]
-            # Conservador enquanto a atualização de saldo da corretora pode estar atrasada.
+            except (OverflowError, ValueError):
+                valor = math.inf
+
             comprometido = sum(o["valor"] for o in ordens_pendentes.values())
             disponivel = saldo - comprometido - sum(reservas_pendentes.values())
-            if nivel == 0 and contexto["prejuizo_alocado"] > 0 and valor > disponivel:
-                # O alvo continua integralmente reservado. Não alocar uma recuperação
-                # que não cabe permite aos sinais normais continuarem pela base;
-                # somente resultados confirmados podem reduzir o ledger.
-                log.warning("RECUPERACAO ADIADA | banca=%s | ativo=%s | motivo=saldo_insuficiente_para_recuperacao_integral | prejuizo=%.2f | entrada_recuperacao=%.2f | disponivel=%.2f | entrada_normal=%.2f | divida_preservada=true",
-                            banca, ativo, contexto["prejuizo_alocado"], valor, disponivel, contexto["base"])
-                contexto["entrada"] = round(contexto["base"] * (MULTIPLICADOR_GALE ** contexto["posicao"]), 2)
-                contexto["prejuizo_alocado"] = 0.0
-                contexto["recuperacao_diferida"] = True
-                valor = contexto["entrada"]
-            # Considera o déficit líquido acumulado desta banca e a ordem que viria a seguir.
-            perda_confirmada = max(
-                0, -em_centavos(estado_frentes[banca]["resultado_liquido"])
-                    - int(contexto.get("resultado_centavos", 0))
-            ) / 100
-            if pre_stop_loss_atingido(perda_confirmada, valor):
-                log.warning(
-                    "PRE-STOP PREVENTIVO | banca=%s | ativo=%s | "
-                    "perda_confirmada=%.2f | proxima_entrada=%.2f | "
-                    "limite_brl=%.2f | conta=DEMO",
-                    banca, ativo, perda_confirmada, valor, PRE_STOP_LOSS_BRL
-                )
-                return False, "pre_stop_loss", operacoes_ativas.get(banca)
             if valor > disponivel or valor < ENTRADA_MINIMA:
-                log.warning("SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=saldo_insuficiente | nivel=%s | valor=%.2f | saldo=%.2f | comprometido=%.2f | disponivel=%.2f", banca, ativo, nivel, valor, saldo, comprometido, disponivel)
+                log.warning(
+                    "SINAL BLOQUEADO | banca=%s | ativo=%s | motivo=saldo_insuficiente | "
+                    "nivel=%s | valor=%s | saldo=%.2f | disponivel=%.2f",
+                    banca, ativo, nivel, valor, saldo, disponivel,
+                )
                 return False, "saldo_insuficiente", operacoes_ativas.get(banca)
-            if nivel == 0 and contexto["prejuizo_alocado"] > 0:
-                recuperacoes_em_curso.add(banca)
-                log.info("RECUPERACAO DIMENSIONADA | banca=%s | ativo=%s | deficit_liquido_banca=%.2f | entrada_com_recuperacao=%.2f | alvo=%.0f%% | conta=DEMO", banca, ativo, contexto["prejuizo_alocado"], valor, RECUPERACAO_PERCENTUAL * 100)
+
             reservas_pendentes[banca] = valor
-            log.info("SALDO RESERVADO | banca=%s | ativo=%s | nivel=%s | valor=%.2f | saldo=%.2f | disponivel=%.2f | recuperacao=%.2f | conta=DEMO", banca, ativo, nivel, valor, saldo, disponivel, contexto["prejuizo_alocado"])
+            log.info(
+                "SALDO RESERVADO | banca=%s | ativo=%s | nivel=%s | valor=%.2f | "
+                "saldo=%.2f | disponivel=%.2f | recuperacao=0.00 | conta=DEMO",
+                banca, ativo, nivel, valor, saldo, disponivel,
+            )
 
         try:
             ok, order_id = executar_ordem(
-                banca, ativo, valor, direcao, expiracao,
-                profit_target=contexto.get("meta_lucro_contrato", obter_meta_lucro_conta())
+                banca, ativo, valor, direcao, expiracao, profit_target=0.0
             )
         except Exception as erro:
             ok, order_id = None, type(erro).__name__
 
         with estado_lock:
             if ok is None:
-                # Reserva financeira e lease permanecem enquanto o envio é incerto.
                 marcar_envio_indeterminado(banca, ativo, nivel, valor, order_id)
                 envios_indeterminados[banca]["contexto"] = dict(contexto)
                 return None, order_id, contexto
             if not ok:
                 reservas_pendentes.pop(banca, None)
-                if nivel == 0 and banca in recuperacoes_em_curso:
-                    recuperacoes_em_curso.discard(banca)
-                log.warning("RESERVA LIBERADA | banca=%s | ativo=%s | nivel=%s | motivo=ordem_nao_aceita", banca, ativo, nivel)
+                log.warning("RESERVA LIBERADA | banca=%s | ativo=%s | nivel=%s | motivo=ordem_nao_aceita",
+                            banca, ativo, nivel)
                 return False, order_id, operacoes_ativas.get(banca)
             return confirmar_ordem_gerida(banca, ativo, nivel, valor, order_id, contexto)
 
@@ -2407,17 +2372,17 @@ def finalizar_operacao_global(banca):
             if resultado_operacao > 0:
                 registrar_win(banca, int(contexto.get("ultimo_nivel", 0)))
                 vitorias_progressao += 1
+                atualizar_progressao_gale(banca, 0, "win")
             elif resultado_operacao < 0:
                 registrar_loss(banca)
                 perdas_progressao += 1
+                atualizar_progressao_gale(banca, 0, "loss")
             local = em_centavos(dados["resultado_liquido"]) + resultado_operacao
             dados["resultado_liquido"] = local / 100
             dados["prejuizo_acumulado"] = max(0, -local) / 100
 
             # Mantém recuperação de 100% somente sobre o déficit líquido acumulado.
-            dados["recuperacao_pendente"] = round(
-                dados["prejuizo_acumulado"] * RECUPERACAO_PERCENTUAL, 2
-            )
+            dados["recuperacao_pendente"] = 0.0
             dados["em_recuperacao"] = False
             recuperacoes_em_curso.discard(banca)
             historico_operacoes.append({
@@ -2430,7 +2395,7 @@ def finalizar_operacao_global(banca):
                 "direcao": dados.get("direcao"),
                 "score": dados.get("score"),
                 "timeframe": dados.get("timeframe"),
-                "timeframe_operacao": TIMEFRAME_POR_BANCA.get(banca),
+                "timeframe_operacao": list(TIMEFRAME_POR_BANCA.get(banca, ())),
                 "expiracao": dados.get("expiracao"),
                 "resultado": "WIN" if resultado_operacao > 0 else "LOSS" if resultado_operacao < 0 else "EMPATE",
                 "resultado_liquido": resultado_operacao / 100,
@@ -2486,101 +2451,102 @@ def aguardar_resultado_confirmado(order_id):
 
 def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
     ativo = str(ativo).strip().upper()
-    global vitorias_progressao, perdas_progressao
     with estado_lock:
         dados = estado_frentes[banca]
         if not dados["ocupada"] or dados["ativo"] != ativo or dados["ciclo_em_execucao"]:
             return
         dados["ciclo_em_execucao"] = True
     try:
-        ok, order_id, contexto = enviar_ordem_gerida(banca, ativo, direcao, expiracao)
+        ok, order_id, contexto = enviar_ordem_gerida(
+            banca, ativo, direcao, expiracao
+        )
         if ok is None:
             ok, order_id, contexto = aguardar_confirmacao_envio_gerido(banca)
         if not ok:
-            if order_id == "pre_stop_loss":
-                processar_pre_stop_loss(banca, ativo)
             return
-        gales = contexto["gales"]
-        valores = valores_do_ciclo(
-            contexto["entrada"], gales, MULTIPLICADOR_GALE
+
+        gales = int(contexto["gales"])
+        log.info(
+            "GESTAO | banca=%s | operação=%s | entrada=%s %.2f | "
+            "multiplicador=x2 | gales_disponiveis=%s | recuperação=desativada | "
+            "stop_loss=desativado | payout=aguardar_vencimento | conta=DEMO",
+            banca, contexto["numero"], getattr(api, "currency", "USD"),
+            contexto["entrada"], gales,
         )
-        log.info("GESTAO | banca=%s | operação=%s | assertividade=%.2f%% | entrada=%s %.2f | meta_contrato=%s %.2f | gale=desativado | recuperação=%.0f%% se banca negativa",
-                 banca, contexto["numero"], contexto["assertividade_banca"],
-                 getattr(api, "currency", "USD"), contexto["entrada"],
-                 getattr(api, "currency", "USD"), contexto["meta_lucro_contrato"],
-                 RECUPERACAO_PERCENTUAL * 100)
         with estado_lock:
             estado_frentes[banca]["ultimo_sinal"] = {
-                "ativo": ativo, "direcao": direcao, "score": score,
-                "timeframe": timeframe_analise, "expiracao": expiracao,
-                "ciclo": contexto["numero"], "posicao": contexto["posicao"], "assertividade_banca": contexto["assertividade_banca"],
-                "entrada": contexto["entrada"], "gales": gales,
-                "gale_atual": contexto["posicao"],
+                "ativo": ativo,
+                "direcao": direcao,
+                "score": score,
+                "timeframe": timeframe_analise,
+                "expiracao": expiracao,
+                "ciclo": contexto["numero"],
+                "posicao": 0,
+                "assertividade_banca": contexto["assertividade_banca"],
+                "entrada": contexto["entrada"],
+                "gales": gales,
+                "gale_atual": 0,
                 "multiplicador": MULTIPLICADOR_GALE,
-                "recuperacao": contexto["prejuizo_alocado"] > 0,
-                "prejuizo_antes": contexto["prejuizo_alocado"],
-                "data": datetime.now(timezone.utc).isoformat()}
-        sequencia = " → ".join(
-            f"{getattr(api, 'currency', 'USD')} {v:.2f}"
-            for i, v in enumerate(valores)
+                "recuperacao": False,
+                "prejuizo_antes": 0.0,
+                "data": datetime.now(timezone.utc).isoformat(),
+            }
+        telegram(
+            "📊 NOVA OPERAÇÃO | Baskaraido Trader PRO\n"
+            f"🏦 {banca}\n💱 {ativo}\n🎯 {direcao.upper()}\n"
+            f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n"
+            f"🔥 Score: {score}/100\n"
+            f"💵 Entrada inicial: R$ {ENTRADA_BASE_BRL:.2f}\n"
+            f"🔢 Gales disponíveis: {gales} | multiplicador x2\n"
+            "⏳ Sem venda antecipada: aguardar o vencimento para o payout do contrato.\n"
+            "🧪 Deriv DEMO"
         )
-        telegram("📊 NOVO SINAL | Baskaraido Trader PRO\n"
-                 f"🏦 {banca}\n💱 {ativo}\n🎯 {direcao.upper()}\n"
-                 f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n🔥 Score: {score}/100\n"
-                 f"🔢 Operação da {banca}: {contexto['numero']} / assertividade {contexto['assertividade_banca']:.2f}%\n"
-                 f"🛡 Sem gale | entrada-base R$ 20 | recuperação 100% se a banca ficar negativa\n💰 {sequencia}\n"
-                 "🎯 Recuperação busca cobrir o déficit + R$ 5\n🧪 Deriv DEMO")
 
         for nivel in range(gales + 1):
             if nivel > 0:
-                ok, order_id, _ = enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel)
+                ok, order_id, _ = enviar_ordem_gerida(
+                    banca, ativo, direcao, expiracao, nivel
+                )
                 if ok is None:
                     ok, order_id, _ = aguardar_confirmacao_envio_gerido(banca)
                 if not ok:
-                    if order_id == "pre_stop_loss":
-                        processar_pre_stop_loss(banca, ativo)
-                        return
                     log.warning("CICLO INTERROMPIDO | %s | %s", banca, order_id)
                     return
+
             resultado, lucro = aguardar_resultado_confirmado(order_id)
             if not registrar_resultado_ordem(order_id, resultado, lucro):
                 return
-            nivel_absoluto = contexto["posicao"] + nivel
-            log.info("RESULTADO %s | banca=%s | ativo=%s | order_id=%s | M%s | gale=G%s | lucro=%.2f | conta=DEMO",
-                     resultado.upper(), banca, ativo, order_id, timeframe_analise, nivel_absoluto, lucro)
-            atualizar_progressao_gale(banca, nivel_absoluto, resultado)
-            with estado_lock:
-                perda_operacao = max(
-                    0, -em_centavos(estado_frentes[banca]["resultado_liquido"])
-                        - operacoes_ativas[banca]["resultado_centavos"]
-                ) / 100
-            if pre_stop_loss_atingido(perda_operacao):
-                processar_pre_stop_loss(banca, ativo)
-                return
-            if resultado == "loss" and nivel_absoluto < MAX_GALES:
+            log.info(
+                "RESULTADO %s | banca=%s | ativo=%s | order_id=%s | M%s | "
+                "gale=G%s | lucro=%.2f | conta=DEMO",
+                resultado.upper(), banca, ativo, order_id, timeframe_analise,
+                nivel, lucro,
+            )
+            if resultado == "loss" and nivel < gales:
                 time.sleep(1)
                 continue
+
             with estado_lock:
                 resultado_sinal_centavos = operacoes_ativas[banca]["resultado_centavos"]
                 liquido = resultado_sinal_centavos / 100
-            # A classificação enviada acompanha o resultado líquido da sequência.
             resultado_sinal = (
                 "win" if resultado_sinal_centavos > 0 else
                 "loss" if resultado_sinal_centavos < 0 else
                 "draw"
             )
             gestao = finalizar_operacao_global(banca)
-            telegram(f"🤖 Deriv DEMO | {'✅ WIN' if resultado_sinal == 'win' else '❌ LOSS COMPLETO' if resultado_sinal == 'loss' else '➖ EMPATE'}\n"
-                     f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
-                     f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                     "🎯 Recuperação de 100% quando a banca ficar líquida negativa\n"
-                     f"🛡 Próximo nível desta banca: G{estado_frentes[banca]['gale_progression_level']}\n"
-                     f"📊 Total geral: {stats['wins']} WIN / {stats['losses']} LOSS\n"
-                     f"🎯 Assertividade da {banca}: {taxa_banca_real(banca)}%\n"
-                     f"💰 Saldo Deriv DEMO: {texto_saldo()} {getattr(api, 'currency', '')}")
+            estado = estado_frentes[banca]["gale_progression_level"]
+            telegram(
+                f"🤖 Deriv DEMO | {'✅ WIN' if resultado_sinal == 'win' else '❌ LOSS' if resultado_sinal == 'loss' else '➖ EMPATE'}\n"
+                f"🏦 {banca} | {ativo}\n"
+                f"⏱ M{timeframe_analise} / Digital M{expiracao}\n"
+                f"💵 Resultado líquido da operação: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
+                f"🔢 Próxima operação: {estado} gales | multiplicador x2\n"
+                f"📊 Total: {stats['wins']} WIN / {stats['losses']} LOSS\n"
+                f"💰 Saldo Deriv DEMO: {texto_saldo()} {getattr(api, 'currency', '')}"
+            )
             return
     finally:
-        # Se existe ordem incerta, não libera posições nem a reserva de saldo.
         finalizar_operacao_global(banca)
         liberar_banca(banca, ativo)
 
@@ -2606,7 +2572,7 @@ def reservar_banca(ativo, direcao, score, timeframe, expiracao):
         for offset in range(len(BANCAS)):
             indice = (proxima_banca_indice + offset) % len(BANCAS)
             banca = BANCAS[indice]
-            if TIMEFRAME_POR_BANCA.get(banca) != int(timeframe):
+            if int(timeframe) not in TIMEFRAME_POR_BANCA.get(banca, ()):
                 continue
             dados = estado_frentes[banca]
             if dados["ocupada"] or dados.get("pre_stop_loss_ativo", False):
@@ -2698,7 +2664,7 @@ def scanner_timeframe(
                         (
                             banca
                             for banca in BANCAS
-                            if TIMEFRAME_POR_BANCA.get(banca) == timeframe
+                            if timeframe in TIMEFRAME_POR_BANCA.get(banca, ())
                         ),
                         None,
                     )
@@ -3115,9 +3081,9 @@ def home():
 
         "distribuicao":
             (
-                f"{QTD_BANCAS} bancas independentes: "
+                f"{QTD_BANCAS} banca única nos timeframes: "
                 + "; ".join(
-                    f"{banca} = M{TIMEFRAME_POR_BANCA[banca]}"
+                    f"{banca} = {' · '.join(f'M{tf}' for tf in TIMEFRAME_POR_BANCA[banca])}"
                     for banca in BANCAS
                 )
             ),
@@ -3183,7 +3149,7 @@ def monitor_practice():
             "wins_ciclo_assertividade": placar_global_janela_real()[0],
             "losses_ciclo_assertividade": placar_global_janela_real()[1],
             "sinais_encerrados_no_ciclo_assertividade": sinais_fechados_janela_global,
-            "limite_reset_assertividade_global": 300,
+            "limite_reset_assertividade_global": 100,
         }
         frentes = {
             nome: {
@@ -3205,7 +3171,7 @@ def monitor_practice():
                 "direcao": dados.get("direcao"),
                 "score": dados.get("score"),
                 "timeframe": dados.get("timeframe"),
-                "timeframe_operacao": TIMEFRAME_POR_BANCA.get(nome),
+                "timeframe_operacao": list(TIMEFRAME_POR_BANCA.get(nome, ())),
                 "expiracao": dados.get("expiracao"),
                 "operacao": int(dados.get("ciclo_gestao", 0)),
                 "entrada_atual": float(dados.get("entrada_atual", 0.0)),
@@ -3339,11 +3305,10 @@ log.info(
 )
 
 log.info(
-    "GESTÃO INDIVIDUAL | %s BANCAS ATIVAS | sinais direcionados à banca do timeframe | "
-    "SEM GALE; RECUPERACAO 100%% DO DEFICIT LIQUIDO; PRE-STOP LOSS BRL 100 | "
-    "ENTRADA BASE BRL 20.00; META DE LUCRO BRL 5.00 | "
-    "TIMEFRAMES ATIVOS: %s | "
-    "ASSERTIVIDADE REAL; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados",
+    "GERENCIAMENTO | %s BANCA ATIVA | 5 gales iniciais; loss +1 gale; win -1 gale | "
+    "MULTIPLICADOR X2; entrada-base BRL 10.00; sem recuperação, stop-loss ou barreira | "
+    "Aguardar vencimento do contrato; reset da progressão a cada 100 operações | "
+    "TIMEFRAMES ATIVOS: %s | assertividade histórica preservada",
     QTD_BANCAS,
     " · ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))
 )
@@ -3355,8 +3320,7 @@ log.info(
 )
 
 log.info(
-    "DISTRIBUIÇÃO = "
-    "cada sinal aprovado vai para uma banca livre; a direção do sinal é mantida"
+    "DISTRIBUIÇÃO = uma única banca pode operar M1, M5 e M15; a direção do sinal é mantida"
 )
 
 log.info(

@@ -13,7 +13,10 @@ import websocket
 
 REST_BASE = "https://api.derivws.com"
 DEMO_WS_PATH = "/trading/v1/options/ws/demo"
-_ALLOWED_MINUTES = frozenset({1, 5, 15})
+_ALLOWED_MINUTES = frozenset(range(1, 11))
+_ALLOWED_CANDLE_GRANULARITIES = frozenset({
+    60, 120, 180, 300, 600, 900, 1800, 3600, 7200, 14400, 28800, 86400,
+})
 _TIMEOUT = 8
 
 
@@ -321,8 +324,12 @@ class DerivOptionsClient:
         return isinstance(symbol, str) and symbol in symbols
 
     def get_candles(self, symbol, granularity, count, end):
-        allowed = {60: 60, 300: 300, 900: 900}
-        if granularity not in allowed or isinstance(count, bool) or not isinstance(count, int) or not 60 <= count <= 500:
+        if (
+            granularity not in _ALLOWED_CANDLE_GRANULARITIES
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or not 60 <= count <= 1000
+        ):
             raise DerivAPIError("ValidationError")
         if not self.is_symbol_tradeable(symbol):
             raise DerivAPIError("ContractNotFound")

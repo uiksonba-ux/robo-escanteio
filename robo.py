@@ -163,7 +163,7 @@ PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
 
 QTD_BANCAS = 10
 
-# A assertividade define a quantidade de gales; entrada-base fixa em USD.
+# A assertividade permanece apenas como estatística; os gales seguem o contador da banca.
 ENTRADA_BASE_USD = 0.35
 
 
@@ -2747,7 +2747,7 @@ log.info(
 log.info(
     "GESTÃO INDIVIDUAL POR BANCA | "
     "GALE X%s | "
-    "FAIXAS DE ASSERTIVIDADE POR BANCA <50=4, 50-59=3, 60-69=2, 70-79=1, >=80=0; INICIAL=%s | "
+    "CONTADOR DE GALES POR BANCA: inicial=%s; LOSS +1; WIN -1 (mínimo 0) | "
     "CICLOS ILIMITADOS | "
     "RECUPERAÇÃO PRÓPRIA %g%%",
 

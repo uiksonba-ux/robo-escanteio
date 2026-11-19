@@ -50,7 +50,7 @@ class MonitorWorkerLifecycleTests(unittest.TestCase):
 
         self.assertEqual(
             start_scanner.call_args_list,
-            [mock.call(timeframe, (timeframe - 1) * 2) for timeframe in range(1, 11)],
+            [mock.call(1, 0), mock.call(5, 2), mock.call(15, 4)],
         )
         thread_class.assert_called_once()
 

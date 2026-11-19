@@ -133,7 +133,7 @@ class TestDerivOptionsClientReadOnly(unittest.TestCase):
         )
 
 
-    def test_directional_relative_barriers_are_used_for_demo_quotes(self):
+    def test_call_put_quotes_have_no_barrier(self):
         client = DerivOptionsClient.__new__(DerivOptionsClient)
         client.base_stake = 2.0
         client.currency = "USD"
@@ -143,12 +143,12 @@ class TestDerivOptionsClientReadOnly(unittest.TestCase):
             {"proposal": {"id": "put", "ask_price": 2.0, "payout": 2.5}},
         ])
 
-        self.assertEqual(client.get_digital_payout("R_100", 5), 0.25)
+        self.assertEqual(client.get_digital_payout("R_100", 5, "call"), 0.5)
+        self.assertEqual(client.get_digital_payout("R_100", 5, "put"), 0.25)
         requests = [call.args[0] for call in client._request.call_args_list]
-        self.assertEqual(requests[0]["contract_type"], "HIGHER")
-        self.assertEqual(requests[0]["barrier"], "-0.100")
-        self.assertEqual(requests[1]["contract_type"], "LOWER")
-        self.assertEqual(requests[1]["barrier"], "+0.100")
+        self.assertEqual(requests[0]["contract_type"], "CALL")
+        self.assertEqual(requests[1]["contract_type"], "PUT")
+        self.assertTrue(all("barrier" not in request for request in requests))
 
 if __name__ == "__main__":
     unittest.main()

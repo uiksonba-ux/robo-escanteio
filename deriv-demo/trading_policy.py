@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_UP
 import math
 from typing import Any
 
-ALLOWED_DURATION_MINUTES = frozenset(range(1, 11))
+ALLOWED_DURATION_MINUTES = frozenset({1, 5, 15})
 # Only contracts with binary-style rise/fall payoff. Verify against contracts_for
 # for the selected underlying before quoting; this is not a blanket guarantee.
 ALLOWED_CONTRACT_TYPES = frozenset({"CALL", "PUT"})
@@ -13,24 +13,20 @@ FORBIDDEN_TYPES = frozenset({"multiplier", "cfd"})
 DEMO_ONLY = True
 
 
-# Shared management: accuracy bands select the maximum number of gales.
-# Stake amounts are denominated in the authenticated DEMO account currency.
-MAX_GALES = 4
+# Initial management reference for the DEMO bot. Live progression is stored in robo.py.
+GALES_INICIAIS = 5
+MAX_GALES = GALES_INICIAIS
 GALE_MULTIPLIER = 2
-BASE_STAKE_BRL = 2.00
-RECOVERY_PERCENT = 1.0
-ACCURACY_GALE_BANDS = ((50.0, 4), (60.0, 3), (70.0, 2), (80.0, 1), (100.0, 0))
+BASE_STAKE_BRL = 10.00
+RECOVERY_PERCENT = 0.0
 
 
 def gales_for_accuracy(accuracy: float) -> int:
+    """Validate the old parameter and return the configured initial five gales."""
     value = float(accuracy)
     if not math.isfinite(value) or not 0 <= value <= 100:
         raise ValueError("Assertividade precisa estar entre 0 e 100")
-    for upper_bound, gales in ACCURACY_GALE_BANDS:
-        if value < upper_bound:
-            return gales
-    return 0
-
+    return GALES_INICIAIS
 
 def brl_to_account_currency(amount_brl: float, exchange_rate: float) -> float:
     """Convert the BRL stake with a fresh Deriv quote; result is in account currency."""

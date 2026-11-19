@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-BRL10-GALE5-X2-1BANK-M1M5M15"
+VERSAO = "BASKARAIDO-DERIV-DEMO-BRL10-GALE5-X2-10BANK-INDEPENDENT-M1M5M15"
 
 app = Flask(__name__)
 
@@ -191,9 +191,9 @@ PRE_STOP_LOSS_BRL = 0.0
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
 
-QTD_BANCAS = 1
+QTD_BANCAS = 10
 
-# Assertividade com resultados reais; as janelas individuais reiniciam juntas a cada 300 sinais gerais encerrados.
+# Assertividade informativa; cada banca reinicia sua janela e seus gales após 100 operações próprias.
 
 # Entrada-base fixa em BRL convertida para a moeda da conta Deriv DEMO.
 ENTRADA_BASE_BRL = 10.00
@@ -260,7 +260,10 @@ BANCAS = [
     )
 ]
 
-TIMEFRAME_POR_BANCA = {"BANCA 1": (1, 5, 15)}
+TIMEFRAME_POR_BANCA = {
+    banca: tuple(sorted(TIMEFRAMES))
+    for banca in BANCAS
+}
 
 
 
@@ -352,6 +355,7 @@ estado_frentes = {
         "losses": 0,
         "wins_base_janela": 0,
         "losses_base_janela": 0,
+        "sinais_fechados_janela": 0,
 
         "win_direto": 0,
         "win_g1": 0,
@@ -586,10 +590,10 @@ def conectar():
             f"🏦 {QTD_BANCAS} bancas ativas | gestão individual\n"
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            "📈 Entrada-base de R$ 20, sem gale; recuperação de 100% se a banca ficar líquida negativa\n"
-            "🎯 Meta líquida de R$ 5; a recuperação cobre o déficit + R$ 5\n"
-            "📊 Assertividade baseada somente em WIN/LOSS reais; todas as janelas reiniciam a cada 300 sinais gerais encerrados\n"
-            "💰 Fechamento antecipado na meta do sinal ou da recuperação\n"
+            "🛡 Cada banca: 5 gales iniciais; LOSS +1 e WIN -1 (mínimo 0), sem limite máximo\n"
+            "📈 Multiplicador X2; entrada-base de R$ 10; recuperação e stop-loss desativados\n"
+            "🔄 Cada banca reinicia sua progressão após 100 operações próprias\n"
+            "⏳ Aguardar o vencimento do contrato para liquidar\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
         return True
@@ -1806,34 +1810,35 @@ def taxa_banca_real(banca):
 
 
 def registrar_operacao_fechada_assertividade(banca):
-    """Conta operações fechadas e reinicia a progressão para cinco gales a cada 100."""
+    """Reinicia a janela e os gales desta banca após 100 sinais da própria banca."""
     global sinais_fechados_janela_global, wins_base_janela_global, losses_base_janela_global
     with estado_lock:
+        dados = estado_frentes[banca]
+        dados["sinais_fechados_janela"] += 1
+
+        # Janela global preservada só para estatística; não altera gales individuais.
         sinais_fechados_janela_global += 1
-        if sinais_fechados_janela_global < 100:
+        if sinais_fechados_janela_global >= 100:
+            wins_base_janela_global = stats["wins"]
+            losses_base_janela_global = stats["losses"]
+            sinais_fechados_janela_global = 0
+
+        if dados["sinais_fechados_janela"] < 100:
             return False
 
-        resumo = []
-        for nome in BANCAS:
-            dados = estado_frentes[nome]
-            wins_janela = max(0, dados["wins"] - dados["wins_base_janela"])
-            losses_janela = max(0, dados["losses"] - dados["losses_base_janela"])
-            resumo.append(f"{nome}={taxa(wins_janela, losses_janela):.2f}% ({wins_janela}W/{losses_janela}L)")
-            dados["wins_base_janela"] = dados["wins"]
-            dados["losses_base_janela"] = dados["losses"]
-            dados["gale_progression_level"] = GALES_INICIAIS
-            dados["gale_atual"] = GALES_INICIAIS
-            dados["gales_reativos"] = GALES_INICIAIS
+        wins_janela = max(0, dados["wins"] - dados["wins_base_janela"])
+        losses_janela = max(0, dados["losses"] - dados["losses_base_janela"])
+        dados["wins_base_janela"] = dados["wins"]
+        dados["losses_base_janela"] = dados["losses"]
+        dados["sinais_fechados_janela"] = 0
+        dados["gale_progression_level"] = GALES_INICIAIS
+        dados["gale_atual"] = GALES_INICIAIS
+        dados["gales_reativos"] = GALES_INICIAIS
 
-        wins_janela_global = max(0, stats["wins"] - wins_base_janela_global)
-        losses_janela_global = max(0, stats["losses"] - losses_base_janela_global)
-        wins_base_janela_global = stats["wins"]
-        losses_base_janela_global = stats["losses"]
-        sinais_fechados_janela_global = 0
         log.info(
-            "GERENCIAMENTO REINICIADO | operacoes=100 | gales=5 | "
-            "bancas=%s | placar_janela=%sW/%sL",
-            " ; ".join(resumo), wins_janela_global, losses_janela_global,
+            "GERENCIAMENTO REINICIADO | banca=%s | operacoes_da_banca=100 | gales=5 | "
+            "placar_janela=%sW/%sL",
+            banca, wins_janela, losses_janela,
         )
         return True
 
@@ -2099,6 +2104,10 @@ def snapshot_gestao_global():
             banca: estado_frentes[banca]["recuperacao_pendente"]
             for banca in BANCAS
         }
+        maior_gale_atual = max(
+            (int(estado_frentes[banca]["gale_progression_level"]) for banca in BANCAS),
+            default=GALES_INICIAIS,
+        )
         return {
             "entrada_base": obter_entrada_base(),
             "entrada_base_brl": ENTRADA_BASE_BRL,
@@ -2121,6 +2130,11 @@ def snapshot_gestao_global():
             "losses_ciclo_assertividade": placar_global_janela_real()[1],
             "sinais_encerrados_no_ciclo_assertividade": sinais_fechados_janela_global,
             "limite_reset_assertividade_global": 100,
+            "limite_reset_gale_por_banca": 100,
+            "operacoes_ate_reset_por_banca": {
+                banca: 100 - estado_frentes[banca]["sinais_fechados_janela"]
+                for banca in BANCAS
+            },
             "gales_proximos": estado_frentes[BANCAS[0]]["gale_progression_level"],
             "assertividade_por_banca": assertividade_por_banca,
             "gales_por_banca": {
@@ -2132,10 +2146,10 @@ def snapshot_gestao_global():
                 for banca in BANCAS
             },
             "prejuizo_por_banca": prejuizo_por_banca,
-            "sequencia_gales": list(range(GALES_INICIAIS + 1)),
+            "sequencia_gales": list(range(maior_gale_atual + 1)),
             "entradas_por_gale": {
                 nivel: round(obter_entrada_base() * (MULTIPLICADOR_GALE ** nivel), 2)
-                for nivel in range(GALES_INICIAIS + 1)
+                for nivel in range(maior_gale_atual + 1)
             },
             "multiplicador_gale": MULTIPLICADOR_GALE,
             "pre_stop_loss_brl": 0.0,
@@ -2148,7 +2162,7 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Começa com 5 gales; loss soma 1; win subtrai 1; reinicia a cada 100 operações.",
+            "regra_gales": "Cada banca inicia com 5; LOSS +1, WIN -1 (mínimo 0); contadores independentes; cada banca reinicia após 100 operações próprias.",
             "regra_recuperacao": "Desativada; sem recuperação de perdas.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
@@ -3081,7 +3095,7 @@ def home():
 
         "distribuicao":
             (
-                f"{QTD_BANCAS} banca única nos timeframes: "
+                f"{QTD_BANCAS} bancas independentes, cada uma nos timeframes: "
                 + "; ".join(
                     f"{banca} = {' · '.join(f'M{tf}' for tf in TIMEFRAME_POR_BANCA[banca])}"
                     for banca in BANCAS
@@ -3150,6 +3164,11 @@ def monitor_practice():
             "losses_ciclo_assertividade": placar_global_janela_real()[1],
             "sinais_encerrados_no_ciclo_assertividade": sinais_fechados_janela_global,
             "limite_reset_assertividade_global": 100,
+            "limite_reset_gale_por_banca": 100,
+            "operacoes_ate_reset_por_banca": {
+                banca: 100 - estado_frentes[banca]["sinais_fechados_janela"]
+                for banca in BANCAS
+            },
         }
         frentes = {
             nome: {
@@ -3305,10 +3324,10 @@ log.info(
 )
 
 log.info(
-    "GERENCIAMENTO | %s BANCA ATIVA | 5 gales iniciais; loss +1 gale; win -1 gale | "
+    "GERENCIAMENTO | %s BANCAS INDEPENDENTES | 5 gales iniciais; loss +1; win -1 (mínimo 0) | "
     "MULTIPLICADOR X2; entrada-base BRL 10.00; sem recuperação, stop-loss ou barreira | "
-    "Aguardar vencimento do contrato; reset da progressão a cada 100 operações | "
-    "TIMEFRAMES ATIVOS: %s | assertividade histórica preservada",
+    "Aguardar vencimento; reset após 100 operações próprias de cada banca | "
+    "TIMEFRAMES ATIVOS POR BANCA: %s | assertividade histórica preservada",
     QTD_BANCAS,
     " · ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))
 )

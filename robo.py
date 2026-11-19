@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-USD035-GALE3-REC100-INDEPENDENT-BANKS"
+VERSAO = "BASKARAIDO-DERIV-DEMO-DIGITAL-10B-USD035-GALE3-REC100-INDIVIDUAL-GALE-COUNTER"
 
 app = Flask(__name__)
 
@@ -155,9 +155,8 @@ ENTRADA_MINIMA = 0.01
 
 MULTIPLICADOR_GALE = 3.0  # multiplicador fixo da progressão
 
-# Faixas de assertividade e recuperação calculadas separadamente para cada banca.
-GALES_POR_CICLO = 4
-MAX_GALES = 4
+# Contador independente por banca: começa com 5 e não tem limite superior.
+GALES_INICIAIS = 5
 
 RECUPERACAO_PERCENTUAL = 1.0
 PAYOUT_RECUPERACAO = env_float("PAYOUT_RECUPERACAO", 0.80, 0.01)
@@ -329,7 +328,7 @@ estado_frentes = {
         "ciclo_gestao": 0,
 
         "entrada_atual": ENTRADA_MINIMA,
-        "gales_reativos": GALES_POR_CICLO,
+        "gales_reativos": GALES_INICIAIS,
 
         "prejuizo_acumulado": 0.0,
         "entradas_recuperacao_restantes": 0,
@@ -534,7 +533,7 @@ def conectar():
             "⏱ M1 + M5 + M15 | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             f"📈 GALE X{MULTIPLICADOR_GALE:g}\n"
-            "🛡 Gales pela assertividade individual de cada banca\n"
+            "🛡 Contador individual: inicia em 5; loss +1 gale, win -1 gale (mínimo 0)\n"
             f"♻️ Cada banca recupera {RECUPERACAO_PERCENTUAL:.0%} do próprio prejuízo\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
         )
@@ -1574,16 +1573,6 @@ def taxa(
     )
 
 
-def gales_por_assertividade(percentual):
-    """Faixas globais: 0-49:4, 50-59:3, 60-69:2, 70-79:1, 80-100:0."""
-    valor = max(0.0, min(100.0, float(percentual)))
-    if valor < 50: return 4
-    if valor < 60: return 3
-    if valor < 70: return 2
-    if valor < 80: return 1
-    return 0
-
-
 def taxa_ponderada(wins, losses):
     """Taxa agregada das ordens, usada apenas para estatísticas gerais."""
     return taxa(max(0, wins - wins_base_ponderada),
@@ -1637,6 +1626,10 @@ def registrar_win(
                 chave
             ] += 1
 
+        estado_frentes[banca]["gales_reativos"] = max(
+            0, int(estado_frentes[banca]["gales_reativos"]) - 1
+        )
+
 
 def registrar_loss(
     banca
@@ -1654,6 +1647,10 @@ def registrar_loss(
             "losses"
         ] += 1
 
+        estado_frentes[banca]["gales_reativos"] = (
+            int(estado_frentes[banca]["gales_reativos"]) + 1
+        )
+
 
 # ============================================================
 # GALE FIXO CONFIGURÁVEL
@@ -1669,7 +1666,7 @@ def valores_do_ciclo(
         multiplicador = MULTIPLICADOR_GALE
 
     if quantidade_gales is None:
-        quantidade_gales = GALES_POR_CICLO
+        quantidade_gales = GALES_INICIAIS
 
     return [
 
@@ -1735,6 +1732,10 @@ def snapshot_gestao_global():
             banca: taxa_banca_ponderada(banca)
             for banca in BANCAS
         }
+        gales_individuais = {
+            banca: int(estado_frentes[banca]["gales_reativos"])
+            for banca in BANCAS
+        }
         prejuizo_por_banca = {
             banca: estado_frentes[banca]["prejuizo_acumulado"]
             for banca in BANCAS
@@ -1749,15 +1750,13 @@ def snapshot_gestao_global():
             "recuperacoes_em_curso": sorted(recuperacoes_em_curso),
             "entradas_globais_aceitas": entradas_globais_aceitas,
             "assertividade_global": taxa_ponderada(stats["wins"], stats["losses"]),
-            "gales_proximos": gales_por_assertividade(taxa_ponderada(stats["wins"], stats["losses"])),
+            "gales_por_banca": gales_individuais,
             "assertividade_por_banca": assertividade_por_banca,
-            "gales_por_banca": {
-                banca: gales_por_assertividade(assertividade)
-                for banca, assertividade in assertividade_por_banca.items()
-            },
             "prejuizo_por_banca": prejuizo_por_banca,
-            "sequencia_gales": [4, 3, 2, 1, 0],
-            "entradas_por_gale": {nivel: obter_entrada_base() for nivel in range(MAX_GALES + 1)},
+            "entradas_por_gale": {
+                nivel: valores_do_ciclo(obter_entrada_base(), max(gales_individuais.values(), default=0))[nivel]
+                for nivel in range(max(gales_individuais.values(), default=0) + 1)
+            },
             "multiplicador_gale": MULTIPLICADOR_GALE,
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "payout_recuperacao": PAYOUT_RECUPERACAO,
@@ -1766,7 +1765,7 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Faixas de assertividade calculadas por banca: <50%=4, <60%=3, <70%=2, <80%=1, >=80%=0 gales",
+            "regra_gales": "Cada banca inicia com 5 gales; loss adiciona 1 gale e win remove 1 gale (mínimo 0), sem compartilhar contadores.",
             "regra_recuperacao": f"{RECUPERACAO_PERCENTUAL:.0%} do prejuízo líquido acumulado de cada banca; recuperação independente",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
@@ -1834,7 +1833,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             ultimo_saldo_demo = saldo
             if nivel == 0:
                 assertividade_atual = taxa_banca_ponderada(banca)
-                posicao = gales_por_assertividade(assertividade_atual)
+                posicao = max(0, int(estado_frentes[banca]["gales_reativos"]))
                 prejuizo_banca = estado_frentes[banca]["prejuizo_acumulado"]
                 alvo = calcular_alvo_recuperacao(prejuizo_banca)
                 if alvo > 0 and payout_efetivo is None:
@@ -2066,7 +2065,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         telegram("📊 NOVO SINAL | Baskaraido Trader PRO\n"
                  f"🏦 {banca}\n💱 {ativo}\n🎯 {direcao.upper()}\n"
                  f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n🔥 Score: {score}/100\n"
-                 f"🔢 Operação da {banca}: {contexto['numero']} / assertividade {contexto['assertividade_banca']:.2f}%\n"
+                 f"🔢 Operação da {banca}: {contexto['numero']} / gales próprios {gales}\n"
                  f"🛡 Gales desta banca: {gales} | X{MULTIPLICADOR_GALE:g}\n💰 {sequencia}\n"
                  f"♻️ Recuperação própria reservada: {getattr(api, 'currency', 'USD')} {contexto['prejuizo_alocado']:.2f}\n🧪 Deriv DEMO")
 
@@ -2101,9 +2100,9 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                      f"🏦 {banca} | {ativo}\n⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                      f"💵 Resultado líquido do sinal: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
                      f"📉 Prejuízo desta banca: {getattr(api, 'currency', 'USD')} {estado_frentes[banca]['prejuizo_acumulado']:.2f}\n"
-                     f"🛡 Próxima faixa desta banca: {gales_por_assertividade(taxa_banca_ponderada(banca))} gales\n"
+                     f"🛡 Gales atuais da banca: {estado_frentes[banca]['gales_reativos']}\n"
                      f"📊 Total geral: {stats['wins']} WIN / {stats['losses']} LOSS\n"
-                     f"🎯 Assertividade da {banca}: {taxa_banca_ponderada(banca)}%\n"
+                     f"🎯 Assertividade informativa da {banca}: {taxa_banca_ponderada(banca)}%\n"
                      f"💰 Saldo Deriv DEMO: {texto_saldo()} {getattr(api, 'currency', '')}")
             return
     finally:
@@ -2491,7 +2490,7 @@ def home():
                 **dados,
 
                 "assertividade": taxa_banca_ponderada(nome),
-                "gales_proximos": gales_por_assertividade(taxa_banca_ponderada(nome)),
+                "gales_proximos": int(dados["gales_reativos"]),
                 "prejuizo_acumulado": dados["prejuizo_acumulado"],
                 "em_recuperacao": dados["em_recuperacao"],
             }
@@ -2624,7 +2623,7 @@ def monitor_practice():
                 "wins": int(dados.get("wins", 0)),
                 "losses": int(dados.get("losses", 0)),
                 "assertividade": taxa_banca_ponderada(nome),
-                "gales_proximos": gales_por_assertividade(taxa_banca_ponderada(nome)),
+                "gales_proximos": int(dados["gales_reativos"]),
                 "prejuizo_acumulado": float(dados.get("prejuizo_acumulado", 0.0)),
                 "em_recuperacao": bool(dados.get("em_recuperacao", False)),
                 # O robô não mantém saldo individual verificável por banca.
@@ -2753,7 +2752,7 @@ log.info(
     "RECUPERAÇÃO PRÓPRIA %g%%",
 
     f"{MULTIPLICADOR_GALE:g}",
-    GALES_POR_CICLO,
+    GALES_INICIAIS,
     RECUPERACAO_PERCENTUAL * 100
 )
 

@@ -581,8 +581,8 @@ def conectar():
             "🧪 Corretora: Deriv | Conta: DEMO confirmada\n"
             f"💰 Saldo DEMO: {saldo:.2f} {moeda}\n"
             f"💵 Entrada-base: {entrada:.2f} {moeda} (R$ {ENTRADA_BASE_BRL:.2f})\n"
-            f"🏦 {QTD_BANCAS} banca ativa | gestão individual\n"
-            "⏱ M5 + M30 | Opções digitais CALL/PUT\n"
+            f"🏦 {QTD_BANCAS} bancas ativas | gestão individual\n"
+            f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             "📈 Entrada-base de R$ 20, sem gale; recuperação de 100% se a banca ficar líquida negativa\n"
             "🎯 Meta líquida de R$ 5; a recuperação cobre o déficit + R$ 5\n"
@@ -1555,7 +1555,7 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao, profit_target=None):
         return recusar("valor_ou_saldo_invalido")
     if direcao not in ("call", "put"):
         return recusar("direcao_invalida")
-    if expiracao not in (5, 30):
+    if expiracao not in {cfg["expiracao"] for cfg in TIMEFRAMES.values()}:
         return recusar("expiracao_digital_invalida")
     if esta_bloqueado(ativo, expiracao):
         return recusar("ativo_bloqueado")
@@ -3240,10 +3240,7 @@ def health():
             agora_brasil().day,
 
         "timeframes":
-            [
-                "M5",
-                "M30"
-            ],
+            [f"M{timeframe}" for timeframe in sorted(TIMEFRAMES)],
 
         "bancas":
             QTD_BANCAS,
@@ -3275,7 +3272,8 @@ log.info(
 )
 
 log.info(
-    "TIMEFRAMES = M5 + M30"
+    "TIMEFRAMES = %s",
+    " + ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))
 )
 
 log.info(
@@ -3294,11 +3292,13 @@ log.info(
 )
 
 log.info(
-    "GESTÃO INDIVIDUAL | 1 BANCA ATIVA | cada sinal abre uma operação na direção do sinal | "
-    "SEM GALE; RECUPERACAO 100% DO DEFICIT LIQUIDO; PRE-STOP LOSS BRL 100 | "
+    "GESTÃO INDIVIDUAL | %s BANCAS ATIVAS | sinais direcionados à banca do timeframe | "
+    "SEM GALE; RECUPERACAO 100%% DO DEFICIT LIQUIDO; PRE-STOP LOSS BRL 100 | "
     "ENTRADA BASE BRL 20.00; META DE LUCRO BRL 5.00 | "
-    "TIMEFRAMES ATIVOS: M5 E M30 | "
-    "ASSERTIVIDADE REAL; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados"
+    "TIMEFRAMES ATIVOS: %s | "
+    "ASSERTIVIDADE REAL; todas as janelas reiniciam juntas a cada 300 sinais gerais encerrados",
+    QTD_BANCAS,
+    " · ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))
 )
 
 log.info(

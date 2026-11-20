@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-BRL10-GALE5-X2-1BANK-RECOVERY100-M1M5M15"
+VERSAO = "BASKARAIDO-DERIV-DEMO-BRL10-GALE5-X3-1BANK-RECOVERY100-M1M5M15"
 
 app = Flask(__name__)
 
@@ -177,8 +177,8 @@ TEMPO_BLOQUEIO = env_int(
 
 ENTRADA_MINIMA = 0.01
 
-MULTIPLICADOR_GALE = 2.0
-MULTIPLICADORES_POR_GALES = {0: 2.0}
+MULTIPLICADOR_GALE = 3.0
+MULTIPLICADORES_POR_GALES = {0: 3.0}
 
 # Gerenciamento único: começa com cinco gales, ajustados após cada operação fechada.
 GALES_INICIAIS = 5
@@ -591,7 +591,7 @@ def conectar():
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             "🛡 Banca única: 5 gales iniciais; LOSS +1 e WIN -1 (mínimo 0), sem limite máximo\n"
-            f"📈 Multiplicador X2; entrada-base de R$ 10; recuperação de {RECUPERACAO_PERCENTUAL:.0%} do déficit líquido; stop-loss desativado\n"
+            f"📈 Multiplicador X3; entrada-base de R$ 10; recuperação de {RECUPERACAO_PERCENTUAL:.0%} do déficit líquido; stop-loss desativado\n"
             "🔄 Cada banca reinicia sua progressão após 100 operações próprias\n"
             "⏳ Aguardar o vencimento do contrato para liquidar\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
@@ -2179,7 +2179,7 @@ def marcar_envio_indeterminado(banca, ativo, nivel, valor, motivo):
 
 
 def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
-    """Calcula a entrada-base x2 por nível e envia exclusivamente à conta DEMO."""
+    """Calcula a entrada-base x3 por nível e envia exclusivamente à conta DEMO."""
     global entradas_globais_aceitas, ultimo_saldo_demo
     with contador_entrada_lock:
         with estado_lock:
@@ -2531,7 +2531,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         gales = int(contexto["gales"])
         log.info(
             "GESTAO | banca=%s | operação=%s | entrada=%s %.2f | "
-            "multiplicador=x2 | gales_disponiveis=%s | recuperação=%.0f%% | "
+            "multiplicador=x3 | gales_disponiveis=%s | recuperação=%.0f%% | "
             "déficit_alocado=%.2f | stop_loss=desativado | payout=aguardar_vencimento | conta=DEMO",
             banca, contexto["numero"], getattr(api, "currency", "USD"),
             contexto["entrada"], gales, RECUPERACAO_PERCENTUAL * 100,
@@ -2564,7 +2564,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             f"(base R$ {ENTRADA_BASE_BRL:.2f})\n"
             f"♻️ Recuperação configurada: {RECUPERACAO_PERCENTUAL:.0%} do déficit "
             f"(alocado nesta operação: {getattr(api, 'currency', 'USD')} {contexto['prejuizo_alocado']:.2f})\n"
-            f"🔢 Gales disponíveis: {gales} | multiplicador x2\n"
+            f"🔢 Gales disponíveis: {gales} | multiplicador x3\n"
             "⏳ Sem venda antecipada: aguardar o vencimento para o payout do contrato.\n"
             "🧪 Deriv DEMO"
         )
@@ -2608,7 +2608,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                 f"🏦 {banca} | {ativo}\n"
                 f"⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                 f"💵 Resultado líquido da operação: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                f"🔢 Próxima operação: {estado} gales | multiplicador x2\n"
+                f"🔢 Próxima operação: {estado} gales | multiplicador x3\n"
                 f"📊 Total: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                 f"💰 Saldo Deriv DEMO: {texto_saldo()} {getattr(api, 'currency', '')}"
             )
@@ -3378,7 +3378,7 @@ log.info(
 
 log.info(
     "GERENCIAMENTO | banca única | 5 gales iniciais; loss +1; win -1 (mínimo 0) | "
-    "MULTIPLICADOR X2; entrada-base BRL 10.00; recuperação de %.0f%% do déficit líquido acumulado; "
+    "MULTIPLICADOR X3; entrada-base BRL 10.00; recuperação de %.0f%% do déficit líquido acumulado; "
     "stop-loss desativado | reset após 100 operações da banca | TIMEFRAMES: %s",
     RECUPERACAO_PERCENTUAL * 100,
     " · ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))

@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-BRL10-GALE5-X2-10BANK-INDEPENDENT-M1M5M15"
+VERSAO = "BASKARAIDO-DERIV-DEMO-BRL10-GALE5-X2-3BANK-INDEPENDENT-M1M5M15"
 
 app = Flask(__name__)
 
@@ -191,7 +191,7 @@ PRE_STOP_LOSS_BRL = 0.0
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
 
-QTD_BANCAS = 10
+QTD_BANCAS = 3
 
 # Assertividade informativa; cada banca reinicia sua janela e seus gales após 100 operações próprias.
 

@@ -1344,9 +1344,10 @@ def obter_payout_digital(ativo, expiracao, direcao):
         PRAZO_CONSULTA_API, cliente
     )
     if estado != "ok" or isinstance(payout, bool):
+        erro = payout if isinstance(payout, str) else type(payout).__name__
         log.warning(
-            "PAYOUT DIGITAL SEM RESPOSTA | ativo=%s | M%s | direcao=%s | estado=%s | tipo=%s",
-            ativo, expiracao, direcao, estado, type(payout).__name__,
+            "PAYOUT DIGITAL SEM RESPOSTA | ativo=%s | M%s | direcao=%s | estado=%s | erro=%s",
+            ativo, expiracao, direcao, estado, erro,
         )
         return None
     try:

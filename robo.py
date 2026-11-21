@@ -1344,13 +1344,25 @@ def obter_payout_digital(ativo, expiracao, direcao):
         PRAZO_CONSULTA_API, cliente
     )
     if estado != "ok" or isinstance(payout, bool):
+        log.warning(
+            "PAYOUT DIGITAL SEM RESPOSTA | ativo=%s | M%s | direcao=%s | estado=%s | tipo=%s",
+            ativo, expiracao, direcao, estado, type(payout).__name__,
+        )
         return None
     try:
         payout = float(payout)
     except (TypeError, ValueError, OverflowError):
+        log.warning(
+            "PAYOUT DIGITAL EM FORMATO INVALIDO | ativo=%s | M%s | direcao=%s | tipo=%s",
+            ativo, expiracao, direcao, type(payout).__name__,
+        )
         return None
     # Ratio neto do payout sobre a entrada; o contrato só paga se fechar win.
     if not math.isfinite(payout) or payout <= 0:
+        log.warning(
+            "PAYOUT DIGITAL VAZIO OU NAO POSITIVO | ativo=%s | M%s | direcao=%s | valor=%s",
+            ativo, expiracao, direcao, payout,
+        )
         return None
     _payout_cache[chave] = {"payout": payout, "ate": time.monotonic() + 15}
     return payout

@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-BRL10-GALE5-X3-1BANK-RECOVERY100-STOPWIN50-M1M5M15"
+VERSAO = "BASKARAIDO-DERIV-DEMO-BRL10-GALE0-X3-1BANK-RECOVERY100-STOPWIN50-M1M5M15"
 
 app = Flask(__name__)
 
@@ -180,8 +180,8 @@ ENTRADA_MINIMA = 0.01
 MULTIPLICADOR_GALE = 3.0
 MULTIPLICADORES_POR_GALES = {0: 3.0}
 
-# Gerenciamento único: começa com cinco gales, ajustados após cada operação fechada.
-GALES_INICIAIS = 5
+# Gerenciamento único: começa com zero gale; LOSS adiciona um e WIN remove um.
+GALES_INICIAIS = 0
 GALES_POR_CICLO = GALES_INICIAIS
 MAX_GALES = GALES_INICIAIS
 
@@ -591,7 +591,7 @@ def conectar():
             f"🏦 {QTD_BANCAS} bancas ativas | gestão individual\n"
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            "🛡 Banca única: 5 gales iniciais; LOSS +1 e WIN -1 (mínimo 0), sem limite máximo\n"
+            "🛡 Banca única: 0 gale inicial; LOSS +1 e WIN -1 (mínimo 0), sem limite máximo\n"
             f"📈 Multiplicador X3; entrada-base de R$ 10; recuperação de {RECUPERACAO_PERCENTUAL:.0%} do déficit líquido; stop-loss desativado\n"
             f"🏁 Stop-win: R$ {STOP_WIN_BRL:.2f} por ciclo; reinício automático da banca\n"
             "🔄 Cada banca reinicia sua progressão após 100 operações próprias\n"
@@ -1838,9 +1838,9 @@ def registrar_operacao_fechada_assertividade(banca):
         dados["gales_reativos"] = GALES_INICIAIS
 
         log.info(
-            "GERENCIAMENTO REINICIADO | banca=%s | operacoes_da_banca=100 | gales=5 | "
+            "GERENCIAMENTO REINICIADO | banca=%s | operacoes_da_banca=100 | gales=%s | "
             "placar_janela=%sW/%sL",
-            banca, wins_janela, losses_janela,
+            banca, GALES_INICIAIS, wins_janela, losses_janela,
         )
         return True
 
@@ -2172,7 +2172,7 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Banca única inicia com 5 gales; multiplicador x3; LOSS +1, WIN -1 (mínimo 0); reset após 100 operações ou stop-win de R$50.",
+            "regra_gales": "Banca única inicia com 0 gale; multiplicador x3; LOSS +1, WIN -1 (mínimo 0); reset para 0 após 100 operações ou stop-win de R$50.",
             "regra_recuperacao": "Recupera 100% do déficit líquido acumulado da banca; zera no stop-win.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
@@ -2512,7 +2512,7 @@ def finalizar_operacao_global(banca):
             f"Lucro líquido do ciclo: {getattr(api, 'currency', 'USD')} "
             f"{stop_win_evento['lucro_ciclo']:.2f} "
             f"(alvo equivalente a R$ {STOP_WIN_BRL:.2f}).\n"
-            "Ciclo reiniciado: recuperação zerada e gales voltaram a 5. "
+            "Ciclo reiniciado: recuperação zerada e gales voltaram a 0. "
             "Histórico global preservado. Deriv DEMO"
         )
     return resultado_gestao
@@ -3413,7 +3413,7 @@ log.info(
 )
 
 log.info(
-    "GERENCIAMENTO | banca única | 5 gales iniciais; loss +1; win -1 (mínimo 0) | "
+    "GERENCIAMENTO | banca única | 0 gale inicial; loss +1; win -1 (mínimo 0) | "
     "MULTIPLICADOR X3; entrada-base BRL 10.00; recuperação de %.0f%% do déficit líquido acumulado; "
     "stop-loss desativado | stop-win BRL %.2f: reinicia o ciclo | reset após 100 operações | TIMEFRAMES: %s",
     RECUPERACAO_PERCENTUAL * 100,

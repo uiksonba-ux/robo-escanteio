@@ -1,4 +1,5 @@
 """Strict DEMO-only adapter for the Deriv Options New API."""
+import logging
 import json
 import math
 import re

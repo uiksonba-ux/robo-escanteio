@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-BRL10-GALE5-X3-1BANK-RECOVERY100-M1M5M15"
+VERSAO = "BASKARAIDO-DERIV-DEMO-BRL10-GALE5-X3-1BANK-RECOVERY100-STOPWIN50-M1M5M15"
 
 app = Flask(__name__)
 
@@ -198,6 +198,7 @@ QTD_BANCAS = 1
 # Entrada-base fixa em BRL convertida para a moeda da conta Deriv DEMO.
 ENTRADA_BASE_BRL = 10.00
 META_LUCRO_BRL = 0.00
+STOP_WIN_BRL = 50.00
 
 
 
@@ -592,6 +593,7 @@ def conectar():
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             "🛡 Banca única: 5 gales iniciais; LOSS +1 e WIN -1 (mínimo 0), sem limite máximo\n"
             f"📈 Multiplicador X3; entrada-base de R$ 10; recuperação de {RECUPERACAO_PERCENTUAL:.0%} do déficit líquido; stop-loss desativado\n"
+            f"🏁 Stop-win: R$ {STOP_WIN_BRL:.2f} por ciclo; reinício automático da banca\n"
             "🔄 Cada banca reinicia sua progressão após 100 operações próprias\n"
             "⏳ Aguardar o vencimento do contrato para liquidar\n"
             f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
@@ -2028,6 +2030,11 @@ def obter_limite_pre_stop_loss_conta():
     return float(entrada_conta) * (PRE_STOP_LOSS_BRL / ENTRADA_BASE_BRL)
 
 
+def obter_stop_win_conta():
+    """Converte o stop-win de BRL para a moeda da conta Deriv."""
+    return float(obter_entrada_base() * (STOP_WIN_BRL / ENTRADA_BASE_BRL))
+
+
 def pre_stop_loss_atingido(perda_confirmada, proxima_entrada=0.0):
     """O pré-stop-loss está desativado nesta estratégia."""
     if PRE_STOP_LOSS_BRL <= 0:
@@ -2112,6 +2119,9 @@ def snapshot_gestao_global():
             "entrada_base": obter_entrada_base(),
             "entrada_base_brl": ENTRADA_BASE_BRL,
             "meta_lucro_brl": META_LUCRO_BRL,
+            "stop_win_brl": STOP_WIN_BRL,
+            "stop_win_conta": obter_stop_win_conta(),
+            "regra_stop_win": "Ao atingir R$ 50 de lucro líquido no ciclo, reinicia resultado, recuperação e gales da banca.",
             "entrada_percentual": None,
             "entrada_minima": ENTRADA_MINIMA,
             "saldo_practice_referencia": ultimo_saldo_demo,
@@ -2162,8 +2172,8 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Cada banca inicia com 5; LOSS +1, WIN -1 (mínimo 0); contadores independentes; cada banca reinicia após 100 operações próprias.",
-            "regra_recuperacao": "Desativada; sem recuperação de perdas.",
+            "regra_gales": "Banca única inicia com 5 gales; multiplicador x3; LOSS +1, WIN -1 (mínimo 0); reset após 100 operações ou stop-win de R$50.",
+            "regra_recuperacao": "Recupera 100% do déficit líquido acumulado da banca; zera no stop-win.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }
@@ -2417,8 +2427,9 @@ def registrar_resultado_ordem(order_id, resultado, lucro):
 
 
 def finalizar_operacao_global(banca):
-    """Atualiza o P&L e a perda da última operação, de forma independente por banca."""
+    """Fecha a operação, atualiza o P&L e reinicia o ciclo ao atingir o stop-win."""
     global resultado_global_centavos, vitorias_progressao, perdas_progressao
+    stop_win_evento = None
     with estado_lock:
         contexto = operacoes_ativas.get(banca)
         if contexto is None or estado_frentes[banca]["envio_indeterminado"] or any(o["banca"] == banca for o in ordens_pendentes.values()):
@@ -2428,8 +2439,6 @@ def finalizar_operacao_global(banca):
             operacoes_concluidas.add(contexto["primeira_ordem"])
             dados = estado_frentes[banca]
             resultado_operacao = contexto["resultado_centavos"]
-            # Atualiza o placar no único ponto que fecha o sinal. Isso também
-            # conta perdas quando o próximo gale é recusado e o ciclo retorna cedo.
             if resultado_operacao > 0:
                 registrar_win(banca, int(contexto.get("ultimo_nivel", 0)))
                 vitorias_progressao += 1
@@ -2441,8 +2450,6 @@ def finalizar_operacao_global(banca):
             local = em_centavos(dados["resultado_liquido"]) + resultado_operacao
             dados["resultado_liquido"] = local / 100
             dados["prejuizo_acumulado"] = max(0, -local) / 100
-
-            # A recuperação cobre o déficit líquido acumulado na próxima operação.
             dados["recuperacao_pendente"] = round(
                 calcular_alvo_recuperacao(dados["prejuizo_acumulado"]), 2
             )
@@ -2472,6 +2479,25 @@ def finalizar_operacao_global(banca):
             })
             del historico_operacoes[:-100]
             registrar_operacao_fechada_assertividade(banca)
+
+            alvo_stop_win = em_centavos(obter_stop_win_conta())
+            if local >= alvo_stop_win:
+                lucro_ciclo = local / 100
+                stop_win_evento = {"lucro_ciclo": lucro_ciclo}
+                dados["resultado_liquido"] = 0.0
+                dados["prejuizo_acumulado"] = 0.0
+                dados["recuperacao_pendente"] = 0.0
+                dados["em_recuperacao"] = False
+                dados["gale_progression_level"] = GALES_INICIAIS
+                dados["gale_atual"] = GALES_INICIAIS
+                dados["gales_reativos"] = GALES_INICIAIS
+                recuperacoes_em_curso.discard(banca)
+                log.warning(
+                    "STOP WIN ATINGIDO | banca=%s | lucro_ciclo=%.2f | alvo_conta=%.2f | "
+                    "alvo_brl=%.2f | resultado_global_preservado=true | recuperacao_zerada=true | "
+                    "gales_reiniciados=%s | proxima_entrada=base",
+                    banca, lucro_ciclo, alvo_stop_win / 100, STOP_WIN_BRL, GALES_INICIAIS,
+                )
         operacoes_ativas.pop(banca)
         recuperacoes_em_curso.discard(banca)
         estado_frentes[banca]["em_recuperacao"] = False
@@ -2479,7 +2505,17 @@ def finalizar_operacao_global(banca):
                  banca, contexto["primeira_ordem"], contexto["resultado_centavos"] / 100,
                  estado_frentes[banca]["resultado_liquido"],
                  estado_frentes[banca]["recuperacao_pendente"], prejuizo_global_atual())
-        return snapshot_gestao_global()
+        resultado_gestao = snapshot_gestao_global()
+    if stop_win_evento:
+        telegram(
+            f"🏁 STOP-WIN | {banca}\n"
+            f"Lucro líquido do ciclo: {getattr(api, 'currency', 'USD')} "
+            f"{stop_win_evento['lucro_ciclo']:.2f} "
+            f"(alvo equivalente a R$ {STOP_WIN_BRL:.2f}).\n"
+            "Ciclo reiniciado: recuperação zerada e gales voltaram a 5. "
+            "Histórico global preservado. Deriv DEMO"
+        )
+    return resultado_gestao
 
 
 def liberar_banca(banca, ativo):
@@ -3379,8 +3415,9 @@ log.info(
 log.info(
     "GERENCIAMENTO | banca única | 5 gales iniciais; loss +1; win -1 (mínimo 0) | "
     "MULTIPLICADOR X3; entrada-base BRL 10.00; recuperação de %.0f%% do déficit líquido acumulado; "
-    "stop-loss desativado | reset após 100 operações da banca | TIMEFRAMES: %s",
+    "stop-loss desativado | stop-win BRL %.2f: reinicia o ciclo | reset após 100 operações | TIMEFRAMES: %s",
     RECUPERACAO_PERCENTUAL * 100,
+    STOP_WIN_BRL,
     " · ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))
 )
 

@@ -457,7 +457,7 @@ class DerivOptionsClient:
                     symbol, contract_type, self.base_stake, duration
                 )
             except Exception as erro:
-                codigo = getattr(erro, "code", None)
+                codigo = getattr(erro, "upstream_code", None)
                 if not isinstance(codigo, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", codigo):
                     codigo = type(erro).__name__
                 logging.getLogger("baskaraido-deriv").warning(

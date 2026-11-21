@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-BRL2-GALE0-X3-1BANK-RECOVERY100-STOPWIN50-M1M5M15"
+VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-GALE0-X3-1BANK-RECOVERY100-STOPWIN50-M1M5M15"
 
 app = Flask(__name__)
 
@@ -196,7 +196,8 @@ QTD_BANCAS = 1
 # Assertividade informativa; cada banca reinicia sua janela e seus gales após 100 operações próprias.
 
 # Entrada-base fixa em BRL convertida para a moeda da conta Deriv DEMO.
-ENTRADA_BASE_BRL = 2.00
+ENTRADA_BASE_BRL = 2.00  # referência BRL para limites e stop-win
+ENTRADA_BASE_USD = 0.35
 META_LUCRO_BRL = 0.00
 STOP_WIN_BRL = 50.00
 
@@ -221,7 +222,7 @@ def obter_entrada_base(saldo=None):
     """Retorna R$ 2 convertidos para a moeda da conta Deriv DEMO."""
     cliente = api or _cliente_conectando
     convertido = getattr(cliente, "base_stake", None) if cliente is not None else None
-    return float(convertido if convertido is not None else ENTRADA_BASE_BRL)
+    return float(convertido if convertido is not None else ENTRADA_BASE_USD)
 
 
 # ============================================================
@@ -530,8 +531,8 @@ def conectar():
         if _cliente_conectando is None:
             _cliente_conectando = DerivOptionsClient(
                 DERIV_APP_ID, DERIV_TOKEN, DERIV_DEMO_ACCOUNT_ID,
-                base_stake_amount=ENTRADA_BASE_BRL,
-                base_stake_currency="BRL",
+                base_stake_amount=ENTRADA_BASE_USD,
+                base_stake_currency="USD",
                 profit_target_brl=META_LUCRO_BRL,
             )
         nova = _cliente_conectando
@@ -587,12 +588,12 @@ def conectar():
             "🤖 Baskaraido Trader PRO ONLINE\n"
             "🧪 Corretora: Deriv | Conta: DEMO confirmada\n"
             f"💰 Saldo DEMO: {saldo:.2f} {moeda}\n"
-            f"💵 Entrada-base: {entrada:.2f} {moeda} (R$ {ENTRADA_BASE_BRL:.2f})\n"
+            f"💵 Entrada-base: {entrada:.2f} {moeda} (US$ {ENTRADA_BASE_USD:.2f}; referência ~R$ {ENTRADA_BASE_BRL:.2f})\n"
             f"🏦 {QTD_BANCAS} bancas ativas | gestão individual\n"
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             "🛡 Banca única: 0 gale inicial; LOSS +1 e WIN -1 (mínimo 0), sem limite máximo\n"
-            f"📈 Multiplicador X3; entrada-base de R$ 2; recuperação de {RECUPERACAO_PERCENTUAL:.0%} do déficit líquido; stop-loss desativado\n"
+            f"📈 Multiplicador X3; entrada-base de US$ {ENTRADA_BASE_USD:.2f}; recuperação de {RECUPERACAO_PERCENTUAL:.0%} do déficit líquido; stop-loss desativado\n"
             f"🏁 Stop-win: R$ {STOP_WIN_BRL:.2f} por ciclo; reinício automático da banca\n"
             "🔄 Cada banca reinicia sua progressão após 100 operações próprias\n"
             "⏳ Aguardar o vencimento do contrato para liquidar\n"
@@ -2610,7 +2611,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n"
             f"🔥 Score: {score}/100\n"
             f"💵 Entrada inicial: {getattr(api, 'currency', 'USD')} {contexto['entrada']:.2f} "
-            f"(base R$ {ENTRADA_BASE_BRL:.2f})\n"
+            f"(base US$ {ENTRADA_BASE_USD:.2f})\n"
             f"♻️ Recuperação configurada: {RECUPERACAO_PERCENTUAL:.0%} do déficit "
             f"(alocado nesta operação: {getattr(api, 'currency', 'USD')} {contexto['prejuizo_alocado']:.2f})\n"
             f"🔢 Gales disponíveis: {gales} | multiplicador x3\n"
@@ -3421,13 +3422,14 @@ log.info(
 )
 
 log.info(
-    "ENTRADA BASE FIXA = BRL %.2f",
+    "ENTRADA BASE FIXA = USD %.2f (referência BRL %.2f)",
+    ENTRADA_BASE_USD,
     ENTRADA_BASE_BRL
 )
 
 log.info(
     "GERENCIAMENTO | banca única | 0 gale inicial; loss +1; win -1 (mínimo 0) | "
-    "MULTIPLICADOR X3; entrada-base BRL 2.00; recuperação de %.0f%% do déficit líquido acumulado; "
+    "MULTIPLICADOR X3; entrada-base USD 0.35; referência BRL 2.00; recuperação de %.0f%% do déficit líquido acumulado; "
     "stop-loss desativado | stop-win BRL %.2f: reinicia o ciclo | reset após 100 operações | TIMEFRAMES: %s",
     RECUPERACAO_PERCENTUAL * 100,
     STOP_WIN_BRL,

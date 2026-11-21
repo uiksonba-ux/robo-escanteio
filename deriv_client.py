@@ -31,6 +31,10 @@ class DerivAPIError(RuntimeError):
             "InternalError", "Timeout", "ConnectionError",
         }
         self.code = code if code in safe_codes else "DerivAPIError"
+        self.upstream_code = (
+            code if isinstance(code, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", code)
+            else "UnknownErrorCode"
+        )
         super().__init__(self.code)
 
 

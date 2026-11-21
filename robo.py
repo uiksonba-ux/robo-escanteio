@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-BRL10-GALE0-X3-1BANK-RECOVERY100-STOPWIN50-M1M5M15"
+VERSAO = "BASKARAIDO-DERIV-DEMO-BRL2-GALE0-X3-1BANK-RECOVERY100-STOPWIN50-M1M5M15"
 
 app = Flask(__name__)
 
@@ -196,7 +196,7 @@ QTD_BANCAS = 1
 # Assertividade informativa; cada banca reinicia sua janela e seus gales após 100 operações próprias.
 
 # Entrada-base fixa em BRL convertida para a moeda da conta Deriv DEMO.
-ENTRADA_BASE_BRL = 10.00
+ENTRADA_BASE_BRL = 2.00
 META_LUCRO_BRL = 0.00
 STOP_WIN_BRL = 50.00
 
@@ -218,7 +218,7 @@ def agora_brasil():
 # ============================================================
 
 def obter_entrada_base(saldo=None):
-    """Retorna R$ 10 convertidos para a moeda da conta Deriv DEMO."""
+    """Retorna R$ 2 convertidos para a moeda da conta Deriv DEMO."""
     cliente = api or _cliente_conectando
     convertido = getattr(cliente, "base_stake", None) if cliente is not None else None
     return float(convertido if convertido is not None else ENTRADA_BASE_BRL)
@@ -592,7 +592,7 @@ def conectar():
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             "🛡 Banca única: 0 gale inicial; LOSS +1 e WIN -1 (mínimo 0), sem limite máximo\n"
-            f"📈 Multiplicador X3; entrada-base de R$ 10; recuperação de {RECUPERACAO_PERCENTUAL:.0%} do déficit líquido; stop-loss desativado\n"
+            f"📈 Multiplicador X3; entrada-base de R$ 2; recuperação de {RECUPERACAO_PERCENTUAL:.0%} do déficit líquido; stop-loss desativado\n"
             f"🏁 Stop-win: R$ {STOP_WIN_BRL:.2f} por ciclo; reinício automático da banca\n"
             "🔄 Cada banca reinicia sua progressão após 100 operações próprias\n"
             "⏳ Aguardar o vencimento do contrato para liquidar\n"
@@ -3414,7 +3414,7 @@ log.info(
 
 log.info(
     "GERENCIAMENTO | banca única | 0 gale inicial; loss +1; win -1 (mínimo 0) | "
-    "MULTIPLICADOR X3; entrada-base BRL 10.00; recuperação de %.0f%% do déficit líquido acumulado; "
+    "MULTIPLICADOR X3; entrada-base BRL 2.00; recuperação de %.0f%% do déficit líquido acumulado; "
     "stop-loss desativado | stop-win BRL %.2f: reinicia o ciclo | reset após 100 operações | TIMEFRAMES: %s",
     RECUPERACAO_PERCENTUAL * 100,
     STOP_WIN_BRL,

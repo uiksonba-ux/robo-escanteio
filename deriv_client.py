@@ -451,14 +451,21 @@ class DerivOptionsClient:
                 _, ask_price, payout = self._proposal(
                     symbol, contract_type, self.base_stake, duration
                 )
-            except DerivAPIError as erro:
+            except Exception as erro:
+                codigo = getattr(erro, "code", None)
+                if not isinstance(codigo, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", codigo):
+                    codigo = type(erro).__name__
                 logging.getLogger("baskaraido-deriv").warning(
                     "PROPOSAL DIGITAL FALHOU | ativo=%s | tipo=%s | duracao=%s | erro=%s",
-                    symbol, contract_type, duration, erro.code,
+                    symbol, contract_type, duration, codigo,
                 )
                 return None
             ratio = (payout - ask_price) / ask_price
             if not math.isfinite(ratio) or ratio <= 0:
+                logging.getLogger("baskaraido-deriv").warning(
+                    "PROPOSAL DIGITAL SEM RETORNO POSITIVO | ativo=%s | tipo=%s | duracao=%s | ask=%.2f | payout=%.2f",
+                    symbol, contract_type, duration, ask_price, payout,
+                )
                 return None
             ratios.append(ratio)
         return ratios[0] if direction is not None else min(ratios)

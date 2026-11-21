@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-GALE0-X3-1BANK-RECOVERY100-STOPWIN50-M1M5M15"
+VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-GALE0-X3-1BANK-RECOVERY100-STOPWIN50-M1"
 
 app = Flask(__name__)
 
@@ -231,7 +231,7 @@ def obter_entrada_base(saldo=None):
 
 # M4 and M6-M9 are aggregated from complete M1 candles because Deriv
 # does not offer those candle granularities directly.
-_TIMEFRAMES_NATIVOS = {1, 5, 15}
+_TIMEFRAMES_NATIVOS = {1}
 TIMEFRAMES = {
     timeframe: {
         "segundos": timeframe * 60,
@@ -246,7 +246,7 @@ TIMEFRAMES = {
             1 if timeframe in _TIMEFRAMES_NATIVOS else timeframe
         ),
     }
-    for timeframe in (1, 5, 15)
+    for timeframe in (1,)
 }
 
 

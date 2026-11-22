@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-GALE0-X3-1BANK-RECOVERY100-STOPWIN50-M1"
+VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-GALE0-X3-4BANK-RECOVERY100-STOPWIN50-M1"
 
 app = Flask(__name__)
 
@@ -191,7 +191,7 @@ PRE_STOP_LOSS_BRL = 300.0
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
 
-QTD_BANCAS = 1
+QTD_BANCAS = 4
 
 # Assertividade informativa; cada banca reinicia sua janela e seus gales após 100 operações próprias.
 
@@ -592,7 +592,7 @@ def conectar():
             f"🏦 {QTD_BANCAS} bancas ativas | gestão individual\n"
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            "🛡 Banca única: 0 gale inicial; LOSS +1 e WIN -1 (mínimo 0), sem limite máximo\n"
+            "🛡 Cada banca: 0 gale inicial; LOSS +1 e WIN -1 (mínimo 0), sem limite máximo\n"
             f"📈 Multiplicador X3; entrada-base de US$ {ENTRADA_BASE_USD:.2f}; recuperação de {RECUPERACAO_PERCENTUAL:.0%}; pré stop-loss de R$ {PRE_STOP_LOSS_BRL:.2f}\n"
             f"🏁 Stop-win: R$ {STOP_WIN_BRL:.2f} por ciclo; reinício automático da banca\n"
             "🔄 Cada banca reinicia sua progressão após 100 operações próprias\n"
@@ -2190,7 +2190,7 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Banca única inicia com 0 gale; multiplicador x3; LOSS +1, WIN -1 (mínimo 0); pré stop-loss R$300; reset para 0 após 100 operações ou stop-win de R$50.",
+            "regra_gales": "Cada banca inicia com 0 gale; multiplicador x3; LOSS +1, WIN -1 (mínimo 0); pré stop-loss R$300 próprio; reset para 0 após 100 operações ou stop-win de R$50 próprio.",
             "regra_recuperacao": "Recupera 100% do déficit líquido acumulado da banca; zera no stop-win.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
@@ -3450,7 +3450,7 @@ log.info(
 )
 
 log.info(
-    "GERENCIAMENTO | banca única | 0 gale inicial; loss +1; win -1 (mínimo 0) | "
+    "GERENCIAMENTO | 4 bancas independentes | cada uma: 0 gale inicial; loss +1; win -1 (mínimo 0) | "
     "MULTIPLICADOR X3; entrada-base USD 0.35; referência BRL 2.00; recuperação de %.0f%% do déficit líquido acumulado; "
     "pré stop-loss BRL %.2f | stop-win BRL %.2f: reinicia o ciclo | reset após 100 operações | TIMEFRAMES: %s",
     RECUPERACAO_PERCENTUAL * 100,

@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-GALE0-X3-4BANK-RECOVERY100-PRESTOP100-STOPWIN50-M1"
+VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-GALE0-X2-4BANK-RECOVERY100-PRESTOP300-STOPWIN50-M1"
 
 app = Flask(__name__)
 
@@ -177,8 +177,8 @@ TEMPO_BLOQUEIO = env_int(
 
 ENTRADA_MINIMA = 0.01
 
-MULTIPLICADOR_GALE = 3.0
-MULTIPLICADORES_POR_GALES = {0: 3.0}
+MULTIPLICADOR_GALE = 2.0
+MULTIPLICADORES_POR_GALES = {0: 2.0}
 
 # Gerenciamento único: começa com zero gale; LOSS adiciona um e WIN remove um.
 GALES_INICIAIS = 0
@@ -186,7 +186,7 @@ GALES_POR_CICLO = GALES_INICIAIS
 MAX_GALES = GALES_INICIAIS
 
 RECUPERACAO_PERCENTUAL = 1.0
-PRE_STOP_LOSS_BRL = 100.0
+PRE_STOP_LOSS_BRL = 300.0
 
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
@@ -593,7 +593,7 @@ def conectar():
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             "🛡 Cada banca: 0 gale inicial; LOSS +1 e WIN -1 (mínimo 0), sem limite máximo\n"
-            f"📈 Multiplicador X3; entrada-base de US$ {ENTRADA_BASE_USD:.2f}; recuperação de {RECUPERACAO_PERCENTUAL:.0%}; pré stop-loss de R$ {PRE_STOP_LOSS_BRL:.2f}\n"
+            f"📈 Multiplicador X{MULTIPLICADOR_GALE:g}; entrada-base de US$ {ENTRADA_BASE_USD:.2f}; recuperação de {RECUPERACAO_PERCENTUAL:.0%} após cada loss, mesmo com saldo positivo; pré stop-loss de R$ {PRE_STOP_LOSS_BRL:.2f}\n"
             f"🏁 Stop-win: R$ {STOP_WIN_BRL:.2f} por ciclo; reinício automático da banca\n"
             "🔄 Cada banca reinicia sua progressão após 100 operações próprias\n"
             "⏳ Aguardar o vencimento do contrato para liquidar\n"
@@ -2007,7 +2007,7 @@ def obter_meta_lucro_conta():
 
 
 def calcular_alvo_recuperacao(prejuizo):
-    """Aplica o percentual à perda da última operação concluída da banca."""
+    """Aplica o percentual à perda individual concluída da banca."""
     valor = Decimal(str(prejuizo))
     percentual = Decimal(str(RECUPERACAO_PERCENTUAL))
     if not valor.is_finite() or not percentual.is_finite():
@@ -2190,8 +2190,8 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Cada banca inicia com 0 gale; multiplicador x3; LOSS +1, WIN -1 (mínimo 0); pré stop-loss R$100 próprio; reset para 0 após 100 operações ou stop-win de R$50 próprio.",
-            "regra_recuperacao": "Recupera 100% do déficit líquido acumulado da banca; zera no stop-win.",
+            f"Cada banca inicia com 0 gale; multiplicador x{MULTIPLICADOR_GALE:g}; LOSS +1, WIN -1 (mínimo 0); pré stop-loss R${PRE_STOP_LOSS_BRL:.0f} próprio; reset para 0 após 100 operações ou stop-win de R${STOP_WIN_BRL:.0f} próprio.",
+            f"Recupera {RECUPERACAO_PERCENTUAL:.0%} de cada loss da própria banca na operação seguinte, mesmo se o resultado acumulado estiver positivo; losses adicionais se somam e wins abatem o valor pendente.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }
@@ -2207,7 +2207,7 @@ def marcar_envio_indeterminado(banca, ativo, nivel, valor, motivo):
 
 
 def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
-    """Calcula a entrada-base x3 por nível e envia exclusivamente à conta DEMO."""
+    """Calcula a entrada-base com o multiplicador configurado e envia só à conta DEMO."""
     global entradas_globais_aceitas, ultimo_saldo_demo
     with contador_entrada_lock:
         with estado_lock:
@@ -2486,9 +2486,19 @@ def finalizar_operacao_global(banca):
             local = em_centavos(dados["resultado_liquido"]) + resultado_operacao
             dados["resultado_liquido"] = local / 100
             dados["prejuizo_acumulado"] = max(0, -local) / 100
-            dados["recuperacao_pendente"] = round(
-                calcular_alvo_recuperacao(dados["prejuizo_acumulado"]), 2
-            )
+            recuperacao_anterior = max(0.0, float(dados["recuperacao_pendente"]))
+            resultado_operacao_usd = resultado_operacao / 100
+            if resultado_operacao < 0:
+                perda_operacao = -resultado_operacao_usd
+                dados["recuperacao_pendente"] = round(
+                    recuperacao_anterior + calcular_alvo_recuperacao(perda_operacao), 2
+                )
+            elif resultado_operacao > 0:
+                dados["recuperacao_pendente"] = round(
+                    max(0.0, recuperacao_anterior - resultado_operacao_usd), 2
+                )
+            else:
+                dados["recuperacao_pendente"] = round(recuperacao_anterior, 2)
             dados["em_recuperacao"] = False
             recuperacoes_em_curso.discard(banca)
             historico_operacoes.append({
@@ -2603,10 +2613,10 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         gales = int(contexto["gales"])
         log.info(
             "GESTAO | banca=%s | operação=%s | entrada=%s %.2f | "
-            "multiplicador=x3 | gales_disponiveis=%s | recuperação=%.0f%% | "
+            "multiplicador=x%.0f | gales_disponiveis=%s | recuperação=%.0f%% | "
             "déficit_alocado=%.2f | pré_stop_loss_brl=%.2f | payout=aguardar_vencimento | conta=DEMO",
             banca, contexto["numero"], getattr(api, "currency", "USD"),
-            contexto["entrada"], gales, RECUPERACAO_PERCENTUAL * 100,
+            contexto["entrada"], MULTIPLICADOR_GALE, gales, RECUPERACAO_PERCENTUAL * 100,
             contexto["prejuizo_alocado"], PRE_STOP_LOSS_BRL,
         )
         with estado_lock:
@@ -2636,7 +2646,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             f"(base US$ {ENTRADA_BASE_USD:.2f})\n"
             f"♻️ Recuperação configurada: {RECUPERACAO_PERCENTUAL:.0%} do déficit "
             f"(alocado nesta operação: {getattr(api, 'currency', 'USD')} {contexto['prejuizo_alocado']:.2f})\n"
-            f"🔢 Gales disponíveis: {gales} | multiplicador x3\n"
+            f"🔢 Gales disponíveis: {gales} | multiplicador x{MULTIPLICADOR_GALE:g}\n"
             "⏳ Sem venda antecipada: aguardar o vencimento para o payout do contrato.\n"
             "🧪 Deriv DEMO"
         )
@@ -2680,7 +2690,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                 f"🏦 {banca} | {ativo}\n"
                 f"⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                 f"💵 Resultado líquido da operação: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                f"🔢 Próxima operação: {estado} gales | multiplicador x3\n"
+                f"🔢 Próxima operação: {estado} gales | multiplicador x{MULTIPLICADOR_GALE:g}\n"
                 f"📊 Total: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                 f"💰 Saldo Deriv DEMO: {texto_saldo()} {getattr(api, 'currency', '')}"
             )
@@ -3442,8 +3452,9 @@ log.info(
 
 log.info(
     "GERENCIAMENTO | 4 bancas independentes | cada uma: 0 gale inicial; loss +1; win -1 (mínimo 0) | "
-    "MULTIPLICADOR X3; entrada-base USD 0.35; referência BRL 2.00; recuperação de %.0f%% do déficit líquido acumulado; "
+    "MULTIPLICADOR X%.0f; entrada-base USD 0.35; referência BRL 2.00; recuperação de %.0f%% após cada loss, mesmo com saldo positivo; "
     "pré stop-loss BRL %.2f | stop-win BRL %.2f: reinicia o ciclo | reset após 100 operações | TIMEFRAMES: %s",
+    MULTIPLICADOR_GALE,
     RECUPERACAO_PERCENTUAL * 100,
     PRE_STOP_LOSS_BRL,
     STOP_WIN_BRL,

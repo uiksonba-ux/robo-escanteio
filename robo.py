@@ -2799,20 +2799,11 @@ def scanner_timeframe(
 
                 with estado_lock:
 
-                    banca_da_faixa = next(
-                        (
-                            banca
-                            for banca in BANCAS
-                            if timeframe in TIMEFRAME_POR_BANCA.get(banca, ())
-                        ),
-                        None,
-                    )
-                    existe_banca_livre = (
-                        banca_da_faixa is not None
-                        and not estado_frentes[banca_da_faixa]["ocupada"]
-                        and not estado_frentes[banca_da_faixa].get(
-                            "pre_stop_loss_ativo", False
-                        )
+                    existe_banca_livre = any(
+                        timeframe in TIMEFRAME_POR_BANCA.get(banca, ())
+                        and not estado_frentes[banca]["ocupada"]
+                        and not estado_frentes[banca].get("pre_stop_loss_ativo", False)
+                        for banca in BANCAS
                     )
 
                 if not existe_banca_livre:

@@ -186,7 +186,7 @@ GALES_POR_CICLO = GALES_INICIAIS
 MAX_GALES = GALES_INICIAIS
 
 RECUPERACAO_PERCENTUAL = 1.0
-PRE_STOP_LOSS_BRL = 0.0
+PRE_STOP_LOSS_BRL = 300.0
 
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
@@ -593,7 +593,7 @@ def conectar():
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             "🛡 Banca única: 0 gale inicial; LOSS +1 e WIN -1 (mínimo 0), sem limite máximo\n"
-            f"📈 Multiplicador X3; entrada-base de US$ {ENTRADA_BASE_USD:.2f}; recuperação de {RECUPERACAO_PERCENTUAL:.0%} do déficit líquido; stop-loss desativado\n"
+            f"📈 Multiplicador X3; entrada-base de US$ {ENTRADA_BASE_USD:.2f}; recuperação de {RECUPERACAO_PERCENTUAL:.0%}; pré stop-loss de R$ {PRE_STOP_LOSS_BRL:.2f}\n"
             f"🏁 Stop-win: R$ {STOP_WIN_BRL:.2f} por ciclo; reinício automático da banca\n"
             "🔄 Cada banca reinicia sua progressão após 100 operações próprias\n"
             "⏳ Aguardar o vencimento do contrato para liquidar\n"
@@ -2036,7 +2036,7 @@ def calcular_entrada_recuperacao(perda_anterior, payout_liquido, saldo=None, luc
 
 
 def obter_limite_pre_stop_loss_conta():
-    """Converte o limite de R$100 usando a conversão da entrada-base da Deriv."""
+    """Converte o limite em BRL para a moeda da conta usando a entrada-base."""
     cliente = api or _cliente_conectando
     entrada_conta = getattr(cliente, "base_stake", None) if cliente is not None else None
     if entrada_conta is None:
@@ -2050,7 +2050,7 @@ def obter_stop_win_conta():
 
 
 def pre_stop_loss_atingido(perda_confirmada, proxima_entrada=0.0):
-    """O pré-stop-loss está desativado nesta estratégia."""
+    """Bloqueia a próxima entrada se a perda atingir ou exceder o limite configurado."""
     if PRE_STOP_LOSS_BRL <= 0:
         return False
     perda_centavos = max(0, em_centavos(perda_confirmada))
@@ -2176,9 +2176,13 @@ def snapshot_gestao_global():
                 for nivel in range(maior_gale_atual + 1)
             },
             "multiplicador_gale": MULTIPLICADOR_GALE,
-            "pre_stop_loss_brl": 0.0,
+            "pre_stop_loss_brl": PRE_STOP_LOSS_BRL,
             "pre_stop_loss_conta": obter_limite_pre_stop_loss_conta(),
-            "regra_pre_stop_loss": "Desativado por configuração.",
+            "regra_pre_stop_loss": (
+                f"Ativo: encerra a recuperação e reinicia a gestão quando a perda acumulada, "
+                f"considerando a próxima entrada, alcançar R$ {PRE_STOP_LOSS_BRL:.2f}."
+                if PRE_STOP_LOSS_BRL > 0 else "Desativado por configuração."
+            ),
             "multiplicadores_por_gales": {str(nivel): valor for nivel, valor in MULTIPLICADORES_POR_GALES.items()},
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "envio_indeterminado": dict(next(iter(envios_indeterminados.values()))) if envios_indeterminados else None,
@@ -2186,7 +2190,7 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Banca única inicia com 0 gale; multiplicador x3; LOSS +1, WIN -1 (mínimo 0); reset para 0 após 100 operações ou stop-win de R$50.",
+            "regra_gales": "Banca única inicia com 0 gale; multiplicador x3; LOSS +1, WIN -1 (mínimo 0); pré stop-loss R$300; reset para 0 após 100 operações ou stop-win de R$50.",
             "regra_recuperacao": "Recupera 100% do déficit líquido acumulado da banca; zera no stop-win.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
@@ -2313,6 +2317,24 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             except (OverflowError, ValueError):
                 valor = math.inf
 
+            perda_acumulada_centavos = em_centavos(
+                estado_frentes[banca]["resultado_liquido"]
+            )
+            if nivel > 0:
+                perda_acumulada_centavos += int(contexto["resultado_centavos"])
+            perda_confirmada = max(0, -perda_acumulada_centavos) / 100
+            disparar_pre_stop = pre_stop_loss_atingido(perda_confirmada, valor)
+
+        if disparar_pre_stop:
+            log.warning(
+                "PRE-STOP DISPARADO | banca=%s | perda_acumulada=%.2f | "
+                "proxima_entrada=%.2f | limite_brl=%.2f",
+                banca, perda_confirmada, valor, PRE_STOP_LOSS_BRL,
+            )
+            processar_pre_stop_loss(banca, ativo)
+            return False, "pre_stop_loss_atingido", operacoes_ativas.get(banca)
+
+        with estado_lock:
             comprometido = sum(o["valor"] for o in ordens_pendentes.values())
             disponivel = saldo - comprometido - sum(reservas_pendentes.values())
             if valor > disponivel or valor < ENTRADA_MINIMA:
@@ -2582,10 +2604,10 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         log.info(
             "GESTAO | banca=%s | operação=%s | entrada=%s %.2f | "
             "multiplicador=x3 | gales_disponiveis=%s | recuperação=%.0f%% | "
-            "déficit_alocado=%.2f | stop_loss=desativado | payout=aguardar_vencimento | conta=DEMO",
+            "déficit_alocado=%.2f | pré_stop_loss_brl=%.2f | payout=aguardar_vencimento | conta=DEMO",
             banca, contexto["numero"], getattr(api, "currency", "USD"),
             contexto["entrada"], gales, RECUPERACAO_PERCENTUAL * 100,
-            contexto["prejuizo_alocado"],
+            contexto["prejuizo_alocado"], PRE_STOP_LOSS_BRL,
         )
         with estado_lock:
             estado_frentes[banca]["ultimo_sinal"] = {
@@ -3430,9 +3452,9 @@ log.info(
 log.info(
     "GERENCIAMENTO | banca única | 0 gale inicial; loss +1; win -1 (mínimo 0) | "
     "MULTIPLICADOR X3; entrada-base USD 0.35; referência BRL 2.00; recuperação de %.0f%% do déficit líquido acumulado; "
-    "stop-loss desativado | stop-win BRL %.2f: reinicia o ciclo | reset após 100 operações | TIMEFRAMES: %s",
+    "pré stop-loss BRL %.2f | stop-win BRL %.2f: reinicia o ciclo | reset após 100 operações | TIMEFRAMES: %s",
     RECUPERACAO_PERCENTUAL * 100,
-    STOP_WIN_BRL,
+    PRE_STOP_LOSS_BRL,
     " · ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))
 )
 

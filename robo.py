@@ -3455,6 +3455,7 @@ log.info(
     "pré stop-loss BRL %.2f | stop-win BRL %.2f: reinicia o ciclo | reset após 100 operações | TIMEFRAMES: %s",
     RECUPERACAO_PERCENTUAL * 100,
     PRE_STOP_LOSS_BRL,
+    STOP_WIN_BRL,
     " · ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))
 )
 

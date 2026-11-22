@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-GALE0-X3-4BANK-RECOVERY100-STOPWIN50-M1"
+VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-GALE0-X3-4BANK-RECOVERY100-PRESTOP100-STOPWIN50-M1"
 
 app = Flask(__name__)
 
@@ -186,7 +186,7 @@ GALES_POR_CICLO = GALES_INICIAIS
 MAX_GALES = GALES_INICIAIS
 
 RECUPERACAO_PERCENTUAL = 1.0
-PRE_STOP_LOSS_BRL = 300.0
+PRE_STOP_LOSS_BRL = 100.0
 
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
@@ -2190,7 +2190,7 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": "Cada banca inicia com 0 gale; multiplicador x3; LOSS +1, WIN -1 (mínimo 0); pré stop-loss R$300 próprio; reset para 0 após 100 operações ou stop-win de R$50 próprio.",
+            "regra_gales": "Cada banca inicia com 0 gale; multiplicador x3; LOSS +1, WIN -1 (mínimo 0); pré stop-loss R$100 próprio; reset para 0 após 100 operações ou stop-win de R$50 próprio.",
             "regra_recuperacao": "Recupera 100% do déficit líquido acumulado da banca; zera no stop-win.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,

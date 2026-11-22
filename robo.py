@@ -2190,8 +2190,8 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            f"Cada banca inicia com 0 gale; multiplicador x{MULTIPLICADOR_GALE:g}; LOSS +1, WIN -1 (mínimo 0); pré stop-loss R${PRE_STOP_LOSS_BRL:.0f} próprio; reset para 0 após 100 operações ou stop-win de R${STOP_WIN_BRL:.0f} próprio.",
-            f"Recupera {RECUPERACAO_PERCENTUAL:.0%} de cada loss da própria banca na operação seguinte, mesmo se o resultado acumulado estiver positivo; losses adicionais se somam e wins abatem o valor pendente.",
+            "regra_gales": f"Cada banca inicia com 0 gale; multiplicador x{MULTIPLICADOR_GALE:g}; LOSS +1, WIN -1 (mínimo 0); pré stop-loss R${PRE_STOP_LOSS_BRL:.0f} próprio; reset para 0 após 100 operações ou stop-win de R${STOP_WIN_BRL:.0f} próprio.",
+            "regra_recuperacao": f"Recupera {RECUPERACAO_PERCENTUAL:.0%} de cada loss da própria banca na operação seguinte, mesmo se o resultado acumulado estiver positivo; losses adicionais se somam e wins abatem o valor pendente.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
         }

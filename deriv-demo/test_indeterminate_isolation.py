@@ -137,9 +137,9 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
 
         self.assertEqual(len(robo._extrato_corresponde_ao_envio(rows, envio)), 2)
 
-    def test_recovery_is_100_percent_and_cycle_uses_current_entry(self):
-        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
-        self.assertEqual(robo.calcular_alvo_recuperacao(4.55), 4.55)
+    def test_recovery_is_50_percent_and_cycle_uses_current_entry(self):
+        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 0.5)
+        self.assertEqual(robo.calcular_alvo_recuperacao(4.55), 2.275)
         self.assertEqual(
             robo.valores_do_ciclo(
                 robo.ENTRADA_BASE_BRL, 5, robo.MULTIPLICADOR_GALE,

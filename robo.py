@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-GALE0-X2-4BANK-RECOVERY100-PRESTOP300-STOPWIN50-M1"
+VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-GALE0-X2-4BANK-RECOVERY50-PRESTOP300-STOPWIN50-M1"
 
 app = Flask(__name__)
 
@@ -185,7 +185,7 @@ GALES_INICIAIS = 0
 GALES_POR_CICLO = GALES_INICIAIS
 MAX_GALES = GALES_INICIAIS
 
-RECUPERACAO_PERCENTUAL = 1.0
+RECUPERACAO_PERCENTUAL = 0.5
 PRE_STOP_LOSS_BRL = 300.0
 
 # Expired portfolio rows are ignored after a settlement grace period.

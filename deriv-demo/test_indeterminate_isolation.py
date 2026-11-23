@@ -137,48 +137,54 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
 
         self.assertEqual(len(robo._extrato_corresponde_ao_envio(rows, envio)), 2)
 
-    def test_recovery_is_disabled(self):
-        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 0.0)
-        self.assertEqual(robo.calcular_alvo_recuperacao(4.55), 0.0)
+    def test_recovery_is_100_percent_and_cycle_uses_current_entry(self):
+        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
+        self.assertEqual(robo.calcular_alvo_recuperacao(4.55), 4.55)
         self.assertEqual(
-            robo.valores_do_ciclo(robo.ENTRADA_BASE_BRL, 5, robo.MULTIPLICADOR_GALE),
-            [10.0, 20.0, 40.0, 80.0, 160.0, 320.0],
+            robo.valores_do_ciclo(
+                robo.ENTRADA_BASE_BRL, 5, robo.MULTIPLICADOR_GALE,
+            ),
+            [2.0, 4.0, 8.0, 16.0, 32.0, 64.0],
         )
 
-    def test_requested_single_bank_gale_and_timeframe_settings(self):
-        self.assertEqual(robo.QTD_BANCAS, 1)
-        self.assertEqual(robo.BANCAS, ["BANCA 1"])
-        self.assertEqual(robo.TIMEFRAME_POR_BANCA, {"BANCA 1": (1, 5, 15)})
-        self.assertEqual(set(robo.estado_frentes), {"BANCA 1"})
-        self.assertEqual(robo.ENTRADA_BASE_BRL, 10.0)
+    def test_current_bank_gale_recovery_and_timeframe_settings(self):
+        self.assertEqual(robo.QTD_BANCAS, 4)
+        self.assertEqual(robo.BANCAS, [f"BANCA {i}" for i in range(1, 5)])
+        self.assertEqual(robo.TIMEFRAME_POR_BANCA, {banca: (1,) for banca in robo.BANCAS})
+        self.assertEqual(set(robo.estado_frentes), set(robo.BANCAS))
+        self.assertEqual(robo.ENTRADA_BASE_BRL, 2.0)
         self.assertEqual(robo.MULTIPLICADOR_GALE, 2.0)
         self.assertEqual(robo.MULTIPLICADORES_POR_GALES, {0: 2.0})
-        self.assertEqual(robo.GALES_INICIAIS, 5)
-        with robo.estado_lock:
-            robo.estado_frentes["BANCA 1"]["gale_progression_level"] = 5
-            robo.estado_frentes["BANCA 1"]["gale_atual"] = 5
-            robo.estado_frentes["BANCA 1"]["gales_reativos"] = 5
-        self.assertEqual(robo.estado_frentes["BANCA 1"]["gale_progression_level"], 5)
-        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 0.0)
-        self.assertEqual(set(robo.TIMEFRAMES), {1, 5, 15})
-        self.assertEqual(robo.PRE_STOP_LOSS_BRL, 0.0)
-        self.assertFalse(robo.pre_stop_loss_atingido(1000.0, 1000.0))
+        self.assertEqual(robo.GALES_INICIAIS, 0)
+        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
+        self.assertEqual(set(robo.TIMEFRAMES), {1})
+        self.assertEqual(robo.PRE_STOP_LOSS_BRL, 300.0)
+        self.assertTrue(robo.pre_stop_loss_atingido(300.0, 0.0))
+        self.assertTrue(robo.pre_stop_loss_atingido(299.0, 1.01))
+        self.assertFalse(robo.pre_stop_loss_atingido(299.0, 1.0))
         self.assertEqual(
             robo.valores_do_ciclo(robo.ENTRADA_BASE_BRL, 5, robo.MULTIPLICADOR_GALE),
-            [10.0, 20.0, 40.0, 80.0, 160.0, 320.0],
+            [2.0, 4.0, 8.0, 16.0, 32.0, 64.0],
         )
 
-        banca = "BANCA 1"
-        self.assertEqual(robo.atualizar_progressao_gale(banca, 0, "loss"), 6)
-        self.assertEqual(robo.atualizar_progressao_gale(banca, 0, "win"), 5)
+        banca = robo.BANCAS[0]
         with robo.estado_lock:
-            robo.estado_frentes[banca]["gale_progression_level"] = 0
-        self.assertEqual(robo.atualizar_progressao_gale(banca, 0, "win"), 0)
-        with robo.estado_lock:
-            robo.estado_frentes[banca]["gale_progression_level"] = robo.GALES_INICIAIS
-            robo.estado_frentes[banca]["gale_atual"] = robo.GALES_INICIAIS
-            robo.estado_frentes[banca]["gales_reativos"] = robo.GALES_INICIAIS
-
+            saved = {
+                campo: robo.estado_frentes[banca][campo]
+                for campo in ("gale_progression_level", "gale_atual", "gales_reativos")
+            }
+            robo.estado_frentes[banca].update(
+                gale_progression_level=robo.GALES_INICIAIS,
+                gale_atual=robo.GALES_INICIAIS,
+                gales_reativos=robo.GALES_INICIAIS,
+            )
+        try:
+            self.assertEqual(robo.atualizar_progressao_gale(banca, 0, "loss"), 1)
+            self.assertEqual(robo.atualizar_progressao_gale(banca, 0, "win"), 0)
+            self.assertEqual(robo.atualizar_progressao_gale(banca, 0, "win"), 0)
+        finally:
+            with robo.estado_lock:
+                robo.estado_frentes[banca].update(saved)
 
     def test_finalized_win_clears_bank_deficit_and_recovery(self):
         banca_a = robo.BANCAS[0]
@@ -205,7 +211,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.0)
         self.assertEqual(robo.estado_frentes[banca_a]["prejuizo_acumulado"], 0.0)
 
-    def test_new_loss_updates_bank_deficit_without_recovery(self):
+    def test_new_loss_updates_bank_deficit_and_recovery(self):
         banca_a = robo.BANCAS[0]
         with robo.estado_lock:
             robo.operacoes_ativas.clear()
@@ -228,8 +234,8 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             }
         robo.finalizar_operacao_global(banca_a)
         self.assertEqual(robo.estado_frentes[banca_a]["prejuizo_acumulado"], 0.70)
-        self.assertEqual(robo.estado_frentes[banca_a]["recuperacao_pendente"], 0.0)
-        self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.0)
+        self.assertEqual(robo.estado_frentes[banca_a]["recuperacao_pendente"], 0.70)
+        self.assertEqual(robo.prejuizo_banca_atual(banca_a), 0.70)
 
     def test_resample_uses_only_complete_contiguous_candles(self):
         minutos = 4
@@ -257,7 +263,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(candles[0]["max"], 9.0)
         self.assertEqual(candles[0]["min"], 3.0)
 
-    def test_one_bank_accepts_each_configured_timeframe(self):
+    def test_four_banks_accept_only_their_configured_timeframe(self):
         with robo.estado_lock:
             robo.envios_indeterminados.clear()
             robo.ativos_em_uso.clear()
@@ -265,23 +271,30 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
                 robo.estado_frentes[banca].update(
                     ocupada=False, ativo=None, direcao=None, score=None,
                     timeframe=None, expiracao=None, envio_indeterminado=False,
-                    ciclo_em_execucao=False,
+                    ciclo_em_execucao=False, pre_stop_loss_ativo=False,
                 )
             robo.proxima_banca_indice = 0
 
         reservas = {}
-        for timeframe in (1, 5, 15):
-            ativo = f"R_{timeframe}"
-            reservas[timeframe] = robo.reservar_banca(
-                ativo, "call", 80, timeframe, timeframe,
+        for indice, banca in enumerate(robo.BANCAS, start=1):
+            ativo = f"R_{indice}"
+            self.assertEqual(
+                robo.reservar_banca(ativo, "call", 80, 1, 1),
+                banca,
             )
-            self.assertEqual(reservas[timeframe], "BANCA 1")
-            self.assertTrue(robo.liberar_banca("BANCA 1", ativo))
+            reservas[banca] = ativo
 
-        self.assertEqual(reservas, {1: "BANCA 1", 5: "BANCA 1", 15: "BANCA 1"})
-        self.assertEqual(robo.reservar_banca("R_50", "put", 76, 5, 5), "BANCA 1")
-        self.assertIsNone(robo.reservar_banca("R_75", "call", 76, 15, 15))
+        self.assertIsNone(robo.reservar_banca("R_M5", "put", 76, 5, 5))
+        self.assertIsNone(robo.reservar_banca("R_EXTRA", "put", 76, 1, 1))
 
+        for banca, ativo in reservas.items():
+            self.assertTrue(robo.liberar_banca(banca, ativo))
+
+        self.assertEqual(
+            robo.reservar_banca("R_AGAIN", "put", 76, 1, 1),
+            robo.BANCAS[0],
+        )
+        self.assertTrue(robo.liberar_banca(robo.BANCAS[0], "R_AGAIN"))
 
     def test_accuracy_uses_only_real_results(self):
         banca = robo.BANCAS[0]
@@ -363,7 +376,8 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         banca = robo.BANCAS[0]
         fields = (
             "wins", "losses", "wins_base_janela", "losses_base_janela",
-            "gale_progression_level", "gale_atual", "gales_reativos",
+            "sinais_fechados_janela", "gale_progression_level", "gale_atual",
+            "gales_reativos",
         )
         with robo.estado_lock:
             saved_banks = {
@@ -379,7 +393,8 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             for name in robo.BANCAS:
                 robo.estado_frentes[name].update(
                     wins=0, losses=0, wins_base_janela=0, losses_base_janela=0,
-                    gale_progression_level=9, gale_atual=9, gales_reativos=9,
+                    sinais_fechados_janela=0, gale_progression_level=9,
+                    gale_atual=9, gales_reativos=9,
                 )
             robo.stats.update(wins=0, losses=0)
             robo.sinais_fechados_janela_global = 0
@@ -397,8 +412,8 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             self.assertEqual(robo.sinais_fechados_janela_global, 0)
             self.assertEqual(robo.estado_frentes[banca]["wins_base_janela"], 99)
             self.assertEqual(robo.estado_frentes[banca]["losses_base_janela"], 1)
-            self.assertEqual(robo.estado_frentes[banca]["gale_progression_level"], 5)
-            self.assertEqual(robo.estado_frentes[banca]["gales_reativos"], 5)
+            self.assertEqual(robo.estado_frentes[banca]["gale_progression_level"], robo.GALES_INICIAIS)
+            self.assertEqual(robo.estado_frentes[banca]["gales_reativos"], robo.GALES_INICIAIS)
         finally:
             with robo.estado_lock:
                 for name, values in saved_banks.items():
@@ -410,7 +425,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
                     robo.losses_base_janela_global,
                 ) = saved_global
 
-    def test_loss_with_positive_bank_net_does_not_create_recovery_debt(self):
+    def test_loss_creates_recovery_debt_even_with_positive_bank_net(self):
         banca = robo.BANCAS[0]
         with robo.estado_lock:
             robo.operacoes_ativas.clear()
@@ -424,14 +439,9 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             for name in robo.BANCAS:
                 dados = robo.estado_frentes[name]
                 dados.update(
-                    wins=0,
-                    losses=0,
-                    wins_base_janela=0,
-                    losses_base_janela=0,
-                    resultado_liquido=0.0,
-                    prejuizo_acumulado=0.0,
-                    recuperacao_pendente=0.0,
-                    envio_indeterminado=False,
+                    wins=0, losses=0, wins_base_janela=0, losses_base_janela=0,
+                    resultado_liquido=0.0, prejuizo_acumulado=0.0,
+                    recuperacao_pendente=0.0, envio_indeterminado=False,
                     em_recuperacao=False,
                 )
             robo.estado_frentes[banca]["wins"] = 1
@@ -442,7 +452,6 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.gales_por_assertividade(robo.taxa_banca_real(banca)), 3)
 
         with robo.estado_lock:
-            # A perda reduz o P&L, mas não cria dívida enquanto o saldo líquido segue positivo.
             robo.operacoes_ativas[banca] = {
                 "primeira_ordem": "TEST-LOSS-POSITIVE-BANK",
                 "resultado_centavos": -35,
@@ -450,9 +459,9 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
             }
 
         robo.finalizar_operacao_global(banca)
-        self.assertEqual(robo.prejuizo_banca_atual(banca), 0.0)
-        self.assertEqual(robo.prejuizo_global_atual(), 0.0)
-        self.assertEqual(robo.estado_frentes[banca]["recuperacao_pendente"], 0.0)
+        self.assertEqual(robo.prejuizo_banca_atual(banca), 0.35)
+        self.assertEqual(robo.prejuizo_global_atual(), 0.35)
+        self.assertEqual(robo.estado_frentes[banca]["recuperacao_pendente"], 0.35)
         self.assertAlmostEqual(robo.estado_frentes[banca]["resultado_liquido"], 0.27)
 
 class FinalizedSignalScoreboardTests(unittest.TestCase):

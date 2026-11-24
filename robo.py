@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-3BANK-SAME-SIGNAL-META10-GALE5-PRESTOP300-M1"
+VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-3BANK-SAME-SIGNAL-META10-5GALES-RECOVERY-PRESTOP300-M1"
 
 app = Flask(__name__)
 
@@ -181,7 +181,7 @@ MULTIPLICADOR_GALE = 2.0
 MULTIPLICADORES_POR_GALES = {0: 2.0}
 
 # Gerenciamento único: começa com zero gale; LOSS adiciona um e WIN remove um.
-GALES_INICIAIS = 2
+GALES_INICIAIS = 5
 GALES_POR_CICLO = GALES_INICIAIS
 MAX_GALES = 5
 
@@ -1916,8 +1916,8 @@ def registrar_loss(
 
 
 def atualizar_progressao_gale(banca, nivel, resultado):
-    """Loss acrescenta um gale; win remove um gale, até o mínimo zero."""
-    del nivel  # O ajuste é por operação fechada, não por cada tentativa do gale.
+    """Registra a progressão por resultado; todas as operações mantêm cinco gales disponíveis."""
+    del nivel
     with estado_lock:
         atual = max(0, int(estado_frentes[banca]["gale_progression_level"]))
         if resultado == "loss":
@@ -2298,10 +2298,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             ultimo_saldo_demo = saldo
             if nivel == 0:
                 assertividade_atual = taxa_banca_real(banca)
-                quantidade_gales = min(
-                    MAX_GALES,
-                    max(0, int(estado_frentes[banca]["gale_progression_level"]))
-                )
+                quantidade_gales = MAX_GALES
                 base = base_para_entrada
                 contexto = {
                     "posicao": 0,
@@ -2623,10 +2620,10 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         gales = int(contexto["gales"])
         log.info(
             "GESTAO | banca=%s | operação=%s | entrada=%s %.2f | "
-            "multiplicador=x%.0f | gales_disponiveis=%s | recuperação=%.0f%% | "
+            "gales_disponiveis=%s | recuperação=%.0f%% | "
             "déficit_alocado=%.2f | pré_stop_loss_brl=%.2f | payout=aguardar_vencimento | conta=DEMO",
             banca, contexto["numero"], getattr(api, "currency", "USD"),
-            contexto["entrada"], MULTIPLICADOR_GALE, gales, RECUPERACAO_PERCENTUAL * 100,
+            contexto["entrada"], gales, RECUPERACAO_PERCENTUAL * 100,
             contexto["prejuizo_alocado"], PRE_STOP_LOSS_BRL,
         )
         with estado_lock:
@@ -2656,7 +2653,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             f"(base US$ {ENTRADA_BASE_USD:.2f})\n"
             f"♻️ Recuperação configurada: {RECUPERACAO_PERCENTUAL:.0%} do déficit "
             f"(alocado nesta operação: {getattr(api, 'currency', 'USD')} {contexto['prejuizo_alocado']:.2f})\n"
-            f"🔢 Gales disponíveis: {gales} | multiplicador x{MULTIPLICADOR_GALE:g}\n"
+            f"🔢 Gales nesta operação: {gales} | entrada recalculada em cada gale pelo payout\n"
             "⏳ Sem venda antecipada: aguardar o vencimento para o payout do contrato.\n"
             "🧪 Deriv DEMO"
         )
@@ -2700,7 +2697,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                 f"🏦 {banca} | {ativo}\n"
                 f"⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                 f"💵 Resultado líquido da operação: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                f"🔢 Próxima operação: {estado} gales | multiplicador x{MULTIPLICADOR_GALE:g}\n"
+                f"🔢 Próxima operação: até {MAX_GALES} gales\n"
                 f"📊 Total: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                 f"💰 Saldo Deriv DEMO: {texto_saldo()} {getattr(api, 'currency', '')}"
             )
@@ -3503,10 +3500,9 @@ log.info(
 
 log.info(
     "GERENCIAMENTO | 3 bancas no mesmo sinal | meta conjunta BRL %.2f por ciclo | "
-    "2 gales iniciais; LOSS +1, WIN -1; máximo %s gales | stake recalculada pelo payout para cobrir perdas e buscar 1/3 da meta por banca | "
+    "5 gales em cada operação | stake recalculada pelo payout após cada loss para buscar 1/3 da meta por banca | "
     "pré stop-loss BRL %.2f | stop-win BRL %.2f | TIMEFRAMES: %s",
     META_LUCRO_OPERACAO_BRL,
-    MAX_GALES,
     PRE_STOP_LOSS_BRL,
     STOP_WIN_BRL,
     " · ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))

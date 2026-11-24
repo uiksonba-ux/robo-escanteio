@@ -155,7 +155,7 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         self.assertEqual(robo.ENTRADA_BASE_BRL, 2.0)
         self.assertEqual(robo.MULTIPLICADOR_GALE, 2.0)
         self.assertEqual(robo.MULTIPLICADORES_POR_GALES, {0: 2.0})
-        self.assertEqual(robo.GALES_INICIAIS, 2)
+        self.assertEqual(robo.GALES_INICIAIS, 5)
         self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
         self.assertEqual(set(robo.TIMEFRAMES), {1})
         self.assertEqual(robo.PRE_STOP_LOSS_BRL, 300.0)

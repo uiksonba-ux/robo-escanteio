@@ -180,7 +180,8 @@ ENTRADA_MINIMA = 0.01
 MULTIPLICADOR_GALE = 2.0
 MULTIPLICADORES_POR_GALES = {0: 2.0}
 
-# Gerenciamento único: começa com zero gale; LOSS adiciona um e WIN remove um.
+# Gerenciamento adaptativo: começa com cinco gales, WIN reduz e LOSS aumenta,
+# limitado a cinco gales por operação.
 GALES_INICIAIS = 5
 GALES_POR_CICLO = GALES_INICIAIS
 MAX_GALES = 5
@@ -193,7 +194,8 @@ PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
 
 QTD_BANCAS = 3
 
-# Assertividade informativa; cada banca reinicia sua janela e seus gales após 100 operações próprias.
+# Assertividade informativa; cada banca reinicia sua janela estatística após 100 operações próprias.
+# A progressão de gales reinicia separadamente a cada 20 operações fechadas da banca.
 
 # Entrada-base fixa em BRL convertida para a moeda da conta Deriv DEMO.
 ENTRADA_BASE_BRL = 2.00  # referência BRL para limites e stop-win
@@ -1833,19 +1835,32 @@ def taxa_banca_real(banca):
 
 
 def registrar_operacao_fechada_assertividade(banca):
-    """Reinicia a janela e os gales desta banca após 100 sinais da própria banca."""
+    """Atualiza a janela estatística e reinicia a progressão de gales a cada 20 operações."""
     global sinais_fechados_janela_global, wins_base_janela_global, losses_base_janela_global
     with estado_lock:
         dados = estado_frentes[banca]
         dados["sinais_fechados_janela"] += 1
+        operacoes_banca_janela = dados["sinais_fechados_janela"]
 
-        # Janela global preservada só para estatística; não altera gales individuais.
+        # Reinício de gales independente da janela estatística de 100 operações.
+        reiniciar_gales = operacoes_banca_janela % 20 == 0
+        if reiniciar_gales:
+            dados["gale_progression_level"] = GALES_INICIAIS
+            dados["gale_atual"] = GALES_INICIAIS
+            dados["gales_reativos"] = GALES_INICIAIS
+
+        # Janela global preservada só para estatística.
         sinais_fechados_janela_global += 1
         if sinais_fechados_janela_global >= 100:
             wins_base_janela_global = stats["wins"]
             losses_base_janela_global = stats["losses"]
             sinais_fechados_janela_global = 0
 
+        if reiniciar_gales:
+            log.info(
+                "GERENCIAMENTO REINICIADO | banca=%s | operacoes_da_banca=%s | gales=%s",
+                banca, operacoes_banca_janela, GALES_INICIAIS,
+            )
         if dados["sinais_fechados_janela"] < 100:
             return False
 
@@ -1854,14 +1869,11 @@ def registrar_operacao_fechada_assertividade(banca):
         dados["wins_base_janela"] = dados["wins"]
         dados["losses_base_janela"] = dados["losses"]
         dados["sinais_fechados_janela"] = 0
-        dados["gale_progression_level"] = GALES_INICIAIS
-        dados["gale_atual"] = GALES_INICIAIS
-        dados["gales_reativos"] = GALES_INICIAIS
 
         log.info(
-            "GERENCIAMENTO REINICIADO | banca=%s | operacoes_da_banca=100 | gales=%s | "
+            "JANELA ESTATISTICA REINICIADA | banca=%s | operacoes_da_banca=100 | "
             "placar_janela=%sW/%sL",
-            banca, GALES_INICIAIS, wins_janela, losses_janela,
+            banca, wins_janela, losses_janela,
         )
         return True
 
@@ -2077,9 +2089,9 @@ def reiniciar_gestao_banca_apos_pre_stop(banca, perda_operacao):
         dados["prejuizo_acumulado"] = 0.0
         dados["recuperacao_pendente"] = 0.0
         dados["em_recuperacao"] = False
-        dados["gale_progression_level"] = 0
-        dados["gale_atual"] = 0
-        dados["gales_reativos"] = 0
+        dados["gale_progression_level"] = GALES_INICIAIS
+        dados["gale_atual"] = GALES_INICIAIS
+        dados["gales_reativos"] = GALES_INICIAIS
         dados["entradas_recuperacao_restantes"] = 0
         dados["recuperacao_estendida"] = False
         recuperacoes_em_curso.discard(banca)
@@ -2291,6 +2303,10 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
         except (ArithmeticError, TypeError, ValueError):
             log.warning("ENTRADA ADIADA | banca=%s | motivo=calculo_invalido", banca)
             return False, "calculo_recuperacao_invalido", operacoes_ativas.get(banca)
+        if nivel == 0 and recuperacao_aplicada <= 0:
+            # Entrada inicial real fixa; o alvo de recuperação só dimensiona
+            # entradas que precisam cobrir uma perda anterior ou o gale atual.
+            entrada_operacao = round(base_para_entrada, 2)
         if not math.isfinite(entrada_operacao) or entrada_operacao <= 0:
             return False, "calculo_recuperacao_invalido", operacoes_ativas.get(banca)
         log.info(
@@ -2304,7 +2320,9 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             ultimo_saldo_demo = saldo
             if nivel == 0:
                 assertividade_atual = taxa_banca_real(banca)
-                quantidade_gales = MAX_GALES
+                quantidade_gales = max(
+                    0, min(MAX_GALES, int(estado_frentes[banca]["gale_progression_level"]))
+                )
                 base = base_para_entrada
                 contexto = {
                     "posicao": 0,

@@ -236,6 +236,9 @@ def converter_brl_para_conta(valor_brl, cliente=None):
     if cliente is None:
         return round(ENTRADA_BASE_USD * float(valor_brl) / ENTRADA_BASE_BRL, 2)
     moeda_conta = getattr(cliente, "currency", None)
+    if not moeda_conta:
+        # O painel pode ser chamado pelo health check antes de a sessão carregar o câmbio.
+        return round(ENTRADA_BASE_USD * float(valor_brl) / ENTRADA_BASE_BRL, 2)
     moeda_origem = getattr(cliente, "base_stake_currency", "BRL")
     if moeda_conta == moeda_origem:
         taxa_cambio = Decimal("1")

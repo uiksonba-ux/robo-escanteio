@@ -1408,7 +1408,7 @@ def _normalizar_confirmacao(resposta):
 
 
 def _extrato_corresponde_ao_envio(transacoes, envio):
-    """Retorna contratos que correspondem unicamente ao buy DEMO incerto."""
+    """Retorna compras DEMO ainda não atribuídas que correspondem ao envio incerto."""
     if not isinstance(transacoes, list):
         return None
     app_id = str(getattr(envio.get("cliente"), "app_id", ""))
@@ -1417,7 +1417,13 @@ def _extrato_corresponde_ao_envio(transacoes, envio):
     direcao = str(envio.get("direcao", "")).upper()
     stake = round(float(envio.get("valor", 0)), 2)
     shortcode_prefix = f"{direcao}_{simbolo}_"
-    encontrados = []
+    # Várias bancas podem comprar o mesmo ativo, direção e valor em sequência.
+    # Nunca atribua à nova tentativa um contrato que já pertence a outra ordem.
+    with estado_lock:
+        contratos_ja_atribuidos = {
+            str(order_id) for order_id in set(ordens_pendentes) | set(ordens_liquidadas)
+        }
+    encontrados = set()
     for item in transacoes:
         if not isinstance(item, dict):
             continue
@@ -1444,9 +1450,9 @@ def _extrato_corresponde_ao_envio(transacoes, envio):
             contract_id = int(contract_id)
         except (TypeError, ValueError, OverflowError):
             continue
-        if contract_id > 0:
-            encontrados.append(contract_id)
-    return encontrados
+        if contract_id > 0 and str(contract_id) not in contratos_ja_atribuidos:
+            encontrados.add(contract_id)
+    return sorted(encontrados)
 
 
 def _consultar_compra_no_extrato(banca, envio):

@@ -137,9 +137,9 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
 
         self.assertEqual(len(robo._extrato_corresponde_ao_envio(rows, envio)), 2)
 
-    def test_recovery_is_25_percent_and_cycle_uses_current_entry(self):
-        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 0.25)
-        self.assertEqual(robo.calcular_alvo_recuperacao(4.55), 1.1375)
+    def test_recovery_targets_full_cycle_loss_and_per_bank_profit(self):
+        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
+        self.assertEqual(robo.calcular_alvo_recuperacao(4.55), 4.55)
         self.assertEqual(
             robo.valores_do_ciclo(
                 robo.ENTRADA_BASE_BRL, 5, robo.MULTIPLICADOR_GALE,
@@ -148,15 +148,15 @@ class IndeterminateOrderIsolationTests(unittest.TestCase):
         )
 
     def test_current_bank_gale_recovery_and_timeframe_settings(self):
-        self.assertEqual(robo.QTD_BANCAS, 4)
-        self.assertEqual(robo.BANCAS, [f"BANCA {i}" for i in range(1, 5)])
+        self.assertEqual(robo.QTD_BANCAS, 3)
+        self.assertEqual(robo.BANCAS, [f"BANCA {i}" for i in range(1, 4)])
         self.assertEqual(robo.TIMEFRAME_POR_BANCA, {banca: (1,) for banca in robo.BANCAS})
         self.assertEqual(set(robo.estado_frentes), set(robo.BANCAS))
         self.assertEqual(robo.ENTRADA_BASE_BRL, 2.0)
         self.assertEqual(robo.MULTIPLICADOR_GALE, 2.0)
         self.assertEqual(robo.MULTIPLICADORES_POR_GALES, {0: 2.0})
-        self.assertEqual(robo.GALES_INICIAIS, 0)
-        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 0.25)
+        self.assertEqual(robo.GALES_INICIAIS, 2)
+        self.assertEqual(robo.RECUPERACAO_PERCENTUAL, 1.0)
         self.assertEqual(set(robo.TIMEFRAMES), {1})
         self.assertEqual(robo.PRE_STOP_LOSS_BRL, 300.0)
         self.assertTrue(robo.pre_stop_loss_atingido(300.0, 0.0))

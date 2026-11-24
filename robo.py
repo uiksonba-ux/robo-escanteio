@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-GALE0-X2-4BANK-RECOVERY25-PRESTOP300-STOPWIN50-M1"
+VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-3BANK-SAME-SIGNAL-META10-GALE5-PRESTOP300-M1"
 
 app = Flask(__name__)
 
@@ -181,17 +181,17 @@ MULTIPLICADOR_GALE = 2.0
 MULTIPLICADORES_POR_GALES = {0: 2.0}
 
 # Gerenciamento único: começa com zero gale; LOSS adiciona um e WIN remove um.
-GALES_INICIAIS = 0
+GALES_INICIAIS = 2
 GALES_POR_CICLO = GALES_INICIAIS
-MAX_GALES = GALES_INICIAIS
+MAX_GALES = 5
 
-RECUPERACAO_PERCENTUAL = 0.25
+RECUPERACAO_PERCENTUAL = 1.0
 PRE_STOP_LOSS_BRL = 300.0
 
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
 
-QTD_BANCAS = 4
+QTD_BANCAS = 3
 
 # Assertividade informativa; cada banca reinicia sua janela e seus gales após 100 operações próprias.
 
@@ -199,6 +199,7 @@ QTD_BANCAS = 4
 ENTRADA_BASE_BRL = 2.00  # referência BRL para limites e stop-win
 ENTRADA_BASE_USD = 0.35
 META_LUCRO_BRL = 0.00
+META_LUCRO_OPERACAO_BRL = 10.00
 STOP_WIN_BRL = 50.00
 
 
@@ -1920,7 +1921,7 @@ def atualizar_progressao_gale(banca, nivel, resultado):
     with estado_lock:
         atual = max(0, int(estado_frentes[banca]["gale_progression_level"]))
         if resultado == "loss":
-            proximo = atual + 1
+            proximo = min(MAX_GALES, atual + 1)
         elif resultado == "win":
             proximo = max(0, atual - 1)
         else:
@@ -2016,7 +2017,7 @@ def calcular_alvo_recuperacao(prejuizo):
 
 
 def calcular_entrada_recuperacao(perda_anterior, payout_liquido, saldo=None, lucro_alvo=None):
-    """Dimensiona a entrada para recuperar 100% da dívida e atingir o alvo líquido."""
+    """Calcula a stake para cobrir o déficit alocado e atingir a meta líquida da banca."""
     perda = Decimal(str(perda_anterior))
     payout = Decimal(str(payout_liquido))
     lucro_padrao = obter_meta_lucro_conta()
@@ -2240,56 +2241,66 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             return False, "saldo_indisponivel", contexto
 
         recuperacao_aplicada = 0.0
-        entrada_operacao = None
+        perda_ciclo_atual = 0.0
         payout_recuperacao = None
-        if nivel == 0:
-            with estado_lock:
+        base_para_entrada = obter_entrada_base(saldo)
+        if not math.isfinite(base_para_entrada) or base_para_entrada <= 0:
+            return False, "entrada_base_indisponivel", operacoes_ativas.get(banca)
+        with estado_lock:
+            if nivel == 0:
                 recuperacao_aplicada = max(
                     0.0, float(estado_frentes[banca]["recuperacao_pendente"])
                 )
-            base_para_entrada = obter_entrada_base(saldo)
-            entrada_operacao = base_para_entrada
-            if not math.isfinite(base_para_entrada) or base_para_entrada <= 0:
-                return False, "entrada_base_indisponivel", operacoes_ativas.get(banca)
-            if recuperacao_aplicada > 0:
-                cliente = api
-                estado_payout, payout_recuperacao = chamada_api_limitada(
-                    f"recovery_payout:{ativo}:{expiracao}:{direcao}",
-                    lambda: cliente.get_digital_payout(ativo, int(expiracao), direcao),
-                    PRAZO_CONSULTA_API,
-                    cliente,
+            else:
+                recuperacao_aplicada = max(
+                    0.0, float(contexto.get("prejuizo_alocado", 0.0))
                 )
-                if estado_payout != "ok" or payout_recuperacao is None:
-                    log.warning(
-                        "RECUPERACAO ADIADA | banca=%s | ativo=%s | estado_payout=%s",
-                        banca, ativo, estado_payout,
-                    )
-                    return False, "payout_recuperacao_indisponivel", operacoes_ativas.get(banca)
-                try:
-                    entrada_operacao = calcular_entrada_recuperacao(
-                        recuperacao_aplicada,
-                        payout_recuperacao,
-                        saldo=saldo,
-                        lucro_alvo=base_para_entrada,
-                    )
-                except (ArithmeticError, TypeError, ValueError):
-                    log.warning("RECUPERACAO ADIADA | banca=%s | motivo=calculo_invalido", banca)
-                    return False, "calculo_recuperacao_invalido", operacoes_ativas.get(banca)
-                if not math.isfinite(entrada_operacao) or entrada_operacao <= 0:
-                    return False, "calculo_recuperacao_invalido", operacoes_ativas.get(banca)
-                log.info(
-                    "RECUPERACAO PREPARADA | banca=%s | déficit=%.2f | percentual=%.0f%% | "
-                    "payout_liquido=%.4f | entrada_recuperacao=%.2f",
-                    banca, recuperacao_aplicada, RECUPERACAO_PERCENTUAL * 100,
-                    payout_recuperacao, entrada_operacao,
+                perda_ciclo_atual = max(
+                    0.0, -float(contexto.get("resultado_centavos", 0)) / 100.0
                 )
+        lucro_alvo_banca = (
+            base_para_entrada * META_LUCRO_OPERACAO_BRL
+            / ENTRADA_BASE_BRL / QTD_BANCAS
+        )
+        cliente = api
+        estado_payout, payout_recuperacao = chamada_api_limitada(
+            f"recovery_payout:{ativo}:{expiracao}:{direcao}",
+            lambda: cliente.get_digital_payout(ativo, int(expiracao), direcao),
+            PRAZO_CONSULTA_API,
+            cliente,
+        )
+        if estado_payout != "ok" or payout_recuperacao is None:
+            log.warning(
+                "ENTRADA ADIADA | banca=%s | ativo=%s | estado_payout=%s",
+                banca, ativo, estado_payout,
+            )
+            return False, "payout_recuperacao_indisponivel", operacoes_ativas.get(banca)
+        try:
+            entrada_operacao = calcular_entrada_recuperacao(
+                recuperacao_aplicada + perda_ciclo_atual,
+                payout_recuperacao,
+                saldo=saldo,
+                lucro_alvo=lucro_alvo_banca,
+            )
+        except (ArithmeticError, TypeError, ValueError):
+            log.warning("ENTRADA ADIADA | banca=%s | motivo=calculo_invalido", banca)
+            return False, "calculo_recuperacao_invalido", operacoes_ativas.get(banca)
+        if not math.isfinite(entrada_operacao) or entrada_operacao <= 0:
+            return False, "calculo_recuperacao_invalido", operacoes_ativas.get(banca)
+        log.info(
+            "META DA ENTRADA CALCULADA | banca=%s | déficit_total=%.2f | meta_banca=%.2f | "
+            "payout_liquido=%.4f | stake=%.2f | gale=%s",
+            banca, recuperacao_aplicada + perda_ciclo_atual, lucro_alvo_banca,
+            payout_recuperacao, entrada_operacao, nivel,
+        )
 
         with estado_lock:
             ultimo_saldo_demo = saldo
             if nivel == 0:
                 assertividade_atual = taxa_banca_real(banca)
-                quantidade_gales = max(
-                    0, int(estado_frentes[banca]["gale_progression_level"])
+                quantidade_gales = min(
+                    MAX_GALES,
+                    max(0, int(estado_frentes[banca]["gale_progression_level"]))
                 )
                 base = base_para_entrada
                 contexto = {
@@ -2310,11 +2321,10 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                     "ativo": ativo,
                 }
             try:
-                valor = round(
-                    float(contexto["entrada"]) * (MULTIPLICADOR_GALE ** int(nivel)),
-                    2,
-                )
-            except (OverflowError, ValueError):
+                valor = round(float(entrada_operacao), 2)
+                if nivel == 0:
+                    contexto["entrada"] = valor
+            except (OverflowError, TypeError, ValueError):
                 valor = math.inf
 
             perda_acumulada_centavos = em_centavos(
@@ -2735,24 +2745,65 @@ def reservar_banca(ativo, direcao, score, timeframe, expiracao):
     return None
 
 
+def reservar_bancas_para_sinal(ativo, direcao, score, timeframe, expiracao):
+    """Reserva as três bancas atomicamente para o mesmo sinal."""
+    ativo = str(ativo).strip().upper()
+    with estado_lock:
+        if envios_indeterminados:
+            log.warning("SINAL SEM RESERVA | ativo=%s | motivo=conciliacao_de_ordem_pendente", ativo)
+            return []
+        if ativo in ativos_em_uso:
+            log.warning("SINAL SEM RESERVA | ativo=%s | motivo=ativo_em_uso", ativo)
+            return []
+        candidatas = [
+            banca for banca in BANCAS
+            if int(timeframe) in TIMEFRAME_POR_BANCA.get(banca, ())
+            and not estado_frentes[banca]["ocupada"]
+            and not estado_frentes[banca].get("pre_stop_loss_ativo", False)
+        ]
+        if len(candidatas) < QTD_BANCAS:
+            log.warning("SINAL SEM RESERVA | ativo=%s | motivo=grupo_incompleto | livres=%s", ativo, len(candidatas))
+            return []
+        escolhidas = candidatas[:QTD_BANCAS]
+        for banca in escolhidas:
+            estado_frentes[banca].update({
+                "ocupada": True, "ativo": ativo, "direcao": direcao,
+                "score": score, "timeframe": timeframe, "expiracao": expiracao,
+            })
+        ativos_em_uso.add(ativo)
+        return escolhidas
+
+
 def disparar_sinal(ativo, direcao, score, timeframe, expiracao):
     ativo = str(ativo).strip().upper()
     direcao = str(direcao).strip().lower()
     log.info("SINAL APROVADO | ativo=%s | direcao=%s | M%s | expiracao=%s | score=%s", ativo, direcao, timeframe, expiracao, score)
-    banca = reservar_banca(ativo, direcao, score, timeframe, expiracao)
-    if banca is None:
-        log.warning("SINAL SEM BANCA LIVRE | ativo=%s | M%s", ativo, timeframe)
+    bancas = reservar_bancas_para_sinal(ativo, direcao, score, timeframe, expiracao)
+    if len(bancas) != QTD_BANCAS:
+        log.warning("SINAL SEM GRUPO COMPLETO | ativo=%s | M%s", ativo, timeframe)
         return False
-    log.info("SINAL DISTRIBUÍDO | banca=%s | ativo=%s | direção=%s | M%s | expiração=%s",
-             banca, ativo, direcao.upper(), timeframe, expiracao)
-    try:
-        threading.Thread(target=ciclo, args=(banca, ativo, direcao, score, timeframe, expiracao),
-                         daemon=True, name=f"operacao-{banca}-M{timeframe}-{ativo}").start()
-        return True
-    except Exception as erro:
-        liberar_banca(banca, ativo)
-        log.error("SINAL NAO INICIADO | banca=%s | ativo=%s | motivo=falha_thread | tipo=%s", banca, ativo, type(erro).__name__)
-        return False
+    iniciadas = []
+    for banca in bancas:
+        log.info("SINAL DISTRIBUÍDO | grupo=%s | banca=%s | ativo=%s | direção=%s | M%s | expiração=%s",
+                 QTD_BANCAS, banca, ativo, direcao.upper(), timeframe, expiracao)
+        try:
+            thread = threading.Thread(
+                target=ciclo,
+                args=(banca, ativo, direcao, score, timeframe, expiracao),
+                daemon=True,
+                name=f"operacao-{banca}-M{timeframe}-{ativo}",
+            )
+            thread.start()
+            iniciadas.append(banca)
+        except Exception as erro:
+            liberar_banca(banca, ativo)
+            log.error("SINAL NAO INICIADO | banca=%s | ativo=%s | motivo=falha_thread | tipo=%s", banca, ativo, type(erro).__name__)
+    for banca in bancas:
+        if banca not in iniciadas:
+            with estado_lock:
+                if estado_frentes[banca]["ocupada"] and banca not in operacoes_ativas:
+                    liberar_banca(banca, ativo)
+    return len(iniciadas) == QTD_BANCAS
 
 # ============================================================
 # SCANNER DE TIMEFRAME
@@ -3451,11 +3502,11 @@ log.info(
 )
 
 log.info(
-    "GERENCIAMENTO | 4 bancas independentes | cada uma: 0 gale inicial; loss +1; win -1 (mínimo 0) | "
-    "MULTIPLICADOR X%.0f; entrada-base USD 0.35; referência BRL 2.00; recuperação de %.0f%% após cada loss, mesmo com saldo positivo; "
-    "pré stop-loss BRL %.2f | stop-win BRL %.2f: reinicia o ciclo | reset após 100 operações | TIMEFRAMES: %s",
-    MULTIPLICADOR_GALE,
-    RECUPERACAO_PERCENTUAL * 100,
+    "GERENCIAMENTO | 3 bancas no mesmo sinal | meta conjunta BRL %.2f por ciclo | "
+    "2 gales iniciais; LOSS +1, WIN -1; máximo %s gales | stake recalculada pelo payout para cobrir perdas e buscar 1/3 da meta por banca | "
+    "pré stop-loss BRL %.2f | stop-win BRL %.2f | TIMEFRAMES: %s",
+    META_LUCRO_OPERACAO_BRL,
+    MAX_GALES,
     PRE_STOP_LOSS_BRL,
     STOP_WIN_BRL,
     " · ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))

@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-3BANK-SAME-SIGNAL-META10-5GALES-RECOVERY-PRESTOP300-M1"
+VERSAO = "BASKARAIDO-DERIV-DEMO-USD035-3BANK-DISTINCT-SIGNALS-META10-5GALES-RECOVERY-PRESTOP300-M1"
 
 app = Flask(__name__)
 
@@ -2766,65 +2766,39 @@ def reservar_banca(ativo, direcao, score, timeframe, expiracao):
     return None
 
 
-def reservar_bancas_para_sinal(ativo, direcao, score, timeframe, expiracao):
-    """Reserva as três bancas atomicamente para o mesmo sinal."""
-    ativo = str(ativo).strip().upper()
-    with estado_lock:
-        if envios_indeterminados:
-            log.warning("SINAL SEM RESERVA | ativo=%s | motivo=conciliacao_de_ordem_pendente", ativo)
-            return []
-        if ativo in ativos_em_uso:
-            log.warning("SINAL SEM RESERVA | ativo=%s | motivo=ativo_em_uso", ativo)
-            return []
-        candidatas = [
-            banca for banca in BANCAS
-            if int(timeframe) in TIMEFRAME_POR_BANCA.get(banca, ())
-            and not estado_frentes[banca]["ocupada"]
-            and not estado_frentes[banca].get("pre_stop_loss_ativo", False)
-        ]
-        if len(candidatas) < QTD_BANCAS:
-            log.warning("SINAL SEM RESERVA | ativo=%s | motivo=grupo_incompleto | livres=%s", ativo, len(candidatas))
-            return []
-        escolhidas = candidatas[:QTD_BANCAS]
-        for banca in escolhidas:
-            estado_frentes[banca].update({
-                "ocupada": True, "ativo": ativo, "direcao": direcao,
-                "score": score, "timeframe": timeframe, "expiracao": expiracao,
-            })
-        ativos_em_uso.add(ativo)
-        return escolhidas
-
-
 def disparar_sinal(ativo, direcao, score, timeframe, expiracao):
+    """Atribui cada sinal aprovado a uma única banca livre."""
     ativo = str(ativo).strip().upper()
     direcao = str(direcao).strip().lower()
-    log.info("SINAL APROVADO | ativo=%s | direcao=%s | M%s | expiracao=%s | score=%s", ativo, direcao, timeframe, expiracao, score)
-    bancas = reservar_bancas_para_sinal(ativo, direcao, score, timeframe, expiracao)
-    if len(bancas) != QTD_BANCAS:
-        log.warning("SINAL SEM GRUPO COMPLETO | ativo=%s | M%s", ativo, timeframe)
+    log.info(
+        "SINAL APROVADO | ativo=%s | direcao=%s | M%s | expiracao=%s | score=%s",
+        ativo, direcao, timeframe, expiracao, score
+    )
+
+    banca = reservar_banca(ativo, direcao, score, timeframe, expiracao)
+    if banca is None:
         return False
-    iniciadas = []
-    for banca in bancas:
-        log.info("SINAL DISTRIBUÍDO | grupo=%s | banca=%s | ativo=%s | direção=%s | M%s | expiração=%s",
-                 QTD_BANCAS, banca, ativo, direcao.upper(), timeframe, expiracao)
-        try:
-            thread = threading.Thread(
-                target=ciclo,
-                args=(banca, ativo, direcao, score, timeframe, expiracao),
-                daemon=True,
-                name=f"operacao-{banca}-M{timeframe}-{ativo}",
-            )
-            thread.start()
-            iniciadas.append(banca)
-        except Exception as erro:
-            liberar_banca(banca, ativo)
-            log.error("SINAL NAO INICIADO | banca=%s | ativo=%s | motivo=falha_thread | tipo=%s", banca, ativo, type(erro).__name__)
-    for banca in bancas:
-        if banca not in iniciadas:
-            with estado_lock:
-                if estado_frentes[banca]["ocupada"] and banca not in operacoes_ativas:
-                    liberar_banca(banca, ativo)
-    return len(iniciadas) == QTD_BANCAS
+
+    log.info(
+        "SINAL ATRIBUÍDO | banca=%s | ativo=%s | direção=%s | M%s | expiração=%s | score=%s | distribuição=um_sinal_por_banca",
+        banca, ativo, direcao.upper(), timeframe, expiracao, score
+    )
+    try:
+        thread = threading.Thread(
+            target=ciclo,
+            args=(banca, ativo, direcao, score, timeframe, expiracao),
+            daemon=True,
+            name=f"operacao-{banca}-M{timeframe}-{ativo}",
+        )
+        thread.start()
+        return True
+    except Exception as erro:
+        liberar_banca(banca, ativo)
+        log.error(
+            "SINAL NAO INICIADO | banca=%s | ativo=%s | motivo=falha_thread | tipo=%s",
+            banca, ativo, type(erro).__name__
+        )
+        return False
 
 # ============================================================
 # SCANNER DE TIMEFRAME
@@ -3523,7 +3497,7 @@ log.info(
 )
 
 log.info(
-    "GERENCIAMENTO | 3 bancas no mesmo sinal | meta conjunta BRL %.2f por ciclo | "
+    "GERENCIAMENTO | 3 bancas com sinais diferentes (ativos únicos) | meta conjunta BRL %.2f por ciclo | "
     "5 gales em cada operação | stake recalculada pelo payout após cada loss para buscar 1/3 da meta por banca | "
     "pré stop-loss BRL %.2f | stop-win BRL %.2f | TIMEFRAMES: %s",
     META_LUCRO_OPERACAO_BRL,

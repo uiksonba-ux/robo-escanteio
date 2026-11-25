@@ -237,9 +237,15 @@ def converter_brl_para_conta(valor_brl, cliente=None):
         try:
             taxa_cambio = Decimal(str(taxa_cambio))
         except Exception:
-            raise ValueError("taxa de conversão BRL indisponível")
+            taxa_cambio = (
+                Decimal(str(ENTRADA_BASE_USD))
+                / Decimal(str(ENTRADA_BASE_BRL))
+            )
     if not taxa_cambio.is_finite() or taxa_cambio <= 0:
-        raise ValueError("taxa de conversão BRL inválida")
+        taxa_cambio = (
+            Decimal(str(ENTRADA_BASE_USD))
+            / Decimal(str(ENTRADA_BASE_BRL))
+        )
     convertido = Decimal(str(valor_brl)) * taxa_cambio
     return float(convertido.quantize(Decimal("0.01"), rounding=ROUND_UP))
 

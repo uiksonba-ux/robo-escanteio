@@ -472,18 +472,25 @@ class DerivOptionsClient:
             raise DerivAPIError("ValidationError")
         return proposal_id, float(ask_price), float(payout)
 
-    def get_digital_payout(self, symbol, duration, direction=None):
+    def get_digital_payout(self, symbol, duration, direction=None, amount=None):
         contract_types = ("CALL", "PUT")
         if direction is not None:
             mapped = {"call": "CALL", "put": "PUT"}.get(str(direction).lower())
             if mapped is None:
                 raise DerivAPIError("ValidationError")
             contract_types = (mapped,)
+        stake = self.base_stake if amount is None else amount
+        try:
+            stake = float(stake)
+        except (TypeError, ValueError, OverflowError):
+            raise DerivAPIError("ValidationError")
+        if not math.isfinite(stake) or stake <= 0:
+            raise DerivAPIError("ValidationError")
         ratios = []
         for contract_type in contract_types:
             try:
                 _, ask_price, payout = self._proposal(
-                    symbol, contract_type, self.base_stake, duration
+                    symbol, contract_type, stake, duration
                 )
             except Exception as erro:
                 codigo = getattr(erro, "upstream_code", None)

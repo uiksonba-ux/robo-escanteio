@@ -21,10 +21,30 @@ _ALLOWED_CANDLE_GRANULARITIES = frozenset({
 _TIMEOUT = 8
 
 
+def _classificar_motivo_deriv(message):
+    """Returns a safe diagnostic category without logging upstream text."""
+    if not isinstance(message, str):
+        return "sem_detalhe"
+    texto = message.lower()
+    if any(chave in texto for chave in ("minimum", "min_stake", "minimum_stake", "stake too small")):
+        return "stake_minimo"
+    if any(chave in texto for chave in ("currency", "payout currency")):
+        return "moeda"
+    if any(chave in texto for chave in ("duration", "expiry", "expiration")):
+        return "duracao"
+    if any(chave in texto for chave in ("symbol", "underlying", "market")):
+        return "ativo_ou_mercado"
+    if any(chave in texto for chave in ("amount", "stake", "price")):
+        return "valor_ou_preco"
+    if any(chave in texto for chave in ("contract", "proposal")):
+        return "contrato"
+    return "nao_classificado"
+
+
 class DerivAPIError(RuntimeError):
     """Sanitized API error; never contains credentials or upstream message text."""
 
-    def __init__(self, code="DerivAPIError"):
+    def __init__(self, code="DerivAPIError", diagnostic_hint="sem_detalhe"):
         safe_codes = {
             "InvalidToken", "RateLimit", "InputValidationFailed", "ContractNotFound",
             "InsufficientBalance", "ValidationError", "NotFound", "Unauthorized",
@@ -35,6 +55,11 @@ class DerivAPIError(RuntimeError):
             code if isinstance(code, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", code)
             else "UnknownErrorCode"
         )
+        allowed_hints = {
+            "sem_detalhe", "stake_minimo", "moeda", "duracao",
+            "ativo_ou_mercado", "valor_ou_preco", "contrato", "nao_classificado",
+        }
+        self.diagnostic_hint = diagnostic_hint if diagnostic_hint in allowed_hints else "nao_classificado"
         super().__init__(self.code)
 
 
@@ -244,7 +269,11 @@ class DerivOptionsClient:
                     error = response.get("error")
                     if isinstance(error, dict):
                         code = error.get("code")
-                        raise DerivAPIError(code if isinstance(code, str) else "DerivAPIError")
+                        hint = _classificar_motivo_deriv(error.get("message"))
+                        raise DerivAPIError(
+                            code if isinstance(code, str) else "DerivAPIError",
+                            diagnostic_hint=hint,
+                        )
                     if response.get("msg_type") is None:
                         raise DerivAPIError("ValidationError")
                     return response
@@ -461,8 +490,9 @@ class DerivOptionsClient:
                 if not isinstance(codigo, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", codigo):
                     codigo = type(erro).__name__
                 logging.getLogger("baskaraido-deriv").warning(
-                    "PROPOSAL DIGITAL FALHOU | ativo=%s | tipo=%s | duracao=%s | erro=%s",
+                    "PROPOSAL DIGITAL FALHOU | ativo=%s | tipo=%s | duracao=%s | erro=%s | categoria=%s",
                     symbol, contract_type, duration, codigo,
+                    getattr(erro, "diagnostic_hint", "sem_detalhe"),
                 )
                 return None
             ratio = (payout - ask_price) / ask_price

@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "ROBO-ESCANTEIO-DEMO-3BANCAS-SINAIS-DISTINTOS-USD035-RECUPERACAO100-GALES2A5-RESET100-PRESTOP300-X2-M1"
+VERSAO = "ROBO-ESCANTEIO-DEMO-3BANCAS-SINAIS-DISTINTOS-USD100-RECUPERACAO100-GALES2A5-RESET100-PRESTOP300-X2-M1"
 
 app = Flask(__name__)
 
@@ -175,7 +175,7 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_MINIMA = 0.35
+ENTRADA_MINIMA = 1.00
 
 MULTIPLICADOR_GALE = 2.0
 MULTIPLICADORES_POR_GALES = {nivel: 2.0 for nivel in range(6)}
@@ -198,7 +198,7 @@ QTD_BANCAS = 3
 
 # Entrada fixa em USD; BRL 2,00 é apenas referência para obter a taxa BRL/USD.
 ENTRADA_BASE_BRL = 2.00
-ENTRADA_BASE_USD = 0.35
+ENTRADA_BASE_USD = 1.00
 META_LUCRO_BRL = 0.00
 META_LUCRO_OPERACAO_BRL = 0.00
 STOP_WIN_BRL = 50.00
@@ -1359,20 +1359,26 @@ _clientes_por_ordem = {}
 _envios_digitais_lock = threading.Lock()
 
 
-def obter_payout_digital(ativo, expiracao, direcao):
+def obter_payout_digital(ativo, expiracao, direcao, valor=None):
     cliente = api
     if cliente is None:
         return None
     direcao = str(direcao).strip().lower()
     if direcao not in ("call", "put"):
         return None
-    chave = (id(cliente), ativo, expiracao, direcao)
+    try:
+        valor_consulta = round(float(ENTRADA_BASE_USD if valor is None else valor), 2)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(valor_consulta) or valor_consulta < ENTRADA_MINIMA:
+        return None
+    chave = (id(cliente), ativo, expiracao, direcao, valor_consulta)
     registro = _payout_cache.get(chave)
     if registro and time.monotonic() < registro["ate"]:
         return registro["payout"]
     estado, payout = chamada_api_limitada(
-        "payout:" + ativo + ":" + str(expiracao) + ":" + direcao,
-        lambda: cliente.get_digital_payout(ativo, expiracao, direcao),
+        "payout:" + ativo + ":" + str(expiracao) + ":" + direcao + ":" + str(valor_consulta),
+        lambda: cliente.get_digital_payout(ativo, expiracao, direcao, amount=valor_consulta),
         PRAZO_CONSULTA_API, cliente
     )
     if estado != "ok" or isinstance(payout, bool):
@@ -1683,7 +1689,7 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao, profit_target=None):
     if disponibilidade is not True:
         return recusar("disponibilidade_digital_nao_confirmada")
     try:
-        payout = obter_payout_digital(ativo, expiracao, direcao)
+        payout = obter_payout_digital(ativo, expiracao, direcao, valor)
     except Exception as erro:
         log.warning("PAYOUT DIGITAL INDISPONIVEL | tipo=%s", type(erro).__name__)
         return recusar("payout_digital_nao_confirmado")
@@ -2277,7 +2283,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                     resultado_banca = float(estado_frentes[banca]["resultado_liquido"])
                 if resultado_banca < 0:
                     prejuizo_aplicado = -resultado_banca
-                    payout = obter_payout_digital(ativo, expiracao, direcao)
+                    payout = obter_payout_digital(ativo, expiracao, direcao, ENTRADA_MINIMA)
                     if payout is None:
                         log.warning("RECUPERACAO BLOQUEADA | banca=%s | motivo=payout_indisponivel", banca)
                         return False, "payout_indisponivel", operacoes_ativas.get(banca)

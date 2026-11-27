@@ -622,7 +622,7 @@ def conectar():
             f"🏦 {QTD_BANCAS} bancas ativas | gestão individual\n"
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            "🛡 Recupera 100% dos losses líquidos; wins abatem o pendente; pré-stop desativado\n"
+            f"🛡 Pré-stop loss: R$ {PRE_STOP_LOSS_BRL:.2f}\n"
             f"📈 Gales: começa em 10, win -1, loss +1 (mín. 0, sem teto fixo); multiplicador X{MULTIPLICADOR_GALE:g}\n"
             "🔄 Gestão reinicia os gales a cada 100 sinais fechados globalmente\n"
             f"🏁 Stop-win mantido: R$ {STOP_WIN_BRL:.2f} por ciclo\n"
@@ -2655,8 +2655,8 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             f"📈 Análise M{timeframe_analise} / Digital M{expiracao}\n"
             f"🔥 Score: {score}/100\n"
             f"💵 Entrada-base: {getattr(api, 'currency', 'USD')} {contexto['entrada']:.2f}\n"
-            f"♻️ Recuperação de 100% apenas enquanto o resultado líquido da banca estiver negativo\n"
-            "🛡 Pré-stop desativado\n"
+            f"♻️ Recuperação de 100% após loss líquido; wins reduzem o pendente\n"
+            f"🛡 Pré-stop loss: R$ {PRE_STOP_LOSS_BRL:.2f}\n"
             f"🔢 Gales disponíveis: {gales} | win -1, loss +1 | mínimo {GALES_MINIMOS}, sem teto fixo | x{MULTIPLICADOR_GALE:g}\n"
             "⏳ Sem venda antecipada: aguardar o vencimento para o payout do contrato.\n"
             "🧪 Deriv DEMO"
@@ -3475,8 +3475,8 @@ log.info("ENTRADA BASE = USD %.2f | mínimo USD %.2f", ENTRADA_BASE_USD, ENTRADA
 log.info(
     "GERENCIAMENTO | 1 banca | entrada USD %.2f | recuperação 100%% após loss líquido | "
     "gales iniciais=%s, mínimo=%s, perda +1, win -1, sem teto fixo, multiplicador=x%.1f | "
-    "reset global a cada 100 sinais | pré-stop desativado | stop-win BRL %.2f | TIMEFRAMES: %s",
-    ENTRADA_BASE_USD, GALES_INICIAIS, GALES_MINIMOS, MULTIPLICADOR_GALE, STOP_WIN_BRL,
+    "reset global a cada 100 sinais | pré-stop BRL %.2f | stop-win BRL %.2f | TIMEFRAMES: %s",
+    ENTRADA_BASE_USD, GALES_INICIAIS, GALES_MINIMOS, MULTIPLICADOR_GALE, PRE_STOP_LOSS_BRL, STOP_WIN_BRL,
     " · ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))
 )
 

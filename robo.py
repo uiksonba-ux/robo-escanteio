@@ -243,7 +243,7 @@ def converter_brl_para_conta(valor_brl, cliente=None):
 def obter_entrada_base(saldo=None):
     """Converte a referência de US$ 1 para BRL e respeita o mínimo da IQ Option."""
     del saldo
-    cliente = globals().get("api") or globals().get("_cliente_conectando")
+    cliente = api or _cliente_conectando
     try:
         taxa_usd_brl = Decimal(str(getattr(cliente, "usd_to_brl", None)))
     except Exception:
@@ -256,6 +256,183 @@ def obter_entrada_base(saldo=None):
         ).quantize(Decimal("0.01"), rounding=ROUND_UP)
     minimo = Decimal(str(ENTRADA_MINIMA))
     return float(max(minimo, convertido))
+
+# ============================================================
+# TIMEFRAMES
+# ============================================================
+
+# M4 and M6-M9 are aggregated from complete M1 candles because IQ Option
+# does not offer those candle granularities directly.
+_TIMEFRAMES_NATIVOS = {1}
+TIMEFRAMES = {
+    timeframe: {
+        "segundos": timeframe * 60,
+        "expiracao": timeframe,
+        "granularidade_candles": (
+            timeframe * 60 if timeframe in _TIMEFRAMES_NATIVOS else 60
+        ),
+        "quantidade_candles": (
+            100 if timeframe in _TIMEFRAMES_NATIVOS else timeframe * 61
+        ),
+        "agrupar_minutos": (
+            1 if timeframe in _TIMEFRAMES_NATIVOS else timeframe
+        ),
+    }
+    for timeframe in (1,)
+}
+
+
+# ============================================================
+# BANCAS
+# ============================================================
+
+BANCAS = [
+    f"BANCA {i}"
+    for i in range(
+        1,
+        QTD_BANCAS + 1
+    )
+]
+
+TIMEFRAME_POR_BANCA = {
+    banca: tuple(sorted(TIMEFRAMES))
+    for banca in BANCAS
+}
+
+
+
+# ============================================================
+# ATIVOS
+# ============================================================
+
+# Catálogo dinâmico dos ativos disponíveis pela API IQ Option Options.\nATIVOS = []
+
+
+# ============================================================
+# ESTADO GLOBAL
+# ============================================================
+
+api = None
+
+api_lock = threading.RLock()
+connect_lock = threading.Lock()
+estado_lock = threading.RLock()
+
+ativos_em_uso = set()
+proxima_banca_indice = 0
+bloqueados = {}
+ativos_validos = set()
+contador_sinais = 0
+reservas_pendentes = {}  # Reservas ainda não enviadas à corretora
+vitorias_progressao = 0
+perdas_progressao = 0
+entradas_globais_aceitas = 0
+entradas_normais_desde_reset = 0
+sinais_fechados_janela_global = 0
+wins_base_janela_global = 0
+losses_base_janela_global = 0
+contador_entrada_lock = threading.Lock()
+resultado_global_centavos = 0
+ultimo_saldo_demo = None
+saldo_inicial_demo = None
+recuperacoes_em_curso = set()
+operacoes_ativas = {}
+ordens_pendentes = {}
+ordens_liquidadas = set()
+operacoes_concluidas = set()
+historico_operacoes = []  # últimos 100 sinais encerrados; volátil junto ao processo PRACTICE
+envios_indeterminados = {}
+
+
+# ============================================================
+# ESTATÍSTICAS
+# ============================================================
+
+stats = {
+
+    "wins": 0,
+    "losses": 0,
+
+    "win_direto": 0,
+    "win_g1": 0,
+    "win_g2": 0,
+    "win_g3": 0,
+    "win_g4": 0,
+    "win_g5": 0,
+    "win_g6": 0,
+
+    "ordens_aceitas": 0,
+    "ordens_recusadas": 0,
+}
+
+
+# ============================================================
+# ESTADO DAS BANCAS
+# ============================================================
+
+estado_frentes = {
+
+    banca: {
+
+        "ocupada": False,
+
+        "ativo": None,
+        "direcao": None,
+        "score": None,
+
+        "timeframe": None,
+        "expiracao": None,
+
+        "order_id": None,
+
+        "wins": 0,
+        "losses": 0,
+        "wins_base_janela": 0,
+        "losses_base_janela": 0,
+        "sinais_fechados_janela": 0,
+
+        "win_direto": 0,
+        "win_g1": 0,
+        "win_g2": 0,
+        "win_g3": 0,
+        "win_g4": 0,
+        "win_g5": 0,
+        "win_g6": 0,
+
+        "ordens_aceitas": 0,
+        "ordens_recusadas": 0,
+
+        "ultimo_sinal": None,
+
+        "ciclo_gestao": 0,
+
+        "entrada_atual": ENTRADA_MINIMA,
+        "gale_atual": GALES_INICIAIS,
+        "gale_progression_level": GALES_INICIAIS,
+        "gales_reativos": GALES_INICIAIS,
+
+        "prejuizo_acumulado": 0.0,
+        "pre_stop_loss_count": 0,
+        "pre_stop_loss_ativo": False,
+        "pre_stop_loss_ultima_perda": 0.0,
+        "recuperacao_pendente": 0.0,
+        "entradas_recuperacao_restantes": 0,
+        "recuperacao_estendida": False,
+
+        "em_recuperacao": False,
+        "ciclo_em_execucao": False,
+        "resultado_liquido": 0.0,
+        "envio_indeterminado": False,
+    }
+
+    for banca in BANCAS
+}
+
+
+
+# ============================================================
+# TELEGRAM
+# ============================================================
 
 def telegram(texto):
 

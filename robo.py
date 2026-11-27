@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "ROBO-ESCANTEIO-DEMO-1BANCA-USD100-GALES10-RESET100-PRESTOP300-X2-M1"
+VERSAO = "ROBO-ESCANTEIO-DEMO-1BANCA-USD100-GALES10-RESET100-PRESTOPOFF-X2-M1"
 
 app = Flask(__name__)
 
@@ -187,7 +187,7 @@ GALES_POR_CICLO = GALES_INICIAIS
 MAX_GALES = None
 
 RECUPERACAO_PERCENTUAL = 1.0
-PRE_STOP_LOSS_BRL = 300.0
+PRE_STOP_LOSS_BRL = 0.0
 
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
@@ -622,7 +622,7 @@ def conectar():
             f"🏦 {QTD_BANCAS} bancas ativas | gestão individual\n"
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            f"🛡 Recuperação de 100% quando a banca fica negativa; pré-stop R$ {PRE_STOP_LOSS_BRL:.2f}\n"
+            "🛡 Recuperação de 100% quando a banca fica negativa; pré-stop desativado\n"
             f"📈 Gales: começa em 10, win -1, loss +1 (mín. 0, sem teto fixo); multiplicador X{MULTIPLICADOR_GALE:g}\n"
             "🔄 Gestão reinicia os gales a cada 100 sinais fechados globalmente\n"
             f"🏁 Stop-win mantido: R$ {STOP_WIN_BRL:.2f} por ciclo\n"
@@ -2082,7 +2082,7 @@ def obter_stop_win_conta():
 
 
 def pre_stop_loss_atingido(perda_confirmada, proxima_entrada=0.0):
-    """Bloqueia a próxima entrada se a perda atingir ou exceder o limite configurado."""
+    """Pré-stop desativado quando o limite está zerado."""
     if PRE_STOP_LOSS_BRL <= 0:
         return False
     perda_centavos = max(0, em_centavos(perda_confirmada))
@@ -2647,7 +2647,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             f"🔥 Score: {score}/100\n"
             f"💵 Entrada-base: {getattr(api, 'currency', 'USD')} {contexto['entrada']:.2f}\n"
             f"♻️ Recuperação de 100% apenas enquanto o resultado líquido da banca estiver negativo\n"
-            f"🛡 Pré-stop: R$ {PRE_STOP_LOSS_BRL:.2f}\n"
+            "🛡 Pré-stop desativado\n"
             f"🔢 Gales disponíveis: {gales} | win -1, loss +1 | mínimo {GALES_MINIMOS}, sem teto fixo | x{MULTIPLICADOR_GALE:g}\n"
             "⏳ Sem venda antecipada: aguardar o vencimento para o payout do contrato.\n"
             "🧪 Deriv DEMO"
@@ -3466,8 +3466,8 @@ log.info("ENTRADA BASE = USD %.2f | mínimo USD %.2f", ENTRADA_BASE_USD, ENTRADA
 log.info(
     "GERENCIAMENTO | 1 banca | entrada USD %.2f | recuperação 100%% se saldo negativo | "
     "gales iniciais=%s, mínimo=%s, perda +1, win -1, sem teto fixo, multiplicador=x%.1f | "
-    "reset global a cada 100 sinais | pré-stop BRL %.2f | stop-win BRL %.2f | TIMEFRAMES: %s",
-    ENTRADA_BASE_USD, GALES_INICIAIS, GALES_MINIMOS, MULTIPLICADOR_GALE, PRE_STOP_LOSS_BRL, STOP_WIN_BRL,
+    "reset global a cada 100 sinais | pré-stop desativado | stop-win BRL %.2f | TIMEFRAMES: %s",
+    ENTRADA_BASE_USD, GALES_INICIAIS, GALES_MINIMOS, MULTIPLICADOR_GALE, STOP_WIN_BRL,
     " · ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))
 )
 

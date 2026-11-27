@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "ROBO-ESCANTEIO-DEMO-1BANCA-USD100-GALES10-RESET100-PRESTOPOFF-REC100LOSS-X2-M1"
+VERSAO = "ROBO-ESCANTEIO-DEMO-1BANCA-USD100-GALES10-RESET100-PRESTOP500-REC100LOSS-X2-M1"
 
 app = Flask(__name__)
 
@@ -187,7 +187,7 @@ GALES_POR_CICLO = GALES_INICIAIS
 MAX_GALES = None
 
 RECUPERACAO_PERCENTUAL = 1.0
-PRE_STOP_LOSS_BRL = 0.0
+PRE_STOP_LOSS_BRL = 500.0
 
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300

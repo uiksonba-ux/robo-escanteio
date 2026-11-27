@@ -282,7 +282,10 @@ class IQOptionClient:
             rows = self.api.get_candles(symbol, int(granularity), int(count), int(end))
         return rows if isinstance(rows, list) else []
 
-    def get_digital_payout(self, symbol, duration):
+    def get_digital_payout(self, symbol, duration, direction=None, amount=None):
+        # Mantém compatibilidade com a interface do motor herdado; o payout
+        # digital da IQ Option é independente de direção e valor da entrada.
+        del direction, amount
         duration = int(duration)
         symbol = str(symbol or "").upper()
         if duration not in (1, 5, 15) or not self.is_symbol_tradeable(symbol):

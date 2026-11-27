@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "ROBO-ESCANTEIO-DEMO-3BANCAS-SINAIS-DISTINTOS-USD100-RECUPERACAO100-GALES2A5-RESET100-PRESTOP300-X2-M1"
+VERSAO = "ROBO-ESCANTEIO-DEMO-1BANCA-USD100-GALES10-RESET100-PRESTOP300-X2-M1"
 
 app = Flask(__name__)
 
@@ -180,11 +180,11 @@ ENTRADA_MINIMA = 1.00
 MULTIPLICADOR_GALE = 2.0
 MULTIPLICADORES_POR_GALES = {nivel: 2.0 for nivel in range(6)}
 
-# Progressão por banca: começa em 2 gales, mínimo 2 e teto de 5.
-GALES_INICIAIS = 2
-GALES_MINIMOS = 2
+# Progressão: começa em 10; win -1, loss +1, sem teto fixo; pré-stop limita a exposição.
+GALES_INICIAIS = 10
+GALES_MINIMOS = 0
 GALES_POR_CICLO = GALES_INICIAIS
-MAX_GALES = 5
+MAX_GALES = None
 
 RECUPERACAO_PERCENTUAL = 1.0
 PRE_STOP_LOSS_BRL = 300.0
@@ -192,7 +192,7 @@ PRE_STOP_LOSS_BRL = 300.0
 # Expired portfolio rows are ignored after a settlement grace period.
 PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
 
-QTD_BANCAS = 3
+QTD_BANCAS = 1
 
 # Estatística por banca em janelas de 100 sinais; gales reiniciam globalmente a cada 100 sinais fechados.
 
@@ -623,7 +623,7 @@ def conectar():
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
             f"🛡 Recuperação de 100% quando a banca fica negativa; pré-stop R$ {PRE_STOP_LOSS_BRL:.2f}\n"
-            f"📈 Gales: começa em 2, win -1, loss +1 (mín. 2 / máx. {MAX_GALES}); multiplicador X{MULTIPLICADOR_GALE:g}\n"
+            f"📈 Gales: começa em 10, win -1, loss +1 (mín. 0, sem teto fixo); multiplicador X{MULTIPLICADOR_GALE:g}\n"
             "🔄 Gestão reinicia os gales a cada 100 sinais fechados globalmente\n"
             f"🏁 Stop-win mantido: R$ {STOP_WIN_BRL:.2f} por ciclo\n"
             "🔄 Assertividade: janela informativa reiniciada a cada 100 operações da banca\n"
@@ -1959,7 +1959,7 @@ def atualizar_progressao_gale(banca, nivel, resultado):
         if resultado == "win":
             proximo = max(GALES_MINIMOS, atual - 1)
         elif resultado == "loss":
-            proximo = min(MAX_GALES, atual + 1)
+            proximo = atual + 1
         else:
             proximo = atual
         dados = estado_frentes[banca]
@@ -2648,7 +2648,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             f"💵 Entrada-base: {getattr(api, 'currency', 'USD')} {contexto['entrada']:.2f}\n"
             f"♻️ Recuperação de 100% apenas enquanto o resultado líquido da banca estiver negativo\n"
             f"🛡 Pré-stop: R$ {PRE_STOP_LOSS_BRL:.2f}\n"
-            f"🔢 Gales disponíveis: {gales} | win -1, loss +1 | mínimo {GALES_MINIMOS}, máximo {MAX_GALES} | x{MULTIPLICADOR_GALE:g}\n"
+            f"🔢 Gales disponíveis: {gales} | win -1, loss +1 | mínimo {GALES_MINIMOS}, sem teto fixo | x{MULTIPLICADOR_GALE:g}\n"
             "⏳ Sem venda antecipada: aguardar o vencimento para o payout do contrato.\n"
             "🧪 Deriv DEMO"
         )
@@ -2692,7 +2692,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                 f"🏦 {banca} | {ativo}\n"
                 f"⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                 f"💵 Resultado líquido da operação: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                f"🔢 Gales por banca: win -1, loss +1 (mín. {GALES_MINIMOS}, máx. {MAX_GALES}); reset global a cada 100 sinais\n"
+                f"🔢 Gales por banca: win -1, loss +1 (mín. {GALES_MINIMOS}, sem teto fixo); reset global a cada 100 sinais\n"
                 f"📊 Total: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                 f"💰 Saldo Deriv DEMO: {texto_saldo()} {getattr(api, 'currency', '')}"
             )
@@ -3464,10 +3464,10 @@ log.info(
 log.info("ENTRADA BASE = USD %.2f | mínimo USD %.2f", ENTRADA_BASE_USD, ENTRADA_MINIMA)
 
 log.info(
-    "GERENCIAMENTO | 3 bancas com sinais diferentes | entrada USD %.2f | recuperação 100%% se saldo negativo | "
-    "gales iniciais/mínimos=%s, perda +1, win -1, teto=%s, multiplicador=x%.1f | "
+    "GERENCIAMENTO | 1 banca | entrada USD %.2f | recuperação 100%% se saldo negativo | "
+    "gales iniciais=%s, mínimo=%s, perda +1, win -1, sem teto fixo, multiplicador=x%.1f | "
     "reset global a cada 100 sinais | pré-stop BRL %.2f | stop-win BRL %.2f | TIMEFRAMES: %s",
-    ENTRADA_BASE_USD, GALES_INICIAIS, MAX_GALES, MULTIPLICADOR_GALE, PRE_STOP_LOSS_BRL, STOP_WIN_BRL,
+    ENTRADA_BASE_USD, GALES_INICIAIS, GALES_MINIMOS, MULTIPLICADOR_GALE, PRE_STOP_LOSS_BRL, STOP_WIN_BRL,
     " · ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))
 )
 

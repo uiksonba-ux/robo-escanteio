@@ -243,7 +243,7 @@ def converter_brl_para_conta(valor_brl, cliente=None):
 def obter_entrada_base(saldo=None):
     """Converte a referência de US$ 1 para BRL e respeita o mínimo da IQ Option."""
     del saldo
-    cliente = api or _cliente_conectando
+    cliente = globals().get("api") or globals().get("_cliente_conectando")
     try:
         taxa_usd_brl = Decimal(str(getattr(cliente, "usd_to_brl", None)))
     except Exception:

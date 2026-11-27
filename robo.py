@@ -11,14 +11,14 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, request
-from deriv_client import DerivOptionsClient
+from iq_option_client import IQOptionClient
 
 
 # ============================================================
 # VERSÃO
 # ============================================================
 
-VERSAO = "ROBO-ESCANTEIO-DEMO-1BANCA-USD100-GALES10-RESET100-PRESTOP500-REC100LOSS-X2-M1"
+VERSAO = "BASKARAIDO-IQ-PRACTICE-1BANCA-USD1-GALES10-RESET100-PRESTOP500-REC100LOSS-X2-M1"
 
 app = Flask(__name__)
 
@@ -27,9 +27,9 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
-log = logging.getLogger("baskaraido-deriv")
+log = logging.getLogger("baskaraido-iq")
 
-# O worker DEMO precisa compartilhar o mesmo processo que atende o painel.
+# O worker PRACTICE precisa compartilhar o mesmo processo que atende o painel.
 # O Gunicorn pode pré-carregar este módulo no processo master antes do fork;
 # por isso a thread não deve ser iniciada durante a importação do módulo.
 _worker_start_lock = threading.Lock()
@@ -46,11 +46,11 @@ def iniciar_worker_em_processo_web():
         thread = threading.Thread(
             target=worker,
             daemon=True,
-            name="worker-deriv-demo",
+            name="worker-iq-practice",
         )
         thread.start()
         _worker_thread = thread
-        log.info("BACKGROUND_WORKER_STARTED | pid=%s | conta=DEMO", os.getpid())
+        log.info("BACKGROUND_WORKER_STARTED | pid=%s | conta=PRACTICE", os.getpid())
         return thread
 
 
@@ -107,9 +107,8 @@ def env_bool(nome, padrao=False):
 # CONFIGURAÇÕES
 # ============================================================
 
-DERIV_APP_ID = os.getenv("DERIV_APP_ID", "").strip()
-DERIV_TOKEN = os.getenv("DERIV_TOKEN", "").strip()
-DERIV_DEMO_ACCOUNT_ID = os.getenv("DERIV_DEMO_ACCOUNT_ID", "").strip()
+IQ_EMAIL = os.getenv("IQ_EMAIL", "").strip()
+IQ_PASSWORD = os.getenv("IQ_PASSWORD", "").strip()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -123,7 +122,7 @@ PORT = env_int("PORT", 10000, 1)
 
 # CONTA FIXA DE TREINO.
 # NÃO transformar em variável de ambiente.
-CONTA = "DEMO"
+CONTA = "PRACTICE"
 
 EXECUTAR_ORDENS = env_bool(
     "EXECUTAR_ORDENS",
@@ -175,7 +174,7 @@ TEMPO_BLOQUEIO = env_int(
 # GESTÃO PELO RENDER
 # ============================================================
 
-ENTRADA_MINIMA = 1.00
+ENTRADA_MINIMA = 2.00
 
 MULTIPLICADOR_GALE = 2.0
 MULTIPLICADORES_POR_GALES = {nivel: 2.0 for nivel in range(6)}
@@ -221,216 +220,42 @@ def agora_brasil():
 # ============================================================
 
 def converter_brl_para_conta(valor_brl, cliente=None):
-    """Converte BRL para a moeda da conta com a taxa validada na sessão Deriv."""
+    """Converte BRL para a moeda da conta IQ Option PRACTICE."""
     cliente = cliente or api or _cliente_conectando
     if cliente is None:
-        return round(ENTRADA_BASE_USD * float(valor_brl) / ENTRADA_BASE_BRL, 2)
+        return round(float(valor_brl), 2)
     moeda_conta = getattr(cliente, "currency", None)
-    if not moeda_conta:
-        # O painel pode ser chamado pelo health check antes de a sessão carregar o câmbio.
-        return round(ENTRADA_BASE_USD * float(valor_brl) / ENTRADA_BASE_BRL, 2)
-    moeda_origem = getattr(cliente, "base_stake_currency", "BRL")
-    if moeda_conta == moeda_origem:
-        taxa_cambio = Decimal("1")
-    else:
-        taxa_cambio = getattr(cliente, "_exchange_rate", None)
-        try:
-            taxa_cambio = Decimal(str(taxa_cambio))
-        except Exception:
-            taxa_cambio = (
-                Decimal(str(ENTRADA_BASE_USD))
-                / Decimal(str(ENTRADA_BASE_BRL))
-            )
-    if not taxa_cambio.is_finite() or taxa_cambio <= 0:
-        taxa_cambio = (
-            Decimal(str(ENTRADA_BASE_USD))
-            / Decimal(str(ENTRADA_BASE_BRL))
+    if not moeda_conta or moeda_conta == "BRL":
+        return round(float(valor_brl), 2)
+    taxa_usd_brl = getattr(cliente, "usd_to_brl", None)
+    try:
+        taxa_usd_brl = Decimal(str(taxa_usd_brl))
+    except Exception:
+        taxa_usd_brl = Decimal("0")
+    if not taxa_usd_brl.is_finite() or taxa_usd_brl <= 0:
+        raise ValueError("Cotação BRL/conta indisponível")
+    return float(
+        (Decimal(str(valor_brl)) / taxa_usd_brl).quantize(
+            Decimal("0.01"), rounding=ROUND_UP
         )
-    convertido = Decimal(str(valor_brl)) * taxa_cambio
-    return float(convertido.quantize(Decimal("0.01"), rounding=ROUND_UP))
-
+    )
 
 def obter_entrada_base(saldo=None):
-    """Retorna a entrada-base fixa de US$ 0,35 (ou o mínimo configurado)."""
+    """Converte a referência de US$ 1 para BRL e respeita o mínimo da IQ Option."""
     del saldo
-    return max(ENTRADA_MINIMA, ENTRADA_BASE_USD)
-
-# ============================================================
-# TIMEFRAMES
-# ============================================================
-
-# M4 and M6-M9 are aggregated from complete M1 candles because Deriv
-# does not offer those candle granularities directly.
-_TIMEFRAMES_NATIVOS = {1}
-TIMEFRAMES = {
-    timeframe: {
-        "segundos": timeframe * 60,
-        "expiracao": timeframe,
-        "granularidade_candles": (
-            timeframe * 60 if timeframe in _TIMEFRAMES_NATIVOS else 60
-        ),
-        "quantidade_candles": (
-            100 if timeframe in _TIMEFRAMES_NATIVOS else timeframe * 61
-        ),
-        "agrupar_minutos": (
-            1 if timeframe in _TIMEFRAMES_NATIVOS else timeframe
-        ),
-    }
-    for timeframe in (1,)
-}
-
-
-# ============================================================
-# BANCAS
-# ============================================================
-
-BANCAS = [
-    f"BANCA {i}"
-    for i in range(
-        1,
-        QTD_BANCAS + 1
-    )
-]
-
-TIMEFRAME_POR_BANCA = {
-    banca: tuple(sorted(TIMEFRAMES))
-    for banca in BANCAS
-}
-
-
-
-# ============================================================
-# ATIVOS
-# ============================================================
-
-# Catálogo dinâmico dos ativos disponíveis pela API Deriv Options.\nATIVOS = []
-
-
-# ============================================================
-# ESTADO GLOBAL
-# ============================================================
-
-api = None
-
-api_lock = threading.RLock()
-connect_lock = threading.Lock()
-estado_lock = threading.RLock()
-
-ativos_em_uso = set()
-proxima_banca_indice = 0
-bloqueados = {}
-ativos_validos = set()
-contador_sinais = 0
-reservas_pendentes = {}  # Reservas ainda não enviadas à corretora
-vitorias_progressao = 0
-perdas_progressao = 0
-entradas_globais_aceitas = 0
-entradas_normais_desde_reset = 0
-sinais_fechados_janela_global = 0
-wins_base_janela_global = 0
-losses_base_janela_global = 0
-contador_entrada_lock = threading.Lock()
-resultado_global_centavos = 0
-ultimo_saldo_demo = None
-saldo_inicial_demo = None
-recuperacoes_em_curso = set()
-operacoes_ativas = {}
-ordens_pendentes = {}
-ordens_liquidadas = set()
-operacoes_concluidas = set()
-historico_operacoes = []  # últimos 100 sinais encerrados; volátil junto ao processo DEMO
-envios_indeterminados = {}
-
-
-# ============================================================
-# ESTATÍSTICAS
-# ============================================================
-
-stats = {
-
-    "wins": 0,
-    "losses": 0,
-
-    "win_direto": 0,
-    "win_g1": 0,
-    "win_g2": 0,
-    "win_g3": 0,
-    "win_g4": 0,
-    "win_g5": 0,
-    "win_g6": 0,
-
-    "ordens_aceitas": 0,
-    "ordens_recusadas": 0,
-}
-
-
-# ============================================================
-# ESTADO DAS BANCAS
-# ============================================================
-
-estado_frentes = {
-
-    banca: {
-
-        "ocupada": False,
-
-        "ativo": None,
-        "direcao": None,
-        "score": None,
-
-        "timeframe": None,
-        "expiracao": None,
-
-        "order_id": None,
-
-        "wins": 0,
-        "losses": 0,
-        "wins_base_janela": 0,
-        "losses_base_janela": 0,
-        "sinais_fechados_janela": 0,
-
-        "win_direto": 0,
-        "win_g1": 0,
-        "win_g2": 0,
-        "win_g3": 0,
-        "win_g4": 0,
-        "win_g5": 0,
-        "win_g6": 0,
-
-        "ordens_aceitas": 0,
-        "ordens_recusadas": 0,
-
-        "ultimo_sinal": None,
-
-        "ciclo_gestao": 0,
-
-        "entrada_atual": ENTRADA_MINIMA,
-        "gale_atual": GALES_INICIAIS,
-        "gale_progression_level": GALES_INICIAIS,
-        "gales_reativos": GALES_INICIAIS,
-
-        "prejuizo_acumulado": 0.0,
-        "pre_stop_loss_count": 0,
-        "pre_stop_loss_ativo": False,
-        "pre_stop_loss_ultima_perda": 0.0,
-        "recuperacao_pendente": 0.0,
-        "entradas_recuperacao_restantes": 0,
-        "recuperacao_estendida": False,
-
-        "em_recuperacao": False,
-        "ciclo_em_execucao": False,
-        "resultado_liquido": 0.0,
-        "envio_indeterminado": False,
-    }
-
-    for banca in BANCAS
-}
-
-
-
-# ============================================================
-# TELEGRAM
-# ============================================================
+    cliente = api or _cliente_conectando
+    try:
+        taxa_usd_brl = Decimal(str(getattr(cliente, "usd_to_brl", None)))
+    except Exception:
+        taxa_usd_brl = Decimal("0")
+    if not taxa_usd_brl.is_finite() or taxa_usd_brl <= 0:
+        convertido = Decimal(str(ENTRADA_BASE_BRL))
+    else:
+        convertido = (
+            Decimal(str(ENTRADA_BASE_USD)) * taxa_usd_brl
+        ).quantize(Decimal("0.01"), rounding=ROUND_UP)
+    minimo = Decimal(str(ENTRADA_MINIMA))
+    return float(max(minimo, convertido))
 
 def telegram(texto):
 
@@ -488,7 +313,7 @@ def chamada_api_limitada(chave, funcao, timeout=5.0, cliente=None):
                     chamada["valor"] = funcao()
                     chamada["estado"] = "ok"
                 except Exception as erro:
-                    # DerivAPIError.code é sanitizado pelo adapter; não registrar mensagens upstream.
+                    # IQ OptionAPIError.code é sanitizado pelo adapter; não registrar mensagens upstream.
                     codigo = getattr(erro, "code", None)
                     chamada["valor"] = codigo if isinstance(codigo, str) else type(erro).__name__
                     chamada["estado"] = "erro"
@@ -514,16 +339,14 @@ def conectado():
 
 
 def _confirmar_practice_sincrono(cliente):
-    # O adapter só abre o endpoint de opções DEMO e valida o account_id configurado.
-    return cliente.get_balance_mode() == "DEMO"
-
+    # O adaptador fixa e confirma o saldo PRACTICE antes de qualquer ordem.
+    return cliente.get_balance_mode() == "PRACTICE"
 
 def _confirmar_practice(cliente):
     confirmado = cliente is not None and cliente.check_connect() and _confirmar_practice_sincrono(cliente)
     if not confirmado:
-        log.error("CONTA DERIV DEMO NAO CONFIRMADA")
+        log.error("CONTA IQ OPTION PRACTICE NAO CONFIRMADA")
     return confirmado
-
 
 def _conectar_na_sessao(cliente):
     return cliente.connect()
@@ -549,28 +372,25 @@ def _saldo_practice_sincrono(cliente, exigir_atual=True):
 
 def conectar():
     global api, ultimo_saldo_demo, saldo_inicial_demo, _cliente_conectando, ATIVOS
-    if not DERIV_APP_ID or not DERIV_TOKEN or not DERIV_DEMO_ACCOUNT_ID:
-        log.error("DERIV_APP_ID, DERIV_TOKEN ou DERIV_DEMO_ACCOUNT_ID ausente.")
+    if not IQ_EMAIL or not IQ_PASSWORD:
+        log.error("IQ_EMAIL ou IQ_PASSWORD ausente.")
         return False
     if not connect_lock.acquire(timeout=1):
-        log.warning("CONEXAO DERIV EM ANDAMENTO | nova tentativa adiada")
+        log.warning("CONEXAO IQ OPTION EM ANDAMENTO | nova tentativa adiada")
         return False
     try:
         if conectado():
             return True
         if _cliente_conectando is None:
-            _cliente_conectando = DerivOptionsClient(
-                DERIV_APP_ID, DERIV_TOKEN, DERIV_DEMO_ACCOUNT_ID,
-                base_stake_amount=ENTRADA_BASE_BRL,
-                base_stake_currency="BRL",
-                profit_target_brl=META_LUCRO_BRL,
+            _cliente_conectando = IQOptionClient(
+                IQ_EMAIL, IQ_PASSWORD, base_stake_amount=ENTRADA_BASE_BRL
             )
         nova = _cliente_conectando
         estado, resposta = chamada_api_limitada(
             "connect", lambda: _conectar_na_sessao(nova), 30.0, nova
         )
         if estado != "ok":
-            log.error("CONEXAO DERIV INDISPONIVEL | estado=%s", estado)
+            log.error("CONEXAO IQ OPTION INDISPONIVEL | estado=%s", estado)
             if estado != "timeout":
                 _cliente_conectando = None
             return False
@@ -581,18 +401,18 @@ def conectar():
 
         estado, saldo = chamada_api_limitada("balance", nova.get_balance, PRAZO_CONSULTA_API, nova)
         if estado != "ok" or isinstance(saldo, bool):
-            log.warning("SALDO DEMO INDISPONIVEL | estado=%s", estado)
+            log.warning("SALDO PRACTICE INDISPONIVEL | estado=%s", estado)
             return False
         saldo = float(saldo)
         if not math.isfinite(saldo) or saldo < 0:
             return False
 
         estado, simbolos = chamada_api_limitada(
-            "active_symbols", lambda: nova.get_active_symbols(refresh=True),
+            "iq_active_symbols", lambda: nova.get_active_symbols(refresh=True),
             PRAZO_CONSULTA_API, nova
         )
         if estado != "ok" or not isinstance(simbolos, dict) or not simbolos:
-            log.error("CATALOGO DERIV INDISPONIVEL | nenhuma ordem será iniciada")
+            log.error("CATALOGO IQ OPTION INDISPONIVEL | nenhuma ordem será iniciada")
             return False
         ativos = sorted(simbolos)
         if not _sessao_lock.acquire(timeout=PRAZO_CONSULTA_API):
@@ -613,26 +433,27 @@ def conectar():
         with estado_lock:
             for dados_banca in estado_frentes.values():
                 dados_banca["entrada_atual"] = entrada
-        log.info("DERIV CONECTADA | conta=DEMO confirmada | moeda=%s | ativos=%s", moeda, len(ativos))
+        log.info("IQ OPTION CONECTADA | conta=PRACTICE confirmada | moeda=%s | ativos=%s | usd_brl=%.4f",
+                 moeda, len(ativos), float(nova.usd_to_brl))
         telegram(
             "🤖 Baskaraido Trader PRO ONLINE\n"
-            "🧪 Corretora: Deriv | Conta: DEMO confirmada\n"
-            f"💰 Saldo DEMO: {saldo:.2f} {moeda}\n"
-            f"💵 Entrada-base: {entrada:.2f} {moeda} (mínimo {ENTRADA_MINIMA:.2f})\n"
-            f"🏦 {QTD_BANCAS} bancas ativas | gestão individual\n"
+            "🧪 Corretora: IQ Option | Conta: PRACTICE confirmada\n"
+            f"💰 Saldo PRACTICE: {saldo:.2f} {moeda}\n"
+            f"💵 Entrada-base: USD {ENTRADA_BASE_USD:.2f} ≈ {entrada:.2f} {moeda} "
+            f"(mínimo {ENTRADA_MINIMA:.2f} {moeda})\n"
+            f"🏦 {QTD_BANCAS} banca ativa | gestão individual\n"
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
-            f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
+            f"📊 Ativos de moeda autorizados: {len(ativos)}\n"
             f"🛡 Pré-stop loss: R$ {PRE_STOP_LOSS_BRL:.2f}\n"
-            f"📈 Gales: começa em 10, win -1, loss +1 (mín. 0, sem teto fixo); multiplicador X{MULTIPLICADOR_GALE:g}\n"
+            f"📈 Gales: começa em {GALES_INICIAIS}, win -1, loss +1; multiplicador X{MULTIPLICADOR_GALE:g}\n"
+            "♻️ Recuperação de 100% após loss líquido\n"
             "🔄 Gestão reinicia os gales a cada 100 sinais fechados globalmente\n"
-            f"🏁 Stop-win mantido: R$ {STOP_WIN_BRL:.2f} por ciclo\n"
-            "🔄 Assertividade: janela informativa reiniciada a cada 100 operações da banca\n"
-            "⏳ Aguardar o vencimento do contrato para liquidar\n"
-            f"🔥 Score mínimo: {SCORE_MIN} | Diferença mínima: {DIFERENCA_MINIMA}"
+            f"🏁 Stop-win: R$ {STOP_WIN_BRL:.2f} por ciclo\n"
+            "⏳ Aguardar o vencimento do contrato para liquidar"
         )
         return True
     except Exception as erro:
-        log.error("ERRO CONEXAO DERIV | tipo=%s", type(erro).__name__)
+        log.error("ERRO CONEXAO IQ OPTION | tipo=%s", type(erro).__name__)
         return False
     finally:
         connect_lock.release()
@@ -654,7 +475,7 @@ def obter_saldo_atual():
         estado, resposta = chamada_api_limitada("balance", lambda: _saldo_practice_sincrono(cliente),
                                                 PRAZO_CONSULTA_API, cliente)
         if estado != "ok" or isinstance(resposta, bool):
-            log.warning("SALDO DEMO INDISPONIVEL | estado=%s", estado)
+            log.warning("SALDO PRACTICE INDISPONIVEL | estado=%s", estado)
             return None
         saldo = float(resposta)
         if not math.isfinite(saldo) or saldo < 0:
@@ -663,7 +484,7 @@ def obter_saldo_atual():
             ultimo_saldo_demo = saldo
         return round(saldo, 2)
     except Exception as erro:
-        log.warning("SALDO DEMO INDISPONIVEL | tipo=%s", type(erro).__name__)
+        log.warning("SALDO PRACTICE INDISPONIVEL | tipo=%s", type(erro).__name__)
         return None
 
 
@@ -865,7 +686,7 @@ def obter_candles(ativo, segundos, quantidade=100):
                 ativos_validos.add(ativo)
         return candles
     except Exception as erro:
-        log.debug("CANDLES DERIV ERRO | %s | %s", ativo, type(erro).__name__)
+        log.debug("CANDLES IQ OPTION ERRO | %s | %s", ativo, type(erro).__name__)
         return []
 
 
@@ -1331,14 +1152,14 @@ _disponibilidade_lock = threading.Lock()
 _disponibilidade_cache = {"dados": None, "ate": 0.0, "consultando": False, "tentar_apos": 0.0}
 
 def listar_ativos_otc():
-    """Retorna os símbolos abertos autorizados pelo catálogo Deriv Options."""
+    """Retorna os símbolos abertos autorizados pelo catálogo IQ Option."""
     cliente = api
     if cliente is None:
         return list(ATIVOS)
     try:
         return sorted(cliente.get_active_symbols())
     except Exception as erro:
-        log.warning("CATALOGO DERIV INDISPONIVEL | tipo=%s", type(erro).__name__)
+        log.warning("CATALOGO IQ OPTION INDISPONIVEL | tipo=%s", type(erro).__name__)
         return []
 
 
@@ -1359,53 +1180,34 @@ _clientes_por_ordem = {}
 _envios_digitais_lock = threading.Lock()
 
 
-def obter_payout_digital(ativo, expiracao, direcao, valor=None):
+def obter_payout_digital(ativo, expiracao, direcao=None, valor=None):
     cliente = api
-    if cliente is None:
+    if cliente is None or int(expiracao) not in (1, 5, 15):
         return None
-    direcao = str(direcao).strip().lower()
-    if direcao not in ("call", "put"):
+    if direcao is not None and str(direcao).strip().lower() not in ("call", "put"):
         return None
-    try:
-        valor_consulta = round(float(ENTRADA_BASE_USD if valor is None else valor), 2)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if not math.isfinite(valor_consulta) or valor_consulta < ENTRADA_MINIMA:
-        return None
-    chave = (id(cliente), ativo, expiracao, direcao, valor_consulta)
+    chave = (id(cliente), str(ativo).upper(), int(expiracao))
     registro = _payout_cache.get(chave)
     if registro and time.monotonic() < registro["ate"]:
         return registro["payout"]
     estado, payout = chamada_api_limitada(
-        "payout:" + ativo + ":" + str(expiracao) + ":" + direcao + ":" + str(valor_consulta),
-        lambda: cliente.get_digital_payout(ativo, expiracao, direcao, amount=valor_consulta),
+        "iq_payout:" + str(ativo) + ":" + str(expiracao),
+        lambda: cliente.get_digital_payout(ativo, expiracao),
         PRAZO_CONSULTA_API, cliente
     )
     if estado != "ok" or isinstance(payout, bool):
-        erro = payout if isinstance(payout, str) else type(payout).__name__
-        log.warning(
-            "PAYOUT DIGITAL SEM RESPOSTA | ativo=%s | M%s | direcao=%s | estado=%s | erro=%s",
-            ativo, expiracao, direcao, estado, erro,
-        )
+        log.warning("PAYOUT IQ OPTION INDISPONIVEL | ativo=%s | M%s | estado=%s",
+                    ativo, expiracao, estado)
         return None
     try:
         payout = float(payout)
     except (TypeError, ValueError, OverflowError):
-        log.warning(
-            "PAYOUT DIGITAL EM FORMATO INVALIDO | ativo=%s | M%s | direcao=%s | tipo=%s",
-            ativo, expiracao, direcao, type(payout).__name__,
-        )
         return None
-    # Ratio neto do payout sobre a entrada; o contrato só paga se fechar win.
+    # IQOptionClient retorna a razão líquida do payout, por exemplo 0,82.
     if not math.isfinite(payout) or payout <= 0:
-        log.warning(
-            "PAYOUT DIGITAL VAZIO OU NAO POSITIVO | ativo=%s | M%s | direcao=%s | valor=%s",
-            ativo, expiracao, direcao, payout,
-        )
         return None
     _payout_cache[chave] = {"payout": payout, "ate": time.monotonic() + 15}
     return payout
-
 
 def _motivo_recusa_seguro(resposta):
     # Não registrar payload arbitrário, que pode incluir dados da conta/sessão.
@@ -1415,7 +1217,7 @@ def _motivo_recusa_seguro(resposta):
     if isinstance(resposta, dict):
         codigo = resposta.get("code")
         mensagem = resposta.get("message")
-        return ((codigo if isinstance(codigo, str) and codigo in codigos else "recusa_deriv") +
+        return ((codigo if isinstance(codigo, str) and codigo in codigos else "recusa_iq_option") +
                 (":" + mensagem if isinstance(mensagem, str) and mensagem in mensagens else ""))
     return "recusa_iq_option"
 
@@ -1444,7 +1246,7 @@ def _normalizar_confirmacao(resposta):
 
 
 def _extrato_corresponde_ao_envio(transacoes, envio):
-    """Retorna compras DEMO ainda não atribuídas que correspondem ao envio incerto."""
+    """Retorna compras PRACTICE ainda não atribuídas que correspondem ao envio incerto."""
     if not isinstance(transacoes, list):
         return None
     app_id = str(getattr(envio.get("cliente"), "app_id", ""))
@@ -1515,7 +1317,7 @@ def _consultar_compra_no_extrato(banca, envio):
     envio["statement_attempt"] = tentativa + 1
     if estado != "ok":
         envio["statement_next_at"] = agora + min(15, (3, 5, 8, 10, 15)[min(tentativa, 4)])
-        log.warning("CONCILIACAO DEMO INDISPONIVEL | banca=%s | codigo=%s | proxima_tentativa_segundos=%.0f",
+        log.warning("CONCILIACAO PRACTICE INDISPONIVEL | banca=%s | codigo=%s | proxima_tentativa_segundos=%.0f",
                     banca, str(transacoes)[:40], envio["statement_next_at"] - agora)
         return None, "extrato_demora_conciliacao_pendente"
 
@@ -1524,11 +1326,11 @@ def _consultar_compra_no_extrato(banca, envio):
         envio["statement_next_at"] = agora + 5
         return None, "extrato_demora_conciliacao_pendente"
     if len(encontrados) == 1:
-        log.info("CONCILIACAO DEMO CONFIRMADA | banca=%s | contrato=%s | conta=DEMO",
+        log.info("CONCILIACAO PRACTICE CONFIRMADA | banca=%s | contrato=%s | conta=PRACTICE",
                  banca, encontrados[0])
         return True, encontrados[0]
     if len(encontrados) > 1:
-        log.error("CONCILIACAO DEMO AMBIGUA | banca=%s | candidatos=%s | nao_reenviar=sim",
+        log.error("CONCILIACAO PRACTICE AMBIGUA | banca=%s | candidatos=%s | nao_reenviar=sim",
                   banca, len(encontrados))
         envio["statement_next_at"] = agora + 15
         return None, "mais_de_uma_compra_correspondente"
@@ -1536,7 +1338,7 @@ def _consultar_compra_no_extrato(banca, envio):
     envio["statement_no_match_count"] = int(envio.get("statement_no_match_count", 0)) + 1
     idade = time.time() - float(envio.get("submitted_at", time.time()))
     if idade >= 60 and envio["statement_no_match_count"] >= 2:
-        log.warning("COMPRA DEMO AUSENTE NO EXTRATO | banca=%s | idade_segundos=%.0f | nova_entrada_liberada=true",
+        log.warning("COMPRA PRACTICE AUSENTE NO EXTRATO | banca=%s | idade_segundos=%.0f | nova_entrada_liberada=true",
                     banca, idade)
         return False, "compra_nao_encontrada_no_extrato"
     espera = min(15, (3, 5, 8, 10, 15)[min(tentativa, 4)])
@@ -1558,7 +1360,7 @@ def consultar_confirmacao_envio(banca):
     elif envio["modo"] == "raw_v2":
         if envio.get("request_id") is None:
             # O envio pode ter sido aceito mesmo sem o request_id retornar.
-            # Nunca invoque buy novamente; reconcilie pelo extrato DEMO.
+            # Nunca invoque buy novamente; reconcilie pelo extrato PRACTICE.
             envio["falha_envio"] = True
             return None, "request_id_ausente_conciliacao_no_extrato"
             if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
@@ -1594,7 +1396,7 @@ def consultar_confirmacao_envio(banca):
             with estado_lock:
                 stats["ordens_aceitas"] += 1
                 estado_frentes[banca]["ordens_aceitas"] += 1
-            log.info("ORDEM ACEITA | banca=%s | ativo=%s | order_id=%s | conta=DEMO",
+            log.info("ORDEM ACEITA | banca=%s | ativo=%s | order_id=%s | conta=PRACTICE",
                      banca, envio["ativo"], resultado)
         else:
             with estado_lock:
@@ -1607,38 +1409,14 @@ def consultar_confirmacao_envio(banca):
 
 
 def _preparar_envio_v2(cliente, ativo, valor, direcao, expiracao, profit_target=None):
-    baixo = getattr(cliente, "api", None)
-    # Protocolo v2 verificado no SDK. Acesso direto evita o while/pass sem
-    # timeout de buy_digital_spot_v2; não muda produto nem reenvia a ordem.
-    if isinstance(getattr(baixo, "digital_option_placed_id", None), dict):
-        mapa = cliente.get_all_ACTIVES_OPCODE()
-        if not isinstance(mapa, dict) or ativo not in mapa:
-            return None, "ativo_sem_id_confirmado"
-        timestamp = float(baixo.timesync.server_timestamp)
-        if not math.isfinite(timestamp) or abs(timestamp - time.time()) > 120:
-            return None, "relogio_da_sessao_desatualizado"
-        periodo = expiracao * 60
-        vencimento = (int(timestamp) // periodo + 1) * periodo
-        if vencimento - timestamp <= 30:
-            vencimento += periodo
-        data = datetime.fromtimestamp(vencimento, timezone.utc).strftime("%Y%m%d%H%M")
-        ativo_id = str(mapa[ativo])
-        instrumento = ("do" + ativo_id + "A" + data[:8] + "D" + data[8:] +
-                       "00T" + str(expiracao) + "M" + ("C" if direcao == "call" else "P") + "SPT")
-        log.info("INSTRUMENTO DIGITAL V2 | ativo=%s | expiracao=%s | vencimento_utc=%s",
-                 ativo, expiracao, datetime.fromtimestamp(vencimento, timezone.utc).isoformat())
-        return {"modo": "raw_v2", "funcao": lambda: baixo.place_digital_option_v2(
-                    instrumento, ativo_id, valor), "request_id": None,
-                 "request_ids_anteriores": frozenset(baixo.digital_option_placed_id)}, None
     metodo = getattr(cliente, "buy_digital_spot_v2", None)
     if not callable(metodo):
         return None, "biblioteca_sem_buy_digital_spot_v2"
-    # Compatibilidade com versões sem o canal v2 público: worker single-flight.
-    if isinstance(cliente, DerivOptionsClient):
-        return {"modo": "wrapper_v2", "funcao": lambda: metodo(
-            ativo, valor, direcao, expiracao, profit_target=profit_target)}, None
-    return {"modo": "wrapper_v2", "funcao": lambda: metodo(ativo, valor, direcao, expiracao)}, None
-
+    # Use o adaptador, que revalida PRACTICE e serializa a única chamada de compra.
+    return {
+        "modo": "wrapper_v2",
+        "funcao": lambda: metodo(ativo, valor, direcao, expiracao),
+    }, None
 
 def executar_ordem(banca, ativo, valor, direcao, expiracao, profit_target=None):
     def recusar(motivo):
@@ -1684,7 +1462,7 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao, profit_target=None):
         log.warning("DISPONIBILIDADE DIGITAL INDISPONIVEL | tipo=%s", type(erro).__name__)
         return recusar("disponibilidade_digital_nao_confirmada")
     if disponibilidade is False:
-        bloquear(ativo, expiracao, "instrumento Options fechado na Deriv")
+        bloquear(ativo, expiracao, "instrumento digital fechado na IQ Option")
         return recusar("instrumento_digital_fechado")
     if disponibilidade is not True:
         return recusar("disponibilidade_digital_nao_confirmada")
@@ -1706,7 +1484,7 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao, profit_target=None):
         return recusar(motivo)
     funcao_envio = envio["funcao"]
     def invocar_envio():
-        log.info("ORDEM ENVIADA | banca=%s | ativo=%s | direcao=%s | expiracao=%s | valor=%.2f | payout=%.2f | conta=DEMO",
+        log.info("ORDEM ENVIADA | banca=%s | ativo=%s | direcao=%s | expiracao=%s | valor=%.2f | payout=%.2f | conta=PRACTICE",
                  banca, ativo, direcao, expiracao, valor, payout)
         return funcao_envio()
     envio.update(cliente=cliente, ativo=ativo, expiracao=expiracao, chave="envio_v2:" + banca,
@@ -1796,7 +1574,7 @@ def aguardar_resultado(order_id):
                 if not math.isfinite(lucro):
                     raise ValueError("resultado nao finito")
                 resultado = "win" if lucro > 0 else "loss" if lucro < 0 else "draw"
-                log.info("RESULTADO %s | order_id=%s | lucro=%.2f | fonte=DERIV",
+                log.info("RESULTADO %s | order_id=%s | lucro=%.2f | fonte=IQ OPTION",
                          resultado.upper(), order_id, lucro)
                 _clientes_por_ordem.pop(order_id, None)
                 return resultado, lucro
@@ -2034,7 +1812,7 @@ def prejuizo_banca_atual(banca):
 
 
 def obter_meta_lucro_conta():
-    """Retorna a meta do contrato na moeda da conta Deriv."""
+    """Retorna a meta do contrato na moeda da conta IQ Option PRACTICE."""
     try:
         valor = float(getattr(api, "profit_target", 0.0))
     except (TypeError, ValueError, OverflowError):
@@ -2072,12 +1850,12 @@ def calcular_entrada_recuperacao(perda_anterior, payout_liquido, saldo=None, luc
 
 
 def obter_limite_pre_stop_loss_conta():
-    """Converte o pré-stop de BRL para a moeda da conta Deriv."""
+    """Converte o pré-stop de BRL para a moeda da conta IQ Option PRACTICE."""
     return converter_brl_para_conta(PRE_STOP_LOSS_BRL)
 
 
 def obter_stop_win_conta():
-    """Converte o stop-win de BRL para a moeda da conta Deriv."""
+    """Converte o stop-win de BRL para a moeda da conta IQ Option PRACTICE."""
     return converter_brl_para_conta(STOP_WIN_BRL)
 
 
@@ -2110,14 +1888,14 @@ def reiniciar_gestao_banca_apos_pre_stop(banca, perda_operacao):
         recuperacoes_em_curso.discard(banca)
     log.warning(
         "PRE-STOP LOSS | banca=%s | perda_conta=%.2f | limite_brl=%.2f | "
-        "banca_reiniciada=true | recuperacao_zerada=true | historico_global_preservado=true | conta=DEMO",
+        "banca_reiniciada=true | recuperacao_zerada=true | historico_global_preservado=true | conta=PRACTICE",
         banca, perda_operacao, PRE_STOP_LOSS_BRL
     )
     telegram(
         f"🛑 PRÉ STOP-LOSS | {banca}\n"
         f"Limite de R$ {PRE_STOP_LOSS_BRL:.2f} atingido. "
         "Gestão da banca reiniciada e recuperação zerada; o histórico global foi mantido. "
-        "A banca voltará a operar pela entrada-base. Deriv DEMO"
+        "A banca voltará a operar pela entrada-base. IQ Option PRACTICE"
     )
     return True
 
@@ -2164,7 +1942,9 @@ def snapshot_gestao_global():
         return {
             "entrada_base": obter_entrada_base(),
             "entrada_base_usd": ENTRADA_BASE_USD,
-            "entrada_minima_usd": ENTRADA_MINIMA,
+            "entrada_base_brl": obter_entrada_base(),
+            "entrada_minima_brl": ENTRADA_MINIMA,
+            "moeda_entrada": getattr(api, "currency", "BRL"),
             "meta_lucro_brl": META_LUCRO_BRL,
             "stop_win_brl": STOP_WIN_BRL,
             "stop_win_conta": obter_stop_win_conta(),
@@ -2271,7 +2051,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             if not math.isfinite(saldo) or saldo < 0:
                 raise ValueError("saldo inválido")
         except Exception:
-            log.warning("SALDO DEMO INDISPONIVEL | %s", banca)
+            log.warning("SALDO PRACTICE INDISPONIVEL | %s", banca)
             return False, "saldo_indisponivel", contexto
 
         prejuizo_aplicado = 0.0
@@ -2350,13 +2130,13 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 reservas_pendentes[banca] = valor
                 log.info(
                     "SALDO RESERVADO | banca=%s | ativo=%s | nivel=%s | valor=%.2f | "
-                    "saldo=%.2f | disponivel=%.2f | recuperacao=%.2f | conta=DEMO",
+                    "saldo=%.2f | disponivel=%.2f | recuperacao=%.2f | conta=PRACTICE",
                     banca, ativo, nivel, valor, saldo, disponivel, max(0.0, -float(estado_frentes[banca]["resultado_liquido"])),
                 )
                 if nivel == 0:
                     log.info(
-                        "ENTRADA BASE | banca=%s | stake_usd=%.2f | gales_disponiveis=%s",
-                        banca, valor, contexto["gales"],
+                        "ENTRADA BASE | banca=%s | stake_conta=%.2f | moeda=%s | gales_disponiveis=%s",
+                        banca, valor, getattr(api, "currency", "BRL"), contexto["gales"],
                     )
                 else:
                     log.info(
@@ -2442,13 +2222,13 @@ def reconciliar_envio_gerido(banca):
                                                     pendente["valor"], resposta, contexto)
                 if confirmado[0] is not True:
                     return confirmado
-                log.info("ORDEM ACEITA TARDIA | banca=%s | ativo=%s | order_id=%s | conta=DEMO", banca, pendente["ativo"], resposta)
+                log.info("ORDEM ACEITA TARDIA | banca=%s | ativo=%s | order_id=%s | conta=PRACTICE", banca, pendente["ativo"], resposta)
             else:
                 reservas_pendentes.pop(banca, None)
                 if pendente["nivel"] == 0 and banca in recuperacoes_em_curso:
                     recuperacoes_em_curso.discard(banca)
                 confirmado = (False, resposta, operacoes_ativas.get(banca))
-                log.warning("ORDEM RECUSADA TARDIA | banca=%s | ativo=%s | reserva_liberada=true | conta=DEMO", banca, pendente["ativo"])
+                log.warning("ORDEM RECUSADA TARDIA | banca=%s | ativo=%s | reserva_liberada=true | conta=PRACTICE", banca, pendente["ativo"])
             envios_indeterminados.pop(banca, None)
             estado_frentes[banca]["envio_indeterminado"] = False
             return confirmado
@@ -2517,7 +2297,7 @@ def finalizar_operacao_global(banca):
             historico_operacoes.append({
                 "data": agora_brasil().isoformat(),
                 "data_sinal": (dados.get("ultimo_sinal") or {}).get("data"),
-                "conta": "DEMO",
+                "conta": "PRACTICE",
                 "banca": banca,
                 "operacao": int(contexto.get("numero", 0)),
                 "ativo": contexto.get("ativo"),
@@ -2572,7 +2352,7 @@ def finalizar_operacao_global(banca):
             f"{stop_win_evento['lucro_ciclo']:.2f} "
             f"(alvo equivalente a R$ {STOP_WIN_BRL:.2f}).\n"
             "Ciclo reiniciado: recuperação zerada e gales voltaram a 0. "
-            "Histórico global preservado. Deriv DEMO"
+            "Histórico global preservado. IQ Option PRACTICE"
         )
     return resultado_gestao
 
@@ -2627,7 +2407,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         log.info(
             "GESTAO | banca=%s | operação=%s | entrada_base=%s %.2f | gales_disponiveis=%s | "
             "regra=win_menos1_loss_mais1_min2_max5 | multiplicador=x%.1f | recuperação=100%%_se_negativa | "
-            "pre_stop_brl=%.2f | reset_global=100_sinais | conta=DEMO",
+            "pre_stop_brl=%.2f | reset_global=100_sinais | conta=PRACTICE",
             banca, contexto["numero"], getattr(api, "currency", "USD"),
             contexto["entrada"], gales, MULTIPLICADOR_GALE, PRE_STOP_LOSS_BRL,
         )
@@ -2659,7 +2439,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             f"🛡 Pré-stop loss: R$ {PRE_STOP_LOSS_BRL:.2f}\n"
             f"🔢 Gales disponíveis: {gales} | win -1, loss +1 | mínimo {GALES_MINIMOS}, sem teto fixo | x{MULTIPLICADOR_GALE:g}\n"
             "⏳ Sem venda antecipada: aguardar o vencimento para o payout do contrato.\n"
-            "🧪 Deriv DEMO"
+            "🧪 IQ Option PRACTICE"
         )
 
         for nivel in range(gales + 1):
@@ -2678,7 +2458,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                 return
             log.info(
                 "RESULTADO %s | banca=%s | ativo=%s | order_id=%s | M%s | "
-                "gale=G%s | lucro=%.2f | conta=DEMO",
+                "gale=G%s | lucro=%.2f | conta=PRACTICE",
                 resultado.upper(), banca, ativo, order_id, timeframe_analise,
                 nivel, lucro,
             )
@@ -2697,13 +2477,13 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             gestao = finalizar_operacao_global(banca)
             estado = estado_frentes[banca]["gale_progression_level"]
             telegram(
-                f"🤖 Deriv DEMO | {'✅ WIN' if resultado_sinal == 'win' else '❌ LOSS' if resultado_sinal == 'loss' else '➖ EMPATE'}\n"
+                f"🤖 IQ Option PRACTICE | {'✅ WIN' if resultado_sinal == 'win' else '❌ LOSS' if resultado_sinal == 'loss' else '➖ EMPATE'}\n"
                 f"🏦 {banca} | {ativo}\n"
                 f"⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                 f"💵 Resultado líquido da operação: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
                 f"🔢 Gales por banca: win -1, loss +1 (mín. {GALES_MINIMOS}, sem teto fixo); reset global a cada 100 sinais\n"
                 f"📊 Total: {stats['wins']} WIN / {stats['losses']} LOSS\n"
-                f"💰 Saldo Deriv DEMO: {texto_saldo()} {getattr(api, 'currency', '')}"
+                f"💰 Saldo IQ Option PRACTICE: {texto_saldo()} {getattr(api, 'currency', '')}"
             )
             return
     finally:
@@ -2997,7 +2777,7 @@ def supervisor():
             instante = time.monotonic()
             if ultima_telemetria is None or instante - ultima_telemetria >= 60:
                 with estado_lock:
-                    log.info("ESTADO EXECUCAO | conta=DEMO | habilitada=%s | aceitas=%s | recusadas=%s | wins=%s | losses=%s | pendentes=%s | envios_indeterminados=%s | prejuizo_global=%.2f | recuperacoes_em_curso=%s",
+                    log.info("ESTADO EXECUCAO | conta=PRACTICE | habilitada=%s | aceitas=%s | recusadas=%s | wins=%s | losses=%s | pendentes=%s | envios_indeterminados=%s | prejuizo_global=%.2f | recuperacoes_em_curso=%s",
                              EXECUTAR_ORDENS, stats["ordens_aceitas"], stats["ordens_recusadas"],
                              stats["wins"], stats["losses"], len(ordens_pendentes),
                              bool(envios_indeterminados), prejuizo_global_atual(),
@@ -3090,20 +2870,20 @@ def aguardar_portfolio_demo_sem_posicoes():
         if estado == "ok" and isinstance(contratos, list):
             contratos_ativos, contratos_vencidos = separar_contratos_vencidos(contratos)
             if not contratos_ativos:
-                log.info("CARTEIRA DEMO SINCRONIZADA | contratos_ativos=0 | registros_vencidos_ignorados=%s | scanners_liberados=true",
+                log.info("CARTEIRA PRACTICE SINCRONIZADA | contratos_ativos=0 | registros_vencidos_ignorados=%s | scanners_liberados=true",
                          len(contratos_vencidos))
                 return True
             if time.monotonic() - ultimo_aviso >= 60:
-                log.warning("AGUARDANDO CONTRATOS DEMO ABERTOS | ativos=%s | vencidos_ignorados=%s | tolerancia_vencimento_seg=%s | scanners_liberados=false",
+                log.warning("AGUARDANDO CONTRATOS PRACTICE ABERTOS | ativos=%s | vencidos_ignorados=%s | tolerancia_vencimento_seg=%s | scanners_liberados=false",
                             len(contratos_ativos), len(contratos_vencidos),
                             PORTFOLIO_EXPIRY_GRACE_SECONDS)
-                telegram("🧪 Baskaraido Trader PRO DEMO: aguardando "
+                telegram("🧪 Baskaraido Trader PRO PRACTICE: aguardando "
                          f"{len(contratos_ativos)} contrato(s) ainda válido(s); "
                          f"{len(contratos_vencidos)} registro(s) vencido(s) ignorado(s).")
                 ultimo_aviso = time.monotonic()
         else:
             if time.monotonic() - ultimo_aviso >= 60:
-                log.error("CARTEIRA DEMO NAO SINCRONIZADA | estado=%s | scanners_liberados=false", estado)
+                log.error("CARTEIRA PRACTICE NAO SINCRONIZADA | estado=%s | scanners_liberados=false", estado)
                 ultimo_aviso = time.monotonic()
         time.sleep(10)
 
@@ -3211,7 +2991,7 @@ def home():
             conectado(),
 
         "conta":
-            "DEMO",
+            "PRACTICE",
 
         "moeda": getattr(api, "currency", None),
 
@@ -3274,7 +3054,7 @@ def home():
 
 
 # ============================================================
-# PAINEL INSTALÁVEL - SOMENTE LEITURA / DEMO
+# PAINEL INSTALÁVEL - SOMENTE LEITURA / PRACTICE
 # ============================================================
 
 @app.route("/app")
@@ -3293,8 +3073,8 @@ def app_service_worker():
 
 
 # ============================================================
-# API DE MONITORAMENTO - SOMENTE LEITURA / DEMO
-# Não habilita ordens e não expõe credenciais da Deriv/Telegram.
+# API DE MONITORAMENTO - SOMENTE LEITURA / PRACTICE
+# Não habilita ordens e não expõe credenciais da IQ Option/Telegram.
 # Token deve ser configurado em MONITOR_API_TOKEN no servidor.
 # ============================================================
 
@@ -3362,7 +3142,7 @@ def monitor_practice():
 
     return jsonify({
         "schema_version": 1,
-        "conta": "DEMO",
+        "conta": "PRACTICE",
         "modo": "somente_leitura",
         "ordens_habilitadas": bool(EXECUTAR_ORDENS),
         "origem": "robo_practice_memoria_volatil",
@@ -3401,7 +3181,7 @@ def health():
             VERSAO,
 
         "conta":
-            "DEMO",
+            "PRACTICE",
 
         "mercado":
             "DIGITAL",
@@ -3448,7 +3228,7 @@ log.info(
 )
 
 log.info(
-    "CONTA = DEMO"
+    "CONTA = PRACTICE"
 )
 
 log.info(
@@ -3470,10 +3250,10 @@ log.info(
     EXECUTAR_ORDENS
 )
 
-log.info("ENTRADA BASE = USD %.2f | mínimo USD %.2f", ENTRADA_BASE_USD, ENTRADA_MINIMA)
+log.info("ENTRADA BASE = referência USD %.2f convertida para BRL | mínimo IQ Option BRL %.2f", ENTRADA_BASE_USD, ENTRADA_MINIMA)
 
 log.info(
-    "GERENCIAMENTO | 1 banca | entrada USD %.2f | recuperação 100%% após loss líquido | "
+    "GERENCIAMENTO | 1 banca | referência USD %.2f convertida para BRL | recuperação 100%% após loss líquido | "
     "gales iniciais=%s, mínimo=%s, perda +1, win -1, sem teto fixo, multiplicador=x%.1f | "
     "reset global a cada 100 sinais | pré-stop BRL %.2f | stop-win BRL %.2f | TIMEFRAMES: %s",
     ENTRADA_BASE_USD, GALES_INICIAIS, GALES_MINIMOS, MULTIPLICADOR_GALE, PRE_STOP_LOSS_BRL, STOP_WIN_BRL,

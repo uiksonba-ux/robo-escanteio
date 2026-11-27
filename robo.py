@@ -18,7 +18,7 @@ from deriv_client import DerivOptionsClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "ROBO-ESCANTEIO-DEMO-1BANCA-USD100-GALES10-RESET100-PRESTOPOFF-X2-M1"
+VERSAO = "ROBO-ESCANTEIO-DEMO-1BANCA-USD100-GALES10-RESET100-PRESTOPOFF-REC100LOSS-X2-M1"
 
 app = Flask(__name__)
 
@@ -622,7 +622,7 @@ def conectar():
             f"🏦 {QTD_BANCAS} bancas ativas | gestão individual\n"
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos autorizados sem Forex tradicional: {len(ativos)}\n"
-            "🛡 Recuperação de 100% quando a banca fica negativa; pré-stop desativado\n"
+            "🛡 Recupera 100% dos losses líquidos; wins abatem o pendente; pré-stop desativado\n"
             f"📈 Gales: começa em 10, win -1, loss +1 (mín. 0, sem teto fixo); multiplicador X{MULTIPLICADOR_GALE:g}\n"
             "🔄 Gestão reinicia os gales a cada 100 sinais fechados globalmente\n"
             f"🏁 Stop-win mantido: R$ {STOP_WIN_BRL:.2f} por ciclo\n"
@@ -2280,16 +2280,21 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                 entrada_brl = ENTRADA_BASE_BRL
                 base_para_entrada = obter_entrada_base(saldo)
                 with estado_lock:
-                    resultado_banca = float(estado_frentes[banca]["resultado_liquido"])
-                if resultado_banca < 0:
-                    prejuizo_aplicado = -resultado_banca
+                    pendente_anterior = float(estado_frentes[banca]["recuperacao_pendente"])
+                if pendente_anterior > 0:
+                    prejuizo_aplicado = pendente_anterior
                     payout = obter_payout_digital(ativo, expiracao, direcao, ENTRADA_MINIMA)
                     if payout is None:
                         log.warning("RECUPERACAO BLOQUEADA | banca=%s | motivo=payout_indisponivel", banca)
                         return False, "payout_indisponivel", operacoes_ativas.get(banca)
-                    base_para_entrada = max(ENTRADA_MINIMA, calcular_entrada_recuperacao(-resultado_banca, payout, saldo))
-                    log.info("RECUPERACAO 100%% | banca=%s | deficit_conta=%.2f | payout=%.4f | stake_base=%.2f",
-                             banca, -resultado_banca, payout, base_para_entrada)
+                    base_para_entrada = max(
+                        ENTRADA_MINIMA,
+                        calcular_entrada_recuperacao(pendente_anterior, payout, saldo),
+                    )
+                    log.info(
+                        "RECUPERACAO 100%% | banca=%s | perda_pendente=%.2f | payout=%.4f | stake_base=%.2f",
+                        banca, pendente_anterior, payout, base_para_entrada,
+                    )
             else:
                 prejuizo_aplicado = float(contexto.get("prejuizo_alocado", 0.0))
                 entrada_brl = float(contexto.get("entrada_brl", ENTRADA_BASE_BRL))
@@ -2499,7 +2504,11 @@ def finalizar_operacao_global(banca):
             local = em_centavos(dados["resultado_liquido"]) + resultado_operacao
             dados["resultado_liquido"] = local / 100
             dados["prejuizo_acumulado"] = max(0, -local) / 100
-            dados["recuperacao_pendente"] = round(max(0, -local) / 100 * RECUPERACAO_PERCENTUAL, 2)
+            pendente_anterior_centavos = max(0, em_centavos(dados["recuperacao_pendente"]))
+            pendente_atual_centavos = max(0, pendente_anterior_centavos - resultado_operacao)
+            dados["recuperacao_pendente"] = round(
+                pendente_atual_centavos / 100 * RECUPERACAO_PERCENTUAL, 2
+            )
             dados["em_recuperacao"] = dados["recuperacao_pendente"] > 0
             if dados["em_recuperacao"]:
                 recuperacoes_em_curso.add(banca)
@@ -3464,7 +3473,7 @@ log.info(
 log.info("ENTRADA BASE = USD %.2f | mínimo USD %.2f", ENTRADA_BASE_USD, ENTRADA_MINIMA)
 
 log.info(
-    "GERENCIAMENTO | 1 banca | entrada USD %.2f | recuperação 100%% se saldo negativo | "
+    "GERENCIAMENTO | 1 banca | entrada USD %.2f | recuperação 100%% após loss líquido | "
     "gales iniciais=%s, mínimo=%s, perda +1, win -1, sem teto fixo, multiplicador=x%.1f | "
     "reset global a cada 100 sinais | pré-stop desativado | stop-win BRL %.2f | TIMEFRAMES: %s",
     ENTRADA_BASE_USD, GALES_INICIAIS, GALES_MINIMOS, MULTIPLICADOR_GALE, STOP_WIN_BRL,

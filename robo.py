@@ -18,7 +18,7 @@ from iq_option_client import IQOptionClient
 # VERSÃO
 # ============================================================
 
-VERSAO = "BASKARAIDO-IQ-PRACTICE-1BANCA-USD1-GALES10-RESET100-PRESTOP500-REC100LOSS-X2-M1"
+VERSAO = "BASKARAIDO-IQ-PRACTICE-1BANCA-BRL2-GALES5-WIN1-LOSS2-RESET20-PRESTOP500-REC100LOSS-X2-M1"
 
 app = Flask(__name__)
 
@@ -179,8 +179,8 @@ ENTRADA_MINIMA = 2.00
 MULTIPLICADOR_GALE = 2.0
 MULTIPLICADORES_POR_GALES = {nivel: 2.0 for nivel in range(6)}
 
-# Progressão: começa em 10; win -1, loss +1, sem teto fixo; pré-stop limita a exposição.
-GALES_INICIAIS = 10
+# Progressão: começa em 5; win -1, loss +2, sem teto fixo; pré-stop limita a exposição.
+GALES_INICIAIS = 5
 GALES_MINIMOS = 0
 GALES_POR_CICLO = GALES_INICIAIS
 MAX_GALES = None
@@ -193,11 +193,10 @@ PORTFOLIO_EXPIRY_GRACE_SECONDS = 300
 
 QTD_BANCAS = 1
 
-# Estatística por banca em janelas de 100 sinais; gales reiniciam globalmente a cada 100 sinais fechados.
+# Estatística por banca em janelas de 100 operações; gales reiniciam a cada 20 operações fechadas.
 
-# Entrada fixa em USD; BRL 2,00 é apenas referência para obter a taxa BRL/USD.
+# Entrada fixa de R$ 2,00, convertida apenas se a moeda da conta for diferente de BRL.
 ENTRADA_BASE_BRL = 2.00
-ENTRADA_BASE_USD = 1.00
 META_LUCRO_BRL = 0.00
 META_LUCRO_OPERACAO_BRL = 0.00
 STOP_WIN_BRL = 50.00
@@ -251,11 +250,9 @@ def obter_entrada_base(saldo=None):
     if not taxa_usd_brl.is_finite() or taxa_usd_brl <= 0:
         convertido = Decimal(str(ENTRADA_BASE_BRL))
     else:
-        convertido = (
-            Decimal(str(ENTRADA_BASE_USD)) * taxa_usd_brl
-        ).quantize(Decimal("0.01"), rounding=ROUND_UP)
+        convertido = Decimal(str(ENTRADA_BASE_BRL)) / taxa_usd_brl
     minimo = Decimal(str(ENTRADA_MINIMA))
-    return float(max(minimo, convertido))
+    return float(max(minimo, convertido).quantize(Decimal("0.01"), rounding=ROUND_UP))
 
 # ============================================================
 # TIMEFRAMES
@@ -329,6 +326,7 @@ perdas_progressao = 0
 entradas_globais_aceitas = 0
 entradas_normais_desde_reset = 0
 sinais_fechados_janela_global = 0
+sinais_desde_reset_gale_global = 0
 wins_base_janela_global = 0
 losses_base_janela_global = 0
 contador_entrada_lock = threading.Lock()
@@ -616,15 +614,15 @@ def conectar():
             "🤖 Baskaraido Trader PRO ONLINE\n"
             "🧪 Corretora: IQ Option | Conta: PRACTICE confirmada\n"
             f"💰 Saldo PRACTICE: {saldo:.2f} {moeda}\n"
-            f"💵 Entrada-base: USD {ENTRADA_BASE_USD:.2f} ≈ {entrada:.2f} {moeda} "
-            f"(mínimo {ENTRADA_MINIMA:.2f} {moeda})\n"
+            f"💵 Entrada-base: R$ {ENTRADA_BASE_BRL:.2f} "
+            f"(entrada em conta: {entrada:.2f} {moeda})\n"
             f"🏦 {QTD_BANCAS} banca ativa | gestão individual\n"
             f"⏱ {' · '.join(f'M{tf}' for tf in sorted(TIMEFRAMES))} | Opções digitais CALL/PUT\n"
             f"📊 Ativos de moeda autorizados: {len(ativos)}\n"
             f"🛡 Pré-stop loss: R$ {PRE_STOP_LOSS_BRL:.2f}\n"
-            f"📈 Gales: começa em {GALES_INICIAIS}, win -1, loss +1; multiplicador X{MULTIPLICADOR_GALE:g}\n"
+            f"📈 Gales: começa em {GALES_INICIAIS}, win -1, loss +2; multiplicador X{MULTIPLICADOR_GALE:g}\n"
             "♻️ Recuperação de 100% após loss líquido\n"
-            "🔄 Gestão reinicia os gales a cada 100 sinais fechados globalmente\n"
+            "🔄 Gales reiniciam a cada 20 operações fechadas\n"
             f"🏁 Stop-win: R$ {STOP_WIN_BRL:.2f} por ciclo\n"
             "⏳ Aguardar o vencimento do contrato para liquidar"
         )
@@ -1824,21 +1822,28 @@ def taxa_banca_real(banca):
 
 
 def registrar_operacao_fechada_assertividade(banca):
-    """Conta sinais e reinicia os gales das três bancas a cada 100 fechamentos."""
-    global sinais_fechados_janela_global, wins_base_janela_global, losses_base_janela_global
+    """Conta operações fechadas; zera gales a cada 20 e assertividade a cada 100."""
+    global sinais_fechados_janela_global, sinais_desde_reset_gale_global
+    global wins_base_janela_global, losses_base_janela_global
     with estado_lock:
         dados = estado_frentes[banca]
         dados["sinais_fechados_janela"] += 1
         sinais_fechados_janela_global += 1
-        if sinais_fechados_janela_global >= 100:
-            wins_base_janela_global = stats["wins"]
-            losses_base_janela_global = stats["losses"]
-            sinais_fechados_janela_global = 0
+        sinais_desde_reset_gale_global += 1
+
+        if sinais_desde_reset_gale_global >= 20:
             for nome_banca in BANCAS:
                 estado_frentes[nome_banca]["gale_progression_level"] = GALES_INICIAIS
                 estado_frentes[nome_banca]["gale_atual"] = GALES_INICIAIS
                 estado_frentes[nome_banca]["gales_reativos"] = GALES_INICIAIS
-            log.info("GERENCIAMENTO GLOBAL REINICIADO | sinais_fechados=100 | gales=%s", GALES_INICIAIS)
+            sinais_desde_reset_gale_global = 0
+            log.info("GALES REINICIADOS | operacoes_fechadas=20 | gales=%s", GALES_INICIAIS)
+
+        if sinais_fechados_janela_global >= 100:
+            wins_base_janela_global = stats["wins"]
+            losses_base_janela_global = stats["losses"]
+            sinais_fechados_janela_global = 0
+
         if dados["sinais_fechados_janela"] < 100:
             return False
         wins_janela = max(0, dados["wins"] - dados["wins_base_janela"])
@@ -1906,7 +1911,7 @@ def registrar_loss(
 
 
 def atualizar_progressao_gale(banca, nivel, resultado):
-    """Win reduz um gale; loss adiciona um, respeitando o intervalo de 2 a 5."""
+    """Win reduz um gale; loss adiciona dois, respeitando o mínimo configurado."""
     del nivel
     resultado = str(resultado).lower()
     with estado_lock:
@@ -1914,7 +1919,7 @@ def atualizar_progressao_gale(banca, nivel, resultado):
         if resultado == "win":
             proximo = max(GALES_MINIMOS, atual - 1)
         elif resultado == "loss":
-            proximo = atual + 1
+            proximo = atual + 2
         else:
             proximo = atual
         dados = estado_frentes[banca]
@@ -2118,7 +2123,7 @@ def snapshot_gestao_global():
         )
         return {
             "entrada_base": obter_entrada_base(),
-            "entrada_base_usd": ENTRADA_BASE_USD,
+            "entrada_base_usd": None,
             "entrada_base_brl": obter_entrada_base(),
             "entrada_minima_brl": ENTRADA_MINIMA,
             "moeda_entrada": getattr(api, "currency", "BRL"),
@@ -2140,7 +2145,7 @@ def snapshot_gestao_global():
             "recuperacoes_em_curso": sorted(recuperacoes_em_curso),
             "entradas_globais_aceitas": entradas_globais_aceitas,
             "sinais_fechados_desde_reset_gale_global": sinais_fechados_janela_global,
-            "limite_reset_gale_global": 100,
+            "limite_reset_gale_global": 20,
             "regra_gales": "win: -1; loss: +1; mínimo 2; máximo 5",
             "recuperacao_percentual": RECUPERACAO_PERCENTUAL,
             "pre_stop_loss_brl": PRE_STOP_LOSS_BRL,
@@ -2150,7 +2155,8 @@ def snapshot_gestao_global():
             "sinais_encerrados_no_ciclo_assertividade": sinais_fechados_janela_global,
             "limite_reset_assertividade_global": 100,
 
-            "sinais_ate_reset_gale_global": 100 - sinais_fechados_janela_global,
+            "sinais_desde_reset_gale_global": sinais_desde_reset_gale_global,
+            "sinais_ate_reset_gale_global": 20 - sinais_desde_reset_gale_global,
             "gales_proximos": estado_frentes[BANCAS[0]]["gale_progression_level"],
             "assertividade_por_banca": assertividade_por_banca,
             "gales_por_banca": {
@@ -2182,7 +2188,7 @@ def snapshot_gestao_global():
             "envios_indeterminados_count": len(envios_indeterminados),
             "ordens_pendentes": len(ordens_pendentes),
             "ciclos": "ilimitados",
-            "regra_gales": f"Win reduz 1 gale; loss adiciona 1; mínimo 2 e máximo 5; reset global a cada 100 sinais.",
+            "regra_gales": f"Começa com 5; win reduz 1 gale; loss adiciona 2; reinicia a cada 20 operações fechadas.",
             "regra_recuperacao": "Recupera 100% do saldo líquido negativo da própria banca.",
             "wins_progressao": vitorias_progressao,
             "losses_progressao": perdas_progressao,
@@ -2584,7 +2590,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
         log.info(
             "GESTAO | banca=%s | operação=%s | entrada_base=%s %.2f | gales_disponiveis=%s | "
             "regra=win_menos1_loss_mais1_min2_max5 | multiplicador=x%.1f | recuperação=100%%_se_negativa | "
-            "pre_stop_brl=%.2f | reset_global=100_sinais | conta=PRACTICE",
+            "pre_stop_brl=%.2f | reset_gales=20_operacoes | conta=PRACTICE",
             banca, contexto["numero"], getattr(api, "currency", "USD"),
             contexto["entrada"], gales, MULTIPLICADOR_GALE, PRE_STOP_LOSS_BRL,
         )
@@ -2614,7 +2620,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
             f"💵 Entrada-base: {getattr(api, 'currency', 'USD')} {contexto['entrada']:.2f}\n"
             f"♻️ Recuperação de 100% após loss líquido; wins reduzem o pendente\n"
             f"🛡 Pré-stop loss: R$ {PRE_STOP_LOSS_BRL:.2f}\n"
-            f"🔢 Gales disponíveis: {gales} | win -1, loss +1 | mínimo {GALES_MINIMOS}, sem teto fixo | x{MULTIPLICADOR_GALE:g}\n"
+            f"🔢 Gales disponíveis: {gales} | win -1, loss +2 | mínimo {GALES_MINIMOS}, sem teto fixo | x{MULTIPLICADOR_GALE:g}\n"
             "⏳ Sem venda antecipada: aguardar o vencimento para o payout do contrato.\n"
             "🧪 IQ Option PRACTICE"
         )
@@ -2658,7 +2664,7 @@ def ciclo(banca, ativo, direcao, score, timeframe_analise, expiracao):
                 f"🏦 {banca} | {ativo}\n"
                 f"⏱ M{timeframe_analise} / Digital M{expiracao}\n"
                 f"💵 Resultado líquido da operação: {getattr(api, 'currency', 'USD')} {liquido:.2f}\n"
-                f"🔢 Gales por banca: win -1, loss +1 (mín. {GALES_MINIMOS}, sem teto fixo); reset global a cada 100 sinais\n"
+                f"🔢 Gales: win -1, loss +2; reinício a cada 20 operações fechadas (mín. {GALES_MINIMOS}, sem teto fixo)\n"
                 f"📊 Total: {stats['wins']} WIN / {stats['losses']} LOSS\n"
                 f"💰 Saldo IQ Option PRACTICE: {texto_saldo()} {getattr(api, 'currency', '')}"
             )
@@ -3427,13 +3433,13 @@ log.info(
     EXECUTAR_ORDENS
 )
 
-log.info("ENTRADA BASE = referência USD %.2f convertida para BRL | mínimo IQ Option BRL %.2f", ENTRADA_BASE_USD, ENTRADA_MINIMA)
+log.info("ENTRADA BASE = R$ %.2f | mínimo de entrada IQ Option BRL %.2f", ENTRADA_BASE_BRL, ENTRADA_MINIMA)
 
 log.info(
-    "GERENCIAMENTO | 1 banca | referência USD %.2f convertida para BRL | recuperação 100%% após loss líquido | "
-    "gales iniciais=%s, mínimo=%s, perda +1, win -1, sem teto fixo, multiplicador=x%.1f | "
-    "reset global a cada 100 sinais | pré-stop BRL %.2f | stop-win BRL %.2f | TIMEFRAMES: %s",
-    ENTRADA_BASE_USD, GALES_INICIAIS, GALES_MINIMOS, MULTIPLICADOR_GALE, PRE_STOP_LOSS_BRL, STOP_WIN_BRL,
+    "GERENCIAMENTO | 1 banca | entrada fixa R$ %.2f | recuperação 100%% após loss líquido | "
+    "gales iniciais=%s, mínimo=%s, loss +2, win -1, sem teto fixo, multiplicador=x%.1f | "
+    "reset dos gales a cada 20 operações fechadas | pré-stop BRL %.2f | stop-win BRL %.2f | TIMEFRAMES: %s",
+    ENTRADA_BASE_BRL, GALES_INICIAIS, GALES_MINIMOS, MULTIPLICADOR_GALE, PRE_STOP_LOSS_BRL, STOP_WIN_BRL,
     " · ".join(f"M{timeframe}" for timeframe in sorted(TIMEFRAMES))
 )
 

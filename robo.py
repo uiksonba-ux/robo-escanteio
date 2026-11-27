@@ -3281,7 +3281,7 @@ def monitor_practice():
             "limite_reset_assertividade_global": 100,
             "limite_reset_gale_por_banca": 20,
             "operacoes_ate_reset_por_banca": {
-                banca: 100 - estado_frentes[banca]["sinais_fechados_janela"]
+                banca: 20 - sinais_desde_reset_gale_global
                 for banca in BANCAS
             },
         }
@@ -3337,6 +3337,7 @@ def monitor_practice():
         "resultado_liquido_global": resultado_liquido,
         "historico_operacoes": historico,
         "estatisticas": geral,
+        "gestao": snapshot_gestao_global(),
         "bancas": frentes,
     }), 200
 

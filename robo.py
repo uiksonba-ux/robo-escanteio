@@ -2251,6 +2251,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
             return False, "saldo_indisponivel", contexto
 
         prejuizo_aplicado = 0.0
+        recuperacao_diferida = False
         try:
             if nivel == 0:
                 entrada_brl = ENTRADA_BASE_BRL
@@ -2261,16 +2262,24 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                     prejuizo_aplicado = pendente_anterior
                     payout = obter_payout_digital(ativo, expiracao, direcao, ENTRADA_MINIMA)
                     if payout is None:
-                        log.warning("RECUPERACAO BLOQUEADA | banca=%s | motivo=payout_indisponivel", banca)
-                        return False, "payout_indisponivel", operacoes_ativas.get(banca)
-                    base_para_entrada = max(
-                        ENTRADA_MINIMA,
-                        calcular_entrada_recuperacao(pendente_anterior, payout, saldo),
-                    )
-                    log.info(
-                        "RECUPERACAO 100%% | banca=%s | perda_pendente=%.2f | payout=%.4f | stake_base=%.2f",
-                        banca, pendente_anterior, payout, base_para_entrada,
-                    )
+                        # Sem payout não dá para dimensionar uma recuperação exata.
+                        # Na PRACTICE, continua com a entrada-base e mantém o saldo
+                        # pendente; o resultado liquidado ajustará a recuperação.
+                        recuperacao_diferida = True
+                        log.warning(
+                            "RECUPERACAO ADIADA | banca=%s | motivo=payout_indisponivel | "
+                            "entrada_base=%.2f | pendente=%.2f",
+                            banca, base_para_entrada, pendente_anterior,
+                        )
+                    else:
+                        base_para_entrada = max(
+                            ENTRADA_MINIMA,
+                            calcular_entrada_recuperacao(pendente_anterior, payout, saldo),
+                        )
+                        log.info(
+                            "RECUPERACAO 100%% | banca=%s | perda_pendente=%.2f | payout=%.4f | stake_base=%.2f",
+                            banca, pendente_anterior, payout, base_para_entrada,
+                        )
             else:
                 prejuizo_aplicado = float(contexto.get("prejuizo_alocado", 0.0))
                 entrada_brl = float(contexto.get("entrada_brl", ENTRADA_BASE_BRL))
@@ -2297,7 +2306,7 @@ def enviar_ordem_gerida(banca, ativo, direcao, expiracao, nivel=0):
                     "prejuizo_alocado": prejuizo_aplicado,
                     "meta_lucro_contrato": 0.0,
                     "payout_recuperacao": None,
-                    "recuperacao_diferida": False,
+                    "recuperacao_diferida": recuperacao_diferida,
                     "resultado_centavos": 0,
                     "primeira_ordem": None,
                     "ultimo_nivel": -1,

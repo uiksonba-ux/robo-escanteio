@@ -2450,6 +2450,8 @@ def registrar_resultado_ordem(order_id, resultado, lucro):
         ordem = ordens_pendentes[order_id]
         contexto = operacoes_ativas[ordem["banca"]]
         contexto["resultado_centavos"] += valor
+        contexto["ultimo_resultado_ordem"] = resultado.upper()
+        contexto["ultimo_lucro_ordem_centavos"] = valor
         ordens_liquidadas.add(order_id)
         ordens_pendentes.pop(order_id)
         estado_frentes[ordem["banca"]]["order_id"] = None
@@ -2503,6 +2505,9 @@ def finalizar_operacao_global(banca):
                 "timeframe_operacao": list(TIMEFRAME_POR_BANCA.get(banca, ())),
                 "expiracao": dados.get("expiracao"),
                 "resultado": "WIN" if resultado_operacao > 0 else "LOSS" if resultado_operacao < 0 else "EMPATE",
+                "resultado_ciclo": "WIN" if resultado_operacao > 0 else "LOSS" if resultado_operacao < 0 else "EMPATE",
+                "resultado_ultima_entrada": contexto.get("ultimo_resultado_ordem"),
+                "lucro_ultima_entrada": int(contexto.get("ultimo_lucro_ordem_centavos", 0)) / 100,
                 "resultado_liquido": resultado_operacao / 100,
                 "entrada": float(contexto.get("entrada", 0.0)),
                 "gale_inicio": int(contexto.get("posicao", 0)),

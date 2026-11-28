@@ -14,6 +14,9 @@ from iqoptionapi.stable_api import IQ_Option
 
 log = logging.getLogger("baskaraido-iq")
 
+PAYOUT_SUBSCRIPTION_REFRESH_SECONDS = 30.0
+PAYOUT_QUOTE_WAIT_SECONDS = 4.0
+
 
 class IQOptionError(RuntimeError):
     """Broker/adapter failure with a sanitized, stable diagnostic code."""
@@ -59,7 +62,7 @@ class IQOptionClient:
         self._trade_lock = threading.Lock()
         self._symbols_cache = {}
         self._symbols_cache_at = 0.0
-        self._payout_subscriptions = set()
+        self._payout_subscriptions = {}
         self.usd_to_brl = None
         if not self.email or not self.password:
             raise ValueError("Configure IQ_EMAIL e IQ_PASSWORD")
@@ -290,28 +293,39 @@ class IQOptionClient:
         symbol = str(symbol or "").upper()
         if duration not in (1, 5, 15) or not self.is_symbol_tradeable(symbol):
             return None
+        key = (symbol, duration)
+        now = time.monotonic()
         with self._lock:
             if not self.check_connect():
+                log.warning("PAYOUT DIGITAL SEM COTACAO | ativo=%s | M%s | motivo=desconectado",
+                            symbol, duration)
                 return None
-            key = (symbol, duration)
-            try:
-                if key not in self._payout_subscriptions:
+            last_subscribed = self._payout_subscriptions.get(key)
+            if (last_subscribed is None or
+                    now - last_subscribed >= PAYOUT_SUBSCRIPTION_REFRESH_SECONDS):
+                try:
                     self.api.subscribe_strike_list(symbol, duration)
-                    self._payout_subscriptions.add(key)
-            except Exception:
-                return None
+                    self._payout_subscriptions[key] = now
+                except Exception as exc:
+                    log.warning("PAYOUT DIGITAL SEM COTACAO | ativo=%s | M%s | motivo=assinatura_falhou | erro=%s",
+                                symbol, duration, type(exc).__name__)
+                    return None
 
         # Never hold the session lock while waiting for the asynchronous quote.
         # This lets health checks and other scanners share the same connection.
-        deadline = time.monotonic() + 4.0
+        deadline = time.monotonic() + PAYOUT_QUOTE_WAIT_SECONDS
+        ultimo_erro = None
         while time.monotonic() < deadline:
             with self._lock:
                 if not self.check_connect():
+                    log.warning("PAYOUT DIGITAL SEM COTACAO | ativo=%s | M%s | motivo=desconectado",
+                                symbol, duration)
                     return None
                 try:
                     raw = self.api.get_digital_current_profit(symbol, duration)
-                except Exception:
+                except Exception as exc:
                     raw = None
+                    ultimo_erro = type(exc).__name__
             try:
                 value = float(raw)
             except (TypeError, ValueError, OverflowError):
@@ -319,6 +333,8 @@ class IQOptionClient:
             if math.isfinite(value) and value > 0:
                 return value / 100.0 if value > 1 else value
             time.sleep(0.1)
+        log.warning("PAYOUT DIGITAL SEM COTACAO | ativo=%s | M%s | motivo=tempo_esgotado | erro=%s",
+                    symbol, duration, ultimo_erro or "sem_atualizacao")
         return None
 
     def is_contract_available(self, symbol, contract_type, duration):

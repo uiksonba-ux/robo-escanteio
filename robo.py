@@ -1645,11 +1645,24 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao, profit_target=None):
         payout = obter_payout_digital(ativo, expiracao, direcao, valor)
     except Exception as erro:
         log.warning("PAYOUT DIGITAL INDISPONIVEL | tipo=%s", type(erro).__name__)
-        return recusar("payout_digital_nao_confirmado")
-    if payout is None:
-        return recusar("payout_digital_nao_confirmado")
-    if payout <= 0:
-        return recusar("payout_digital_indisponivel")
+        payout = None
+    payout_confirmado = (
+        payout is not None and math.isfinite(float(payout)) and float(payout) > 0
+    )
+    if payout_confirmado:
+        payout = float(payout)
+        payout_log = "%.2f" % payout
+    else:
+        # O modo de ordens desta versão é exclusivamente PRACTICE.
+        # Permitir a entrada-base sem cotação não deve liberar uma conta real.
+        if not garantir_practice():
+            return recusar("payout_nao_confirmado_e_practice_nao_validada")
+        payout = None
+        payout_log = "NAO_CONFIRMADO"
+        log.warning(
+            "PAYOUT AUSENTE IGNORADO | somente PRACTICE | banca=%s | ativo=%s | stake=%.2f",
+            banca, ativo, valor
+        )
     try:
         envio, motivo = _preparar_envio_v2(cliente, ativo, valor, direcao, expiracao, profit_target)
     except Exception as erro:
@@ -1659,8 +1672,8 @@ def executar_ordem(banca, ativo, valor, direcao, expiracao, profit_target=None):
         return recusar(motivo)
     funcao_envio = envio["funcao"]
     def invocar_envio():
-        log.info("ORDEM ENVIADA | banca=%s | ativo=%s | direcao=%s | expiracao=%s | valor=%.2f | payout=%.2f | conta=PRACTICE",
-                 banca, ativo, direcao, expiracao, valor, payout)
+        log.info("ORDEM ENVIADA | banca=%s | ativo=%s | direcao=%s | expiracao=%s | valor=%.2f | payout=%s | conta=PRACTICE",
+                 banca, ativo, direcao, expiracao, valor, payout_log)
         return funcao_envio()
     envio.update(cliente=cliente, ativo=ativo, expiracao=expiracao, chave="envio_v2:" + banca,
                  funcao=lambda: _enviar_na_sessao_practice(cliente, invocar_envio),

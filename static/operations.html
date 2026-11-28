@@ -85,5 +85,5 @@ try{const r=await fetch("/api/v1/monitor",{headers:{Authorization:"Bearer "+toke
 $("connect").addEventListener("click",()=>{const t=$("token").value.trim();if(!t){showError("Informe o token de leitura.");return}sessionStorage.setItem("monitorToken",t);$("token").value="";refresh();if(timer)clearInterval(timer);timer=setInterval(refresh,10000)});
 document.querySelectorAll(".filter").forEach(b=>b.addEventListener("click",()=>{currentFilter=b.dataset.filter;document.querySelectorAll(".filter").forEach(x=>x.classList.toggle("active",x===b));if(currentData)renderHistory(currentData)}));
 loadRate();if(sessionStorage.getItem("monitorToken")){refresh();timer=setInterval(refresh,10000)}
-if("serviceWorker" in navigator)navigator.serviceWorker.register("/operations-sw.js",{scope:"/"}).catch(()=>{});
+if("serviceWorker" in navigator)navigator.serviceWorker.register("/operations-sw.js?v=7",{scope:"/"}).catch(()=>{});
 </script></body></html>
